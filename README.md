@@ -39,7 +39,12 @@ Then:
    "Agree and continue" when it appears, waits for the checkout iframe, makes sure the
    configured toggle is OFF, clicks primary, waits for the next state, clicks secondary, and
    captures the first URL matching the configured prefix/pattern. The URL appears on the test page.
-6. **Reset** reloads the target URL and returns to the waiting state for another run.
+6. If any submit step fails (address, submit click, agree, iframe/toggle, primary, secondary, URL capture)
+   the workflow **pauses** instead of failing. The test page shows the failed step with three buttons:
+   **Retry this step**, **I did it manually — continue with next step** (do the step yourself in the
+   Chromium window first), or **Abort**. The URL detectors stay armed while paused, so a URL produced by
+   hand is still captured and returned.
+7. **Reset** reloads the target URL and returns to the waiting state for another run.
 
 Every step is timestamped in both the terminal and the test page's event log.
 

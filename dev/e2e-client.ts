@@ -32,6 +32,7 @@ ws.on('message', async (raw) => {
   if (m.type === 'field.error') console.log(`[e2e] field.error ${m.field} ${m.code} ${m.message}`);
   if (m.type === 'field.deferred') { deferred.add(m.field); console.log(`[e2e] deferred ${m.field}`); }
   if (m.type === 'event') seen.add(m.name);
+  if (m.type === 'paused') { console.log(`[e2e] PAUSED at ${m.step}: ${m.code} — sending skip`); seen.add(`paused:${m.step}`); send({ type: 'resume', mode: 'skip' }); }
 
   if (m.type === 'state' && m.state === 'awaiting_user' && !started) {
     started = true;
@@ -72,7 +73,9 @@ ws.on('message', async (raw) => {
     for (const f of ['city', 'zip']) if (acks.has(f)) problems.push(`${f} was filled into its own field`);
     if (acks.has('address1')) problems.push('address1 was live-synced');
     const expectAdvanced = process.env.E2E_EXPECT_ADVANCED === '1';
-    const expected = ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'final reconciliation complete', 'Agree and continue clicked',
+    const expectPause = process.env.E2E_EXPECT_PAUSE === '1';
+    const expected = ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'final reconciliation complete',
+      ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
       ...(expectAdvanced ? ['form submitted by Enter, page advanced', 'submit click skipped'] : ['suggestions detected (new element with typed street)', 'address accepted', 'Website B submit clicked'])];
     for (const ev of expected) {
       if (!seen.has(ev)) problems.push(`missing event: ${ev}`);

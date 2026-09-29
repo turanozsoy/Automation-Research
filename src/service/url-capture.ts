@@ -18,6 +18,7 @@ export interface CapturedUrl { url: string; source: string }
  */
 export class UrlCapture {
   private armed = false;
+  private captured: CapturedUrl | null = null;
   private resolveFn: ((v: CapturedUrl) => void) | null = null;
   private pattern: RegExp;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -41,6 +42,7 @@ export class UrlCapture {
   arm(): void {
     if (this.armed) return;
     this.armed = true;
+    this.captured = null;
     this.pages.add(this.page);
     this.page.on('framenavigated', this.onFrameNav);
     this.page.on('frameattached', this.onFrameAttached);
@@ -52,6 +54,11 @@ export class UrlCapture {
 
   /** Resolve with the first matching URL, or reject with URL_TIMEOUT. */
   wait(timeout: number): Promise<CapturedUrl> {
+    if (this.captured) {
+      const v = this.captured;
+      this.disarm();
+      return Promise.resolve(v);
+    }
     return new Promise<CapturedUrl>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.disarm();
@@ -76,13 +83,17 @@ export class UrlCapture {
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
     this.resolveFn = null;
+    this.captured = null;
   }
 
   private consider(url: string, source: string): void {
     if (!this.armed || !url) return;
     if (url.startsWith(this.cfg.generatedUrl.prefix) && this.pattern.test(url)) {
+      if (this.captured) return;
+      this.captured = { url, source };
       const fn = this.resolveFn;
       if (fn) fn({ url, source });
+      else this.tl.mark('generated URL seen while no step was waiting for it', `${source}: ${url}`);
     }
   }
 

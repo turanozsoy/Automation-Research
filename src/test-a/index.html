@@ -55,6 +55,14 @@
   <label>Authentication code <span class="sync" data-sync="authenticationCode"></span></label>
   <input data-field="authenticationCode" autocomplete="off">
 
+  <div id="pausePanel" style="display:none;background:#fff3cd;border:1px solid #d9a400;padding:8px;margin-top:12px">
+    <b>Paused</b> — step <code id="pauseStep"></code> failed: <span id="pauseMsg"></span><br>
+    <small>Do the step yourself in the Chromium window if you want, then choose:</small><br>
+    <button id="btnRetry">Retry this step</button>
+    <button id="btnSkip">I did it manually — continue with next step</button>
+    <button id="btnAbort">Abort</button>
+    <div id="pauseSteps" style="font-family:monospace;font-size:11px;margin-top:6px"></div>
+  </div>
   <div>
     <button id="btnStart" disabled>Start automation</button>
     <button id="btnSubmit" disabled>Submit (final action)</button>

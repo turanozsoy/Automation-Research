@@ -98,7 +98,7 @@ export class Workflow {
       this.send({ type: 'field.error', ts: Date.now(), field: m.field, seq: m.seq, code: 'UNKNOWN_FIELD', message: `No mapping for "${m.field}" in config` });
       return;
     }
-    if (this.state === 'submitting' || this.state === 'completed' || this.state === 'failed') {
+    if (this.state === 'submitting' || this.state === 'paused' || this.state === 'completed' || this.state === 'failed') {
       this.send({ type: 'field.error', ts: Date.now(), field: m.field, seq: m.seq, code: 'INVALID_STATE', message: `Field updates are not accepted in state ${this.state}` });
       return;
     }
@@ -148,6 +148,17 @@ export class Workflow {
     }
   }
 
+  // ---------- submit: ordered steps, pausable ----------
+
+  private submitCtx: { snapshot: Record<string, string>; requestedAt: number; advanced: boolean; frame: Frame | null } | null = null;
+  private stepIndex = 0;
+  private stepNames(): string[] {
+    const names = ['reconcile', 'address', 'submit-click'];
+    if (this.cfg.checkout.agreeButton) names.push('agree');
+    names.push('checkout-toggle', 'primary', 'secondary', 'capture-url');
+    return names;
+  }
+
   async submit(snapshot: Record<string, string>, requestedAt: number): Promise<void> {
     if (this.state !== 'ready') {
       this.emitError('INVALID_STATE', `Submit is only allowed in ready (current: ${this.state})`, false);
@@ -161,60 +172,148 @@ export class Workflow {
     this.pending.clear();
     if (this.drainPromise) await this.drainPromise; // let an in-flight fill finish
 
-    try {
-      const next = await this.finalReconciliation(snapshot);
+    this.submitCtx = { snapshot, requestedAt, advanced: false, frame: null };
+    this.stepIndex = 0;
+    // Armed for the whole sequence, so a URL produced while paused (manual steps) is still captured.
+    this.capture.arm();
+    await this.runSteps();
+  }
 
-      this.capture.arm();
+  /** Retry the failed step, skip it (the user did it by hand in Chromium), or abort. */
+  async resume(mode: 'retry' | 'skip' | 'abort'): Promise<void> {
+    if (this.state !== 'paused' || !this.submitCtx) {
+      this.emitError('INVALID_STATE', `Resume is only allowed while paused (current: ${this.state})`, false);
+      return;
+    }
+    const names = this.stepNames();
+    if (mode === 'abort') {
+      this.capture.disarm();
+      this.fail(new AutomationError('INTERNAL', `Aborted by user at step "${names[this.stepIndex]}"`));
+      return;
+    }
+    if (mode === 'skip') {
+      this.tl.mark(`step "${names[this.stepIndex]}" skipped by user (done manually)`);
+      this.stepIndex++;
+    } else {
+      this.tl.mark(`step "${names[this.stepIndex]}" retried by user`);
+    }
+    this.setState('submitting', `resuming at step ${names[this.stepIndex] ?? 'done'}`);
+    await this.runSteps();
+  }
 
-      if (next === 'submit') {
+  private async runSteps(): Promise<void> {
+    const names = this.stepNames();
+    while (this.stepIndex < names.length) {
+      const name = names[this.stepIndex];
+      try {
+        await this.runStep(name);
+        this.stepIndex++;
+      } catch (e) {
+        const ae = toAutomationError(e);
+        if (ae.code === 'BROWSER_CLOSED' || this.state === 'failed') return; // already handled by fail()
+        this.tl.mark(`step "${name}" failed: ${ae.code}`, ae.message);
+        this.send({ type: 'paused', ts: Date.now(), step: name, stepIndex: this.stepIndex, steps: names, code: ae.code, message: ae.message });
+        this.setState('paused', `step "${name}" failed — retry it, do it manually in Chromium and skip, or abort`);
+        return;
+      }
+    }
+  }
+
+  private async runStep(name: string): Promise<void> {
+    const ctx = this.submitCtx!;
+    const { snapshot } = ctx;
+    switch (name) {
+      case 'reconcile': {
+        this.tl.mark('final reconciliation started');
+        const corrected = await this.siteB.reconcile(snapshot);
+        this.tl.mark('ordinary fields reconciled', corrected.length ? `corrected: ${corrected.join(', ')}` : 'all in sync');
+        for (const n of this.writeOnlyFields()) {
+          const r = await this.siteB.finaliseWriteOnly(n, snapshot[n] ?? this.snapshot.get(n) ?? '');
+          this.tl.mark(r === 'filled' ? `${n} updated (masked)` : r === 'verified' ? `${n} verified (masked, not compared)` : `${n} empty in snapshot, skipped`);
+        }
+        return;
+      }
+      case 'address': {
+        const as = this.cfg.addressSearch;
+        if (as) {
+          this.tl.mark('address autocomplete started');
+          const outcome = await this.siteB.acceptAddressViaAutocomplete(snapshot);
+          if (outcome === 'advanced') ctx.advanced = true;
+          else if (as.dependentFields.length) {
+            const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
+            this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+          }
+        }
+        // Any other deferred field: set once, last. Fields consumed by the address search string are never filled individually.
+        for (const n of this.deferredFields()) {
+          if (as && (n === as.field || as.order.includes(n))) continue;
+          const value = snapshot[n] ?? this.snapshot.get(n) ?? '';
+          if (value.trim() === '') { this.tl.mark(`${n} empty in snapshot, skipped`); continue; }
+          const actual = await this.siteB.setField(n, value);
+          this.tl.mark(`Website B ${n} updated`, `"${actual}"`);
+        }
+        this.tl.mark('final reconciliation complete', ctx.advanced ? 'form already submitted by Enter' : undefined);
+        return;
+      }
+      case 'submit-click': {
+        if (ctx.advanced) { this.tl.mark('submit click skipped', 'page already advanced'); return; }
         await this.siteB.clickLastSubmit();
         this.tl.mark('Website B submit clicked');
-      } else {
-        this.tl.mark('submit click skipped', 'page already advanced');
+        return;
       }
-
-      if (this.cfg.checkout.agreeButton) {
-        const agreeFrame = await this.siteB.findFrameWith(this.cfg.checkout.agreeButton, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
-        await this.siteB.clickInFrame(agreeFrame, this.cfg.checkout.agreeButton, 'AGREE_NOT_FOUND');
+      case 'agree': {
+        const sel = this.cfg.checkout.agreeButton!;
+        const f = await this.siteB.findFrameWith(sel, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
+        await this.siteB.clickInFrame(f, sel, 'AGREE_NOT_FOUND');
         this.tl.mark('Agree and continue clicked');
+        return;
       }
-
-      let frame = await this.siteB.findFrameWith(this.cfg.checkout.toggle, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
-      this.tl.mark('iframe detected', frame.url());
-
-      const toggle = await this.siteB.ensureToggleOff(frame);
-      this.tl.mark(toggle === 'unchecked' ? 'checkbox unchecked' : 'checkbox already unchecked');
-
-      frame = await this.siteB.findFrameWith(this.cfg.checkout.primaryButton, this.cfg.timeouts.checkoutStep, 'PRIMARY_NOT_FOUND');
-      this.tl.mark('primary available');
-      const secondaryVisibleBefore = await frame.locator(this.cfg.checkout.secondaryButton).filter({ visible: true }).count().catch(() => 0);
-      await this.siteB.clickInFrame(frame, this.cfg.checkout.primaryButton, 'PRIMARY_NOT_FOUND');
-      this.tl.mark('primary clicked');
-
-      if (secondaryVisibleBefore > 0) {
-        // A secondary button already existed in this state; make sure we wait for the NEXT state before clicking one.
-        const changed = await this.waitForStateChange(frame, this.cfg.checkout.primaryButton, this.cfg.timeouts.checkoutStep);
-        this.tl.mark(changed ? 'checkout state changed after primary' : 'no state change detected after primary, continuing');
+      case 'checkout-toggle': {
+        const f = await this.siteB.findFrameWith(this.cfg.checkout.toggle, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
+        this.tl.mark('iframe detected', f.url());
+        const toggle = await this.siteB.ensureToggleOff(f);
+        this.tl.mark(toggle === 'unchecked' ? 'checkbox unchecked' : 'checkbox already unchecked');
+        return;
       }
-
-      frame = await this.siteB.findFrameWith(this.cfg.checkout.secondaryButton, this.cfg.timeouts.checkoutStep, 'SECONDARY_NOT_FOUND');
-      this.tl.mark('secondary available');
-      await this.siteB.clickInFrame(frame, this.cfg.checkout.secondaryButton, 'SECONDARY_NOT_FOUND');
-      this.tl.mark('secondary clicked');
-
-      const { url, source } = await this.capture.wait(this.cfg.timeouts.generatedUrl);
-      const detectedAt = this.tl.mark('generated URL detected', `${source}: ${url}`);
-      this.send({ type: 'result', ts: detectedAt, url, source, submitRequestedAt: requestedAt });
-      this.tl.mark('URL sent to Website A', `${Date.now() - requestedAt} ms after submit requested`);
-      this.setState('completed', url);
-    } catch (e) {
-      this.capture.disarm();
-      this.fail(e);
+      case 'primary': {
+        const sel = this.cfg.checkout.primaryButton;
+        const f = await this.siteB.findFrameWith(sel, this.cfg.timeouts.checkoutStep, 'PRIMARY_NOT_FOUND');
+        this.tl.mark('primary available');
+        const secondaryVisibleBefore = await f.locator(this.cfg.checkout.secondaryButton).filter({ visible: true }).count().catch(() => 0);
+        await this.siteB.clickInFrame(f, sel, 'PRIMARY_NOT_FOUND');
+        this.tl.mark('primary clicked');
+        if (secondaryVisibleBefore > 0) {
+          // A secondary button already existed in this state; make sure we wait for the NEXT state before clicking one.
+          const changed = await this.waitForStateChange(f, sel, this.cfg.timeouts.checkoutStep);
+          this.tl.mark(changed ? 'checkout state changed after primary' : 'no state change detected after primary, continuing');
+        }
+        return;
+      }
+      case 'secondary': {
+        const sel = this.cfg.checkout.secondaryButton;
+        const f = await this.siteB.findFrameWith(sel, this.cfg.timeouts.checkoutStep, 'SECONDARY_NOT_FOUND');
+        this.tl.mark('secondary available');
+        await this.siteB.clickInFrame(f, sel, 'SECONDARY_NOT_FOUND');
+        this.tl.mark('secondary clicked');
+        return;
+      }
+      case 'capture-url': {
+        const { url, source } = await this.capture.wait(this.cfg.timeouts.generatedUrl);
+        const detectedAt = this.tl.mark('generated URL detected', `${source}: ${url}`);
+        this.send({ type: 'result', ts: detectedAt, url, source, submitRequestedAt: ctx.requestedAt });
+        this.tl.mark('URL sent to Website A', `${Date.now() - ctx.requestedAt} ms after submit requested`);
+        this.setState('completed', url);
+        this.submitCtx = null;
+        return;
+      }
+      default:
+        throw new AutomationError('INTERNAL', `Unknown step ${name}`);
     }
   }
 
   async reset(): Promise<void> {
     this.capture.disarm();
+    this.submitCtx = null;
     this.pending.clear();
     this.snapshot.clear();
     if (this.bundle.page.isClosed()) {
@@ -223,56 +322,6 @@ export class Workflow {
     }
     this.tl.mark('reset requested');
     await this.boot();
-  }
-
-  /**
-   * Final sequence before the submit click:
-   *   ordinary live fields → write-only check → deferred fields (address1) → done.
-   * The caller clicks Website B's submit button immediately afterwards.
-   */
-  private async finalReconciliation(snapshot: Record<string, string>): Promise<'submit' | 'advanced'> {
-    this.tl.mark('final reconciliation started');
-
-    // 1. Ordinary live fields (state/city/zip included). Write-only and deferred fields are excluded here.
-    const corrected = await this.siteB.reconcile(snapshot);
-    this.tl.mark('ordinary fields reconciled', corrected.length ? `corrected: ${corrected.join(', ')}` : 'all in sync');
-
-    // 2. Write-only fields: fill only if empty, otherwise validate without reading the value back.
-    for (const name of this.writeOnlyFields()) {
-      const r = await this.siteB.finaliseWriteOnly(name, snapshot[name] ?? this.snapshot.get(name) ?? '');
-      this.tl.mark(r === 'filled' ? `${name} updated (masked)` : r === 'verified' ? `${name} verified (masked, not compared)` : `${name} empty in snapshot, skipped`);
-    }
-
-    // 3. Address autocomplete driven by keyboard (type search string, ArrowDown, Enter), then the
-    //    fields it reveals/populates are reconciled against Website A's snapshot.
-    const as = this.cfg.addressSearch;
-    if (as) {
-      this.tl.mark('address autocomplete started');
-      const outcome = await this.siteB.acceptAddressViaAutocomplete(snapshot);
-      if (outcome === 'advanced') {
-        this.tl.mark('final reconciliation complete', 'form already submitted by Enter');
-        return 'advanced';
-      }
-      if (as.dependentFields.length) {
-        const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
-        this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
-      }
-    }
-
-    // 4. Any other deferred field: set once, last. Fields consumed by the address search string are never filled individually.
-    for (const name of this.deferredFields()) {
-      if (as && (name === as.field || as.order.includes(name))) continue;
-      const value = snapshot[name] ?? this.snapshot.get(name) ?? '';
-      if (value.trim() === '') {
-        this.tl.mark(`${name} empty in snapshot, skipped`);
-        continue;
-      }
-      const actual = await this.siteB.setField(name, value);
-      this.tl.mark(`${name} filled`, `"${actual}"`);
-    }
-
-    this.tl.mark('final reconciliation complete');
-    return 'submit';
   }
 
   // ---------- helpers ----------

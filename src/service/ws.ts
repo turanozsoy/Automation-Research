@@ -49,6 +49,7 @@ export function startServer(port: number, cfg: SiteBConfig, wf: Workflow, tl: Ti
         case 'field.update': wf.handleFieldUpdate(m); break;
         case 'submit': void wf.submit(m.snapshot, m.ts); break;
         case 'reset': void wf.reset(); break;
+        case 'resume': void wf.resume(m.mode); break;
         case 'ping': socket.send(JSON.stringify({ type: 'pong', ts: Date.now(), echo: m.ts } satisfies ServerMsg)); break;
       }
     });

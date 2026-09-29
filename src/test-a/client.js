@@ -34,6 +34,7 @@
     $('#detail').textContent = detail ? `— ${detail}` : '';
     $('#btnStart').disabled = s !== 'awaiting_user';
     $('#btnSubmit').disabled = s !== 'ready';
+    if (s !== 'paused') $('#pausePanel').style.display = 'none';
   }
 
   const ws = new WebSocket(`ws://${location.host}/ws`);
@@ -88,6 +89,13 @@
       case 'error':
         log(m.ts, `${m.fatal ? 'FATAL ' : ''}ERROR ${m.code}: ${m.message}`, 'err');
         break;
+      case 'paused':
+        $('#pauseStep').textContent = m.step;
+        $('#pauseMsg').textContent = `${m.code}: ${m.message}`;
+        $('#pauseSteps').textContent = m.steps.map((st, i) => (i < m.stepIndex ? '✓ ' : i === m.stepIndex ? '✗ ' : '· ') + st).join('   ');
+        $('#pausePanel').style.display = 'block';
+        log(m.ts, `PAUSED at step "${m.step}" — ${m.code}: ${m.message}`, 'err');
+        break;
     }
   };
 
@@ -123,6 +131,9 @@
     log(submitRequestedAt, 'submit requested (full snapshot sent)', 'local');
     send({ type: 'submit', ts: submitRequestedAt, snapshot });
   };
+  $('#btnRetry').onclick = () => { log(Date.now(), 'retry step requested', 'local'); send({ type: 'resume', ts: Date.now(), mode: 'retry' }); };
+  $('#btnSkip').onclick = () => { log(Date.now(), 'skip step requested (done manually)', 'local'); send({ type: 'resume', ts: Date.now(), mode: 'skip' }); };
+  $('#btnAbort').onclick = () => { send({ type: 'resume', ts: Date.now(), mode: 'abort' }); };
   $('#btnReset').onclick = () => { $('#result').textContent = '— no URL yet —'; send({ type: 'reset', ts: Date.now() }); };
   $('#btnClear').onclick = () => { logEl.innerHTML = ''; lastLogTs = null; };
 })();

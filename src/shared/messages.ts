@@ -11,6 +11,7 @@ export type WorkflowState =
   | 'starting'       // Recommended link clicked, field selectors resolving
   | 'ready'          // fields resolved, live field sync active
   | 'submitting'     // final action in progress
+  | 'paused'         // a submit step failed; user may retry it, skip it (done manually), or abort
   | 'completed'      // generated URL captured
   | 'failed';        // a required step failed; use Reset
 
@@ -40,9 +41,11 @@ export interface StartMsg { type: 'start'; ts: number }
 export interface FieldUpdateMsg { type: 'field.update'; ts: number; field: string; value: string; seq: number }
 export interface SubmitMsg { type: 'submit'; ts: number; snapshot: Record<string, string> }
 export interface ResetMsg { type: 'reset'; ts: number }
+/** After a pause: 'retry' runs the failed step again, 'skip' continues with the next step (you did it by hand), 'abort' fails the workflow. */
+export interface ResumeMsg { type: 'resume'; ts: number; mode: 'retry' | 'skip' | 'abort' }
 export interface PingMsg { type: 'ping'; ts: number }
 
-export type ClientMsg = StartMsg | FieldUpdateMsg | SubmitMsg | ResetMsg | PingMsg;
+export type ClientMsg = StartMsg | FieldUpdateMsg | SubmitMsg | ResetMsg | ResumeMsg | PingMsg;
 
 // ---- service -> client ----
 
@@ -64,6 +67,8 @@ export interface FieldDeferredMsg { type: 'field.deferred'; ts: number; field: s
 export interface FieldErrorMsg { type: 'field.error'; ts: number; field: string; seq: number; code: ErrorCode; message: string }
 export interface ResultMsg { type: 'result'; ts: number; url: string; source: string; submitRequestedAt: number }
 export interface ErrorMsg { type: 'error'; ts: number; code: ErrorCode; message: string; fatal: boolean }
+/** Sent when a submit step fails and the workflow waits for the user's decision. */
+export interface PausedMsg { type: 'paused'; ts: number; step: string; stepIndex: number; steps: string[]; code: ErrorCode; message: string }
 export interface PongMsg { type: 'pong'; ts: number; echo: number }
 
-export type ServerMsg = HelloMsg | StateMsg | EventMsg | FieldAckMsg | FieldDeferredMsg | FieldErrorMsg | ResultMsg | ErrorMsg | PongMsg;
+export type ServerMsg = HelloMsg | StateMsg | EventMsg | FieldAckMsg | FieldDeferredMsg | FieldErrorMsg | ResultMsg | ErrorMsg | PausedMsg | PongMsg;
