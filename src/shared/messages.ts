@@ -55,7 +55,14 @@ export type ClientMsg = WorkflowStartMsg | FieldUpdateMsg | SubmitMsg | ResumeMs
 
 // ---- service -> client ----
 
-export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; queued: number; maxWorkflows: number }
+export interface PoolStatus {
+  total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number;
+  /** Accounts that exist but have no saved session yet. */
+  noSession: number;
+  /** ms until the earliest cooling-down account is available again, or null. */
+  nextAvailableInMs: number | null;
+  queued: number; maxWorkflows: number;
+}
 
 export interface HelloMsg {
   type: 'hello'; ts: number;

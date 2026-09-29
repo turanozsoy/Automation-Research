@@ -41,7 +41,11 @@
     if (s !== 'paused') $('#pausePanel').style.display = 'none';
     if (terminal) workflowId = null;
   }
-  const showPool = (p) => { $('#pool').textContent = `${p.available} available / ${p.live} live / ${p.cooldown} cooldown / ${p.expired + p.invalid} out / ${p.queued} queued (max ${p.maxWorkflows})`; };
+  const showPool = (p) => {
+    const wait = p.available === 0 && p.nextAvailableInMs !== null ? ` — next account available in ${Math.ceil(p.nextAvailableInMs / 1000)} s` : '';
+    const none = p.total === 0 ? ' — no accounts: add one on the accounts page' : p.available === 0 && p.cooldown === 0 && p.live === 0 && p.noSession > 0 ? ' — accounts have no saved session yet (Get Cookies)' : '';
+    $('#pool').textContent = `${p.available} available / ${p.live} live / ${p.cooldown} cooldown / ${p.noSession} no session / ${p.expired + p.invalid} out / ${p.queued} queued (max ${p.maxWorkflows})${wait}${none}`;
+  };
 
   const ws = new WebSocket(`ws://${location.host}/ws`);
   const send = (m) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
@@ -129,10 +133,15 @@
     }
   };
 
+  let hinted = false;
   function sendField(f, force) {
     const name = f.dataset.field;
     clearTimeout(timers[name]);
-    if (!workflowId) return; // typed before Start: sent in bulk on workflow.accepted
+    if (!workflowId) { // typed before Start: kept in the inputs, sent in bulk on workflow.accepted
+      if (!hinted) { hinted = true; log(Date.now(), 'no active workflow yet — press "Start workflow"; what you type now is sent once it is accepted', 'local'); }
+      return;
+    }
+    if (state === 'allocating' || state === 'preparing') { /* accepted: the service buffers these until READY */ }
     if (!force && lastSent[name] === f.value) return;
     lastSent[name] = f.value;
     seq[name] = (seq[name] || 0) + 1;

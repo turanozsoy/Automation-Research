@@ -43,7 +43,9 @@ export class WorkflowRegistry {
     this.timers.push(setInterval(() => {
       const promoted = this.store.promoteCooledDown();
       const reaped = this.store.reapExpiredLeases(cooldownMs).filter((id) => !this.live.has(id));
-      if (promoted || reaped.length) { this.tl.mark('pool maintenance', `${promoted} profile(s) back to available, ${reaped.length} stale assignment(s) reaped`); this.broadcastPool(); }
+      if (promoted || reaped.length) { this.tl.mark('pool maintenance', `${promoted} profile(s) back to available, ${reaped.length} stale assignment(s) reaped`); }
+      const st = this.poolStatus();
+      if (promoted || reaped.length || st.cooldown > 0 || st.queued > 0) this.broadcastPool();
       if (promoted) void this.processQueue();
       for (const wf of this.live.values()) {
         if (!wf.isTerminal() && (wf.state === 'ready' || wf.state === 'paused') && Date.now() - wf.lastActivityAt > this.settings.idleTimeoutMs) wf.end('idle timeout');

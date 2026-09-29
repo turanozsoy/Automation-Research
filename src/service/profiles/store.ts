@@ -29,7 +29,7 @@ export interface AssignmentRow {
   link_state: 'none' | 'visited' | 'verified'; visited_at: number | null; verified_at: number | null;
   created_at: number; updated_at: number; ended_at: number | null;
 }
-export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number }
+export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; noSession: number; nextAvailableInMs: number | null }
 
 const LIVE: AssignmentState[] = ['allocating', 'preparing', 'ready', 'submitting', 'paused'];
 
@@ -299,9 +299,12 @@ export class ProfileStore {
     const c = (s: ProfileState) => rows.find((r) => r.state === s)?.n ?? 0;
     const now = Date.now();
     const availableNow = (this.db.prepare("SELECT COUNT(*) n FROM profiles WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)").get(now) as { n: number }).n;
+    const noSession = (this.db.prepare('SELECT COUNT(*) n FROM profiles WHERE session_saved_at IS NULL').get() as { n: number }).n;
+    const next = (this.db.prepare("SELECT MIN(cooldown_until) t FROM profiles WHERE state='cooldown' AND session_saved_at IS NOT NULL").get() as { t: number | null }).t;
     return {
       total: rows.reduce((a, r) => a + r.n, 0), available: availableNow,
       live: c('reserved') + c('starting') + c('active'), cooldown: c('cooldown'), expired: c('expired'), invalid: c('invalid'), disabled: c('disabled'),
+      noSession, nextAvailableInMs: next ? Math.max(0, next - now) : null,
     };
   }
 
