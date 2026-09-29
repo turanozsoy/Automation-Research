@@ -1,0 +1,24 @@
+{
+  "name": "automation-research",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 1 local prototype: localhost form -> automation service -> visible Chromium -> Website B",
+  "scripts": {
+    "start": "tsx src/service/main.ts",
+    "start:fake": "tsx dev/start-fake.ts",
+    "fake-b": "tsx dev/fake-b/server.ts",
+    "e2e": "tsx dev/e2e-client.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "playwright": "^1.63.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
