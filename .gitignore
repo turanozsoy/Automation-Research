@@ -1,5 +1,5 @@
 node_modules/
-profiles/
+/profiles/
 *.log
 .env
 .DS_Store
