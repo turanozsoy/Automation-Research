@@ -34,8 +34,9 @@ Then:
 5. Press **Submit (final action)**. The service reconciles the ordinary fields against the full
    snapshot (state/city/zip included), validates the masked authentication code without reading it
    back, then runs the keyboard-driven address autocomplete (types "address1, State, city, zip",
-   ArrowDown, Enter, waits for the State field to appear, retries once), reconciles state/city/zip,
-   and only then clicks the last `button[type=submit]`, waits for the checkout iframe, makes sure the
+   ArrowDown, Enter, waits for the State field to appear, retries once with plain Enter). City and
+   zip are never typed into their own fields. It then clicks the last `button[type=submit]`, clicks
+   "Agree and continue" when it appears, waits for the checkout iframe, makes sure the
    configured toggle is OFF, clicks primary, waits for the next state, clicks secondary, and
    captures the first URL matching the configured prefix/pattern. The URL appears on the test page.
 6. **Reset** reloads the target URL and returns to the waiting state for another run.
@@ -56,7 +57,8 @@ Every step is timestamped in both the terminal and the test page's event log.
 | `fields.<name>.syncMode` | `live` (default) fills as the user types. `deferred` keeps the value in the snapshot and applies it only during submit (address1). |
 | `fields.<name>.inputMethod` | `fill` (default) or `type` (key presses, no delay) for widgets that need key events. |
 | `fields.<name>.requiredAtStart` | `false` for fields that only exist after a later step (state appears once an address is accepted). Live updates to such fields are held and applied at submit. |
-| `addressSearch` | Keyboard-only address autocomplete: `order` of snapshot fields joined by `separator` (state as full `name` or `code`), typed into `field`; waits up to `suggestionsWaitMs` for an aria-expanded / role=option signal, presses ArrowDown then Enter, waits `revealTimeoutMs` for `revealFields` to appear, retries `retries` times, then reconciles `dependentFields` against the snapshot. |
+| `addressSearch` | Keyboard-only address autocomplete: `order` of snapshot fields joined by `separator` (state as full `name` or `code`), typed into `field`; waits up to `suggestionsWaitMs` for an aria-expanded / role=option signal, presses the keys of `keySequences[attempt]` (default ArrowDown+Enter, then plain Enter on retry) with `keyDelayMs` between keys, waits `revealTimeoutMs` for `revealFields` to appear, retries `retries` times. Fields in `order` are never filled into their own inputs; `dependentFields` (default none) are reconciled afterwards if listed. |
+| `checkout.agreeButton` | Optional button that appears right after the submit click (e.g. `button[aria-label="Agree and continue"]`), clicked before the checkout iframe steps. |
 | `submitButton` | The *last* visible, enabled match is clicked. |
 | `checkout.toggle` | Element inside the iframe that must end up unchecked/off. |
 | `checkout.primaryButton`, `checkout.secondaryButton` | Clicked inside the *current* frame, re-located for every step. |

@@ -61,16 +61,17 @@ ws.on('message', async (raw) => {
   }
   if (m.type === 'result') {
     console.log(`[e2e] RESULT ${m.url} via ${m.source} — ${Date.now() - submitAt} ms after submit`);
-    const expectAcks = ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'city', 'zip', 'authenticationCode'];
+    const expectAcks = ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'authenticationCode'];
     const missing = expectAcks.filter((f) => !acks.has(f));
     const problems: string[] = [];
     if (missing.length) problems.push(`missing acks: ${missing.join(',')}`);
     if (acks.get('dateOfBirth') !== '05/17/1990') problems.push('DOB not normalised');
     if (acks.get('authenticationCode') !== '(masked)') problems.push(`auth code ack exposes value: ${acks.get('authenticationCode')}`);
     if (!deferred.has('address1')) problems.push('address1 was not deferred');
-    if (!deferred.has('state')) problems.push('state (not on page yet) was not deferred');
+    for (const f of ['state', 'city', 'zip']) if (!deferred.has(f)) problems.push(`${f} was not deferred`);
+    for (const f of ['city', 'zip']) if (acks.has(f)) problems.push(`${f} was filled into its own field`);
     if (acks.has('address1')) problems.push('address1 was live-synced');
-    for (const ev of ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'address accepted', 'state/city/zip reconciled after address', 'final reconciliation complete', 'Website B submit clicked']) {
+    for (const ev of ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'address accepted', 'final reconciliation complete', 'Website B submit clicked', 'Agree and continue clicked']) {
       if (!seen.has(ev)) problems.push(`missing event: ${ev}`);
     }
     if (problems.length) { console.error('[e2e] FAILED: ' + problems.join('; ')); process.exit(1); }

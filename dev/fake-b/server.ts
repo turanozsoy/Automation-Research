@@ -85,13 +85,19 @@ createServer((req, res) => {
           const items = [...ac.querySelectorAll('[role="option"]')];
           if (ac.style.display !== 'block' || !items.length) return;
           if (e.key === 'ArrowDown') { e.preventDefault(); hi = Math.min(hi + 1, items.length - 1); items.forEach((it, i) => it.style.background = i === hi ? '#cde' : ''); }
-          else if (e.key === 'Enter') { e.preventDefault(); if (hi >= 0) setTimeout(() => accept(JSON.parse(items[hi].dataset.o)), 250); }
+          else if (e.key === 'Enter') { e.preventDefault(); setTimeout(() => accept(JSON.parse(items[Math.max(hi, 0)].dataset.o)), 250); }
           else if (e.key === 'Escape') closeAc();
         });
         document.getElementById('f').addEventListener('submit', (e) => {
           e.preventDefault();
-          document.getElementById('checkout').innerHTML = '<p>Loading checkout…</p>';
-          setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900);
+          document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
+          setTimeout(() => {
+            document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
+            document.getElementById('agree').onclick = () => {
+              document.getElementById('checkout').innerHTML = '<p>Loading checkout…</p>';
+              setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900);
+            };
+          }, 600);
         });
       </script>`);
   }

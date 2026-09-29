@@ -30,17 +30,20 @@
     "city": {
       "selector": "input[name=\"city\"]",
       "kind": "text",
-      "requiredAtStart": false
+      "requiredAtStart": false,
+      "syncMode": "deferred"
     },
     "state": {
       "selector": "select[name=\"state\"]",
       "kind": "select",
-      "requiredAtStart": false
+      "requiredAtStart": false,
+      "syncMode": "deferred"
     },
     "zip": {
       "selector": "input[name=\"zip\"]",
       "kind": "text",
-      "requiredAtStart": false
+      "requiredAtStart": false,
+      "syncMode": "deferred"
     },
     "authenticationCode": {
       "selector": [
@@ -64,19 +67,26 @@
     "stateAs": "name",
     "suggestionsWaitMs": 1500,
     "settleMs": 150,
+    "keySequences": [
+      [
+        "ArrowDown",
+        "Enter"
+      ],
+      [
+        "Enter"
+      ]
+    ],
+    "keyDelayMs": 100,
     "revealFields": [
       "state"
     ],
     "revealTimeoutMs": 6000,
-    "dependentFields": [
-      "state",
-      "city",
-      "zip"
-    ],
+    "dependentFields": [],
     "retries": 1
   },
   "checkout": {
     "frameUrlIncludes": "",
+    "agreeButton": "button[aria-label=\"Agree and continue\"]",
     "toggle": "#v-0-0-0-0-0-0",
     "primaryButton": "button[data-variant=\"primary\"]",
     "secondaryButton": "button:has-text(\"Continue on phone\")"

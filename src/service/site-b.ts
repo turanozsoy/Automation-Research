@@ -294,9 +294,12 @@ export class SiteB {
 
       // Keep focus on the input; the keys must reach the autocomplete widget.
       if (!(await loc.evaluate((el) => document.activeElement === el))) await loc.focus();
-      await this.page.keyboard.press('ArrowDown');
-      await this.page.keyboard.press('Enter');
-      this.tl.mark('ArrowDown + Enter sent');
+      const keys = a.keySequences[Math.min(attempt - 1, a.keySequences.length - 1)] ?? ['Enter'];
+      for (let k = 0; k < keys.length; k++) {
+        if (k > 0 && a.keyDelayMs > 0) await new Promise((r) => setTimeout(r, a.keyDelayMs));
+        await this.page.keyboard.press(keys[k]);
+      }
+      this.tl.mark(`${keys.join(' + ')} sent`);
 
       if (await this.waitForReveal(a.revealFields, a.revealTimeoutMs)) {
         for (const name of a.revealFields) await this.resolveLater(name);

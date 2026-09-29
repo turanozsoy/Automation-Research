@@ -30,6 +30,10 @@ export interface AddressSearchConfig {
   suggestionsWaitMs: number;
   /** Short settle after a suggestion signal so the list is populated. */
   settleMs: number;
+  /** Key sequences tried on successive attempts, e.g. [["ArrowDown","Enter"],["Enter"]]. */
+  keySequences: string[][];
+  /** Pause between keys of a sequence so the widget can render the highlight. */
+  keyDelayMs: number;
   /** Fields that must become visible after Enter to count the address as accepted. */
   revealFields: string[];
   revealTimeoutMs: number;
@@ -49,6 +53,8 @@ export interface SiteBConfig {
   addressSearch?: AddressSearchConfig;
   checkout: {
     frameUrlIncludes?: string;
+    /** Optional button shown right after the submit click (e.g. aria-label="Agree and continue"). */
+    agreeButton?: string;
     toggle: string;
     primaryButton: string;
     secondaryButton: string;
@@ -119,14 +125,17 @@ export function loadConfig(): SiteBConfig {
           stateAs: raw.addressSearch.stateAs ?? 'name',
           suggestionsWaitMs: raw.addressSearch.suggestionsWaitMs ?? 1500,
           settleMs: raw.addressSearch.settleMs ?? 150,
+          keySequences: raw.addressSearch.keySequences ?? [['ArrowDown', 'Enter'], ['Enter']],
+          keyDelayMs: raw.addressSearch.keyDelayMs ?? 100,
           revealFields: raw.addressSearch.revealFields ?? ['state'],
           revealTimeoutMs: raw.addressSearch.revealTimeoutMs ?? 6000,
-          dependentFields: raw.addressSearch.dependentFields ?? ['state', 'city', 'zip'],
+          dependentFields: raw.addressSearch.dependentFields ?? [],
           retries: raw.addressSearch.retries ?? 1,
         }
       : undefined,
     checkout: {
       frameUrlIncludes: raw.checkout.frameUrlIncludes || undefined,
+      agreeButton: raw.checkout.agreeButton || undefined,
       toggle: raw.checkout.toggle,
       primaryButton: raw.checkout.primaryButton,
       secondaryButton: raw.checkout.secondaryButton,

@@ -169,6 +169,12 @@ export class Workflow {
       await this.siteB.clickLastSubmit();
       this.tl.mark('Website B submit clicked');
 
+      if (this.cfg.checkout.agreeButton) {
+        const agreeFrame = await this.siteB.findFrameWith(this.cfg.checkout.agreeButton, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
+        await this.siteB.clickInFrame(agreeFrame, this.cfg.checkout.agreeButton, 'AGREE_NOT_FOUND');
+        this.tl.mark('Agree and continue clicked');
+      }
+
       let frame = await this.siteB.findFrameWith(this.cfg.checkout.toggle, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
       this.tl.mark('iframe detected', frame.url());
 
@@ -239,13 +245,15 @@ export class Workflow {
     if (as) {
       this.tl.mark('address autocomplete started');
       await this.siteB.acceptAddressViaAutocomplete(snapshot);
-      const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
-      this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+      if (as.dependentFields.length) {
+        const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
+        this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+      }
     }
 
-    // 4. Any other deferred field: set once, last.
+    // 4. Any other deferred field: set once, last. Fields consumed by the address search string are never filled individually.
     for (const name of this.deferredFields()) {
-      if (as && name === as.field) continue;
+      if (as && (name === as.field || as.order.includes(name))) continue;
       const value = snapshot[name] ?? this.snapshot.get(name) ?? '';
       if (value.trim() === '') {
         this.tl.mark(`${name} empty in snapshot, skipped`);
