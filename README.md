@@ -33,9 +33,9 @@ Then:
    and filled into Website B. The event log shows transit / fill latency per field.
 5. Press **Submit (final action)**. The service reconciles the ordinary fields against the full
    snapshot (state/city/zip included), validates the masked authentication code without reading it
-   back, fills the complete address into `address1` last, and immediately clicks the last
-   `button[type=submit]` (an autocomplete dropdown is ignored; if it intercepts the click, Escape is
-   pressed and the click retried once), waits for the checkout iframe, makes sure the
+   back, then runs the keyboard-driven address autocomplete (types "address1, State, city, zip",
+   ArrowDown, Enter, waits for the State field to appear, retries once), reconciles state/city/zip,
+   and only then clicks the last `button[type=submit]`, waits for the checkout iframe, makes sure the
    configured toggle is OFF, clicks primary, waits for the next state, clicks secondary, and
    captures the first URL matching the configured prefix/pattern. The URL appears on the test page.
 6. **Reset** reloads the target URL and returns to the waiting state for another run.
@@ -55,6 +55,8 @@ Every step is timestamped in both the terminal and the test page's event log.
 | `fields.<name>.writeOnly` | Website B masks the value after entry (authentication code): filled, then checked for presence / `aria-invalid` only. Never read back for comparison, never logged. |
 | `fields.<name>.syncMode` | `live` (default) fills as the user types. `deferred` keeps the value in the snapshot and applies it only during submit (address1). |
 | `fields.<name>.inputMethod` | `fill` (default) or `type` (key presses, no delay) for widgets that need key events. |
+| `fields.<name>.requiredAtStart` | `false` for fields that only exist after a later step (state appears once an address is accepted). Live updates to such fields are held and applied at submit. |
+| `addressSearch` | Keyboard-only address autocomplete: `order` of snapshot fields joined by `separator` (state as full `name` or `code`), typed into `field`; waits up to `suggestionsWaitMs` for an aria-expanded / role=option signal, presses ArrowDown then Enter, waits `revealTimeoutMs` for `revealFields` to appear, retries `retries` times, then reconciles `dependentFields` against the snapshot. |
 | `submitButton` | The *last* visible, enabled match is clicked. |
 | `checkout.toggle` | Element inside the iframe that must end up unchecked/off. |
 | `checkout.primaryButton`, `checkout.secondaryButton` | Clicked inside the *current* frame, re-located for every step. |

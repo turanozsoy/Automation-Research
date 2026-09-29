@@ -39,7 +39,7 @@ createServer((req, res) => {
         <label>Address<input name="line1" id="base-ui-_r_f_" autocomplete="off"></label>
         <div id="ac" role="listbox" style="display:none;border:1px solid #888;width:280px;background:#fff"></div>
         <label>City<input name="city" id="base-ui-_r_g_"></label>
-        <label>State<select name="state"><option value="">--</option><option value="NY">New York</option><option value="CA">California</option><option value="FL">Florida</option><option value="TX">Texas</option></select></label>
+        <div id="state-slot"></div>
         <label>ZIP<input name="zip" id="base-ui-_r_h_"></label>
         <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••" autocomplete="off"></label>
         <button type="submit">Continue</button>
@@ -49,27 +49,44 @@ createServer((req, res) => {
         // Mask the auth code shortly after entry, like the real site does.
         const code = document.getElementById('test-authentification-code');
         code.addEventListener('input', () => { if (code.value && !code.value.startsWith('•')) { code.dataset.real = code.value; setTimeout(() => { code.value = '•••-••-••••'; }, 50); } });
-        // Address autocomplete: suggestions appear ~300 ms after typing; picking one overwrites city/state/zip.
+        // Address autocomplete: suggestions appear ~300 ms after typing. Keyboard: ArrowDown highlights the
+        // next option, Enter accepts the highlighted one (Enter with no list open submits the form, like a real form).
+        // Accepting reveals the State select and populates city/state/zip.
         const line1 = document.querySelector('input[name="line1"]');
         const ac = document.getElementById('ac');
-        let acTimer;
+        let acTimer, hi = -1;
+        const closeAc = () => { ac.style.display = 'none'; ac.innerHTML = ''; hi = -1; line1.setAttribute('aria-expanded', 'false'); };
+        const accept = (o) => {
+          line1.value = o.line1;
+          if (!document.querySelector('select[name="state"]')) {
+            document.getElementById('state-slot').innerHTML = '<label>State<select name="state"><option value="">--</option><option value="NY">New York</option><option value="CA">California</option><option value="FL">Florida</option><option value="TX">Texas</option></select></label>';
+          }
+          document.querySelector('input[name="city"]').value = o.city; document.querySelector('select[name="state"]').value = o.state; document.querySelector('input[name="zip"]').value = o.zip;
+          closeAc();
+        };
         line1.addEventListener('input', () => {
-          clearTimeout(acTimer); ac.style.display = 'none'; ac.innerHTML = '';
+          clearTimeout(acTimer); closeAc();
           if (!line1.value.trim()) return;
           acTimer = setTimeout(() => {
-            const v = line1.value.trim();
+            const v = line1.value.split(',')[0].trim();
             const opts = [
-              { text: v + ' Apt 2, Springfield, NY 10099', line1: v + ' Apt 2', city: 'Springfield', state: 'NY', zip: '10099' },
-              { text: v + ', Springfield, NY 10099', line1: v, city: 'Springfield', state: 'NY', zip: '10099' },
-              { text: '99 Elsewhere Rd, Miami, FL 33101', line1: '99 Elsewhere Rd', city: 'Miami', state: 'FL', zip: '33101' },
+              { text: v + ', Springfield, NY 10099, USA', line1: v, city: 'Springfield', state: 'NY', zip: '10099' },
+              { text: v + ' Apt 2, Springfield, NY 10099, USA', line1: v + ' Apt 2', city: 'Springfield', state: 'NY', zip: '10099' },
             ];
             for (const o of opts) {
-              const d = document.createElement('div'); d.setAttribute('role', 'option'); d.textContent = o.text; d.style.padding = '4px';
-              d.onclick = () => { line1.value = o.line1; document.querySelector('input[name="city"]').value = o.city; document.querySelector('select[name="state"]').value = o.state; document.querySelector('input[name="zip"]').value = o.zip; ac.style.display = 'none'; ac.innerHTML = ''; };
+              const d = document.createElement('div'); d.setAttribute('role', 'option'); d.textContent = o.text; d.style.padding = '4px'; d.dataset.o = JSON.stringify(o);
+              d.onclick = () => accept(o);
               ac.appendChild(d);
             }
-            ac.style.display = 'block';
+            ac.style.display = 'block'; line1.setAttribute('aria-expanded', 'true');
           }, 300);
+        });
+        line1.addEventListener('keydown', (e) => {
+          const items = [...ac.querySelectorAll('[role="option"]')];
+          if (ac.style.display !== 'block' || !items.length) return;
+          if (e.key === 'ArrowDown') { e.preventDefault(); hi = Math.min(hi + 1, items.length - 1); items.forEach((it, i) => it.style.background = i === hi ? '#cde' : ''); }
+          else if (e.key === 'Enter') { e.preventDefault(); if (hi >= 0) setTimeout(() => accept(JSON.parse(items[hi].dataset.o)), 250); }
+          else if (e.key === 'Escape') closeAc();
         });
         document.getElementById('f').addEventListener('submit', (e) => {
           e.preventDefault();

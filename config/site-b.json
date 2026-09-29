@@ -29,15 +29,18 @@
     },
     "city": {
       "selector": "input[name=\"city\"]",
-      "kind": "text"
+      "kind": "text",
+      "requiredAtStart": false
     },
     "state": {
       "selector": "select[name=\"state\"]",
-      "kind": "select"
+      "kind": "select",
+      "requiredAtStart": false
     },
     "zip": {
       "selector": "input[name=\"zip\"]",
-      "kind": "text"
+      "kind": "text",
+      "requiredAtStart": false
     },
     "authenticationCode": {
       "selector": [
@@ -49,6 +52,29 @@
     }
   },
   "submitButton": "button[type=\"submit\"]",
+  "addressSearch": {
+    "field": "address1",
+    "order": [
+      "address1",
+      "state",
+      "city",
+      "zip"
+    ],
+    "separator": ", ",
+    "stateAs": "name",
+    "suggestionsWaitMs": 1500,
+    "settleMs": 150,
+    "revealFields": [
+      "state"
+    ],
+    "revealTimeoutMs": 6000,
+    "dependentFields": [
+      "state",
+      "city",
+      "zip"
+    ],
+    "retries": 1
+  },
   "checkout": {
     "frameUrlIncludes": "",
     "toggle": "#v-0-0-0-0-0-0",

@@ -13,6 +13,30 @@ export interface FieldConfig {
   inputMethod: 'fill' | 'type';
   /** Website B masks this field after entry: never read back for comparison, never log its value. */
   writeOnly: boolean;
+  /** false: the field may not exist until a later step (e.g. state appears after an address is accepted). */
+  requiredAtStart: boolean;
+}
+
+/** Address autocomplete driven purely by keyboard: type one search string, ArrowDown, Enter, verify reveal. */
+export interface AddressSearchConfig {
+  /** The autocomplete input field (a key under `fields`). */
+  field: string;
+  /** Field names concatenated into the search string, in order. */
+  order: string[];
+  separator: string;
+  /** How a two-letter state code is written into the search string. */
+  stateAs: 'name' | 'code';
+  /** Upper bound to wait for a suggestion signal (aria-expanded / role=option) before pressing keys anyway. */
+  suggestionsWaitMs: number;
+  /** Short settle after a suggestion signal so the list is populated. */
+  settleMs: number;
+  /** Fields that must become visible after Enter to count the address as accepted. */
+  revealFields: string[];
+  revealTimeoutMs: number;
+  /** Fields Website B may populate from the accepted address; reconciled against the snapshot afterwards. */
+  dependentFields: string[];
+  /** Extra attempts of the type + ArrowDown + Enter cycle when the reveal does not happen. */
+  retries: number;
 }
 
 export interface SiteBConfig {
@@ -22,6 +46,7 @@ export interface SiteBConfig {
   recommendedLink: string;
   fields: Record<string, FieldConfig>;
   submitButton: string;
+  addressSearch?: AddressSearchConfig;
   checkout: {
     frameUrlIncludes?: string;
     toggle: string;
@@ -46,7 +71,7 @@ export interface SiteBConfig {
 
 interface RawFieldConfig {
   selector: string | string[]; kind?: 'text' | 'select'; format?: 'MM/DD/YYYY';
-  syncMode?: 'live' | 'deferred'; inputMethod?: 'fill' | 'type'; writeOnly?: boolean;
+  syncMode?: 'live' | 'deferred'; inputMethod?: 'fill' | 'type'; writeOnly?: boolean; requiredAtStart?: boolean;
 }
 
 export function loadConfig(): SiteBConfig {
@@ -70,6 +95,7 @@ export function loadConfig(): SiteBConfig {
       syncMode: f.syncMode ?? 'live',
       inputMethod: f.inputMethod ?? 'fill',
       writeOnly: f.writeOnly ?? false,
+      requiredAtStart: f.requiredAtStart ?? true,
     };
   }
 
@@ -85,6 +111,20 @@ export function loadConfig(): SiteBConfig {
     recommendedLink: raw.recommendedLink,
     fields,
     submitButton: raw.submitButton,
+    addressSearch: raw.addressSearch
+      ? {
+          field: raw.addressSearch.field ?? 'address1',
+          order: raw.addressSearch.order ?? ['address1', 'state', 'city', 'zip'],
+          separator: raw.addressSearch.separator ?? ', ',
+          stateAs: raw.addressSearch.stateAs ?? 'name',
+          suggestionsWaitMs: raw.addressSearch.suggestionsWaitMs ?? 1500,
+          settleMs: raw.addressSearch.settleMs ?? 150,
+          revealFields: raw.addressSearch.revealFields ?? ['state'],
+          revealTimeoutMs: raw.addressSearch.revealTimeoutMs ?? 6000,
+          dependentFields: raw.addressSearch.dependentFields ?? ['state', 'city', 'zip'],
+          retries: raw.addressSearch.retries ?? 1,
+        }
+      : undefined,
     checkout: {
       frameUrlIncludes: raw.checkout.frameUrlIncludes || undefined,
       toggle: raw.checkout.toggle,
@@ -106,6 +146,12 @@ export function loadConfig(): SiteBConfig {
     },
     debounceMs: raw.debounceMs ?? 150,
   };
+
+  if (cfg.addressSearch) {
+    for (const n of [cfg.addressSearch.field, ...cfg.addressSearch.order, ...cfg.addressSearch.revealFields, ...cfg.addressSearch.dependentFields]) {
+      if (!(n in cfg.fields)) throw new Error(`addressSearch references unknown field "${n}" in ${path}`);
+    }
+  }
 
   // Fail early on a bad regex rather than at submit time.
   new RegExp(cfg.loginPathPattern);

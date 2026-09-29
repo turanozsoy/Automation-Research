@@ -105,7 +105,7 @@ export class Workflow {
     this.snapshot.set(m.field, m.value);
     if (this.cfg.fields[m.field].syncMode === 'deferred') {
       // Kept in the snapshot only; applied during the final submit sequence (e.g. address autocomplete).
-      this.tl.mark(`${m.field} saved locally, filled at submit`);
+      this.tl.mark(`${m.field} saved locally, applied at submit`);
       this.send({ type: 'field.deferred', ts: Date.now(), field: m.field, seq: m.seq });
       return;
     }
@@ -136,6 +136,12 @@ export class Workflow {
         this.send({ type: 'field.ack', ts: filledAt, field, seq: upd.seq, sentAt: upd.sentAt, receivedAt: upd.receivedAt, startedAt, filledAt, value: actual });
       } catch (e) {
         const ae = toAutomationError(e);
+        if (ae.code === 'FIELD_NOT_FOUND' && !this.cfg.fields[field].requiredAtStart) {
+          // Not on the page until a later step (e.g. state after the address is accepted); reconciled at submit.
+          this.tl.mark(`${field} not on page yet, applied after address is accepted`);
+          this.send({ type: 'field.deferred', ts: Date.now(), field, seq: upd.seq });
+          continue;
+        }
         this.tl.mark(`field update failed: ${field}`, ae.message);
         this.send({ type: 'field.error', ts: Date.now(), field, seq: upd.seq, code: ae.code, message: ae.message });
       }
@@ -227,8 +233,19 @@ export class Workflow {
       this.tl.mark(r === 'filled' ? `${name} updated (masked)` : r === 'verified' ? `${name} verified (masked, not compared)` : `${name} empty in snapshot, skipped`);
     }
 
-    // 3. Deferred fields (address1): set once, last, so any autocomplete UI is simply ignored.
+    // 3. Address autocomplete driven by keyboard (type search string, ArrowDown, Enter), then the
+    //    fields it reveals/populates are reconciled against Website A's snapshot.
+    const as = this.cfg.addressSearch;
+    if (as) {
+      this.tl.mark('address autocomplete started');
+      await this.siteB.acceptAddressViaAutocomplete(snapshot);
+      const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
+      this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+    }
+
+    // 4. Any other deferred field: set once, last.
     for (const name of this.deferredFields()) {
+      if (as && name === as.field) continue;
       const value = snapshot[name] ?? this.snapshot.get(name) ?? '';
       if (value.trim() === '') {
         this.tl.mark(`${name} empty in snapshot, skipped`);
