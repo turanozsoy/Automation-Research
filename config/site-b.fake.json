@@ -82,7 +82,8 @@
     ],
     "revealTimeoutMs": 6000,
     "dependentFields": [],
-    "retries": 1
+    "retries": 1,
+    "enterWithoutList": true
   },
   "checkout": {
     "frameUrlIncludes": "",

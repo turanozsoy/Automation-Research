@@ -270,20 +270,25 @@ export class SiteB {
   }
 
   /**
-   * Type the search string, wait for a CONFIRMED suggestion list, then press the
-   * configured keys (ArrowDown + Enter) with focus on the input. Enter is never
-   * pressed without a confirmed list, because in a form Enter submits the form.
-   * When suggestions are visible but keys do not accept one, the matched suggestion
-   * is clicked with a real mouse click at its runtime position (no selector).
-   * Accepted = reveal fields visible AND the input value changed from what was typed.
+   * Type the search string, wait for a suggestion list (Google Places classic
+   * `.pac-container`, the newer shadow-DOM widget, ARIA roles, or any newly
+   * rendered element containing the typed street), then press the configured keys
+   * with focus on the input.
+   *
+   * Outcomes:
+   *   'accepted' — reveal fields visible and the input value changed (a place was picked)
+   *   'advanced' — Enter submitted the form and the page moved on (submit button gone /
+   *                agree button visible / URL changed); the caller skips the submit click
+   * Falls back to a real mouse click on the first suggestion, retries, then throws.
    */
-  async acceptAddressViaAutocomplete(snapshot: Record<string, string>): Promise<void> {
+  async acceptAddressViaAutocomplete(snapshot: Record<string, string>): Promise<'accepted' | 'advanced'> {
     const a = this.cfg.addressSearch!;
     const search = this.buildAddressSearch(snapshot);
     if (!search) throw new AutomationError('ADDRESS_NOT_ACCEPTED', 'Address search string is empty');
     const loc = await this.fieldLocator(a.field);
     const t = this.cfg.timeouts.action;
     const needle = addressNeedle(snapshot[a.field] ?? search);
+    const urlBefore = this.page.url();
     let lastDiag = '';
 
     for (let attempt = 1; attempt <= a.retries + 1; attempt++) {
@@ -294,17 +299,17 @@ export class SiteB {
       await loc.pressSequentially(search, { timeout: t });
       this.tl.mark(attempt === 1 ? 'address search typed' : `address search retyped (attempt ${attempt})`, `"${search}"`);
 
-      const signal = await this.waitForSuggestionSignal(loc, needle, a.suggestionsWaitMs);
-      if (!signal) {
-        const diag = await this.describeNewElements(needle);
-        lastDiag = diag;
-        this.tl.mark(`no suggestion list detected within ${a.suggestionsWaitMs} ms, Enter NOT pressed`, diag);
-        continue; // retry typing; never press Enter into a closed list
+      const signal = await this.waitForSuggestionSignal(needle, a.suggestionsWaitMs);
+      if (signal) {
+        this.tl.mark(`suggestions detected (${signal.kind})`, signal.detail);
+        if (a.settleMs > 0) await new Promise((r) => setTimeout(r, a.settleMs));
+      } else {
+        lastDiag = await this.describeNewElements(needle);
+        this.tl.mark(`no suggestion list detected within ${a.suggestionsWaitMs} ms`, lastDiag);
+        if (!a.enterWithoutList) continue;
+        this.tl.mark('pressing keys anyway (enterWithoutList=true)');
       }
-      this.tl.mark(`suggestions detected (${signal.kind})`, signal.detail);
-      if (a.settleMs > 0) await new Promise((r) => setTimeout(r, a.settleMs));
 
-      // Keyboard acceptance with focus on the input.
       if (!(await loc.evaluate((el) => document.activeElement === el))) await loc.focus();
       const keys = a.keySequences[Math.min(attempt - 1, a.keySequences.length - 1)] ?? ['ArrowDown', 'Enter'];
       for (let k = 0; k < keys.length; k++) {
@@ -312,43 +317,51 @@ export class SiteB {
         await this.page.keyboard.press(keys[k]);
       }
       this.tl.mark(`${keys.join(' + ')} sent`);
-      if (await this.confirmAccepted(loc, search, a.revealFields, a.revealTimeoutMs)) {
-        for (const name of a.revealFields) await this.resolveLater(name);
-        this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue()}"`);
-        return;
-      }
-      this.tl.mark('keys did not accept a suggestion', `${a.field}="${await loc.inputValue()}"`);
 
-      // Mouse fallback: click the matched suggestion at its current on-screen position.
-      const box = await this.newElementBox(needle);
-      if (box) {
-        await this.page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
-        this.tl.mark('suggestion clicked with mouse', box.text);
-        if (await this.confirmAccepted(loc, search, a.revealFields, a.revealTimeoutMs)) {
-          for (const name of a.revealFields) await this.resolveLater(name);
-          this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue()}"`);
-          return;
+      let outcome = await this.waitForOutcome(loc, search, a.revealFields, urlBefore, a.revealTimeoutMs);
+      if (outcome === 'none') {
+        this.tl.mark('keys did not accept a suggestion', `${a.field}="${await loc.inputValue().catch(() => '?')}"`);
+        // Mouse fallback: first visible suggestion (Google .pac-item / ARIA option, shadow DOM pierced), else the deepest new element with the street.
+        const clicked = await this.clickFirstSuggestion(needle);
+        if (clicked) {
+          this.tl.mark('suggestion clicked with mouse', clicked);
+          outcome = await this.waitForOutcome(loc, search, a.revealFields, urlBefore, a.revealTimeoutMs);
         }
       }
-      lastDiag = await this.describeNewElements(needle);
+      if (outcome === 'accepted') {
+        for (const name of a.revealFields) await this.resolveLater(name);
+        this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue().catch(() => '?')}"`);
+        return 'accepted';
+      }
+      if (outcome === 'advanced') {
+        this.tl.mark('form submitted by Enter, page advanced', `url=${this.page.url()}`);
+        return 'advanced';
+      }
+      lastDiag = await this.describeNewElements(needle).catch(() => lastDiag);
       this.tl.mark('address not accepted on this attempt', lastDiag);
     }
     throw new AutomationError('ADDRESS_NOT_ACCEPTED', `Address suggestion could not be accepted after ${a.retries + 1} attempt(s). ${lastDiag}`);
   }
 
-  /** Accepted when the reveal fields are visible AND the input no longer holds exactly what was typed. */
-  private async confirmAccepted(input: Locator, typed: string, reveal: string[], timeout: number): Promise<boolean> {
+  /** 'accepted' (value changed + reveal fields visible), 'advanced' (form moved on), or 'none' after timeout. */
+  private async waitForOutcome(input: Locator, typed: string, reveal: string[], urlBefore: string, timeout: number): Promise<'accepted' | 'advanced' | 'none'> {
     const deadline = Date.now() + timeout;
+    const agree = this.cfg.checkout.agreeButton ? this.page.locator(this.cfg.checkout.agreeButton).filter({ visible: true }) : null;
+    const submit = this.page.locator(this.cfg.submitButton).filter({ visible: true });
     while (Date.now() < deadline) {
       try {
-        const value = await input.inputValue({ timeout: 1000 });
-        const changed = value.trim() !== typed.trim();
-        const revealed = await this.revealVisible(reveal);
-        if (changed && revealed) return true;
+        if (this.page.url() !== urlBefore) return 'advanced';
+        if (agree && (await agree.count()) > 0) return 'advanced';
+        const inputGone = (await input.count()) === 0;
+        if (inputGone && (await submit.count()) === 0) return 'advanced';
+        if (!inputGone) {
+          const value = await input.inputValue({ timeout: 1000 });
+          if (value.trim() !== typed.trim() && (await this.revealVisible(reveal))) return 'accepted';
+        }
       } catch { /* re-render */ }
       await new Promise((r) => setTimeout(r, 100));
     }
-    return false;
+    return 'none';
   }
 
   private async revealVisible(names: string[]): Promise<boolean> {
@@ -359,20 +372,27 @@ export class SiteB {
     return true;
   }
 
-  /** Tag every element currently in the DOM so newly rendered ones (the suggestion list) can be told apart. */
+  /** Tag every element (shadow roots included) so newly rendered ones can be told apart. */
   private markExistingElements(): Promise<void> {
-    return this.page.evaluate(`(() => { for (const el of document.querySelectorAll('*')) el.__preAc = true; })()`);
+    return this.page.evaluate(pageScript('mark', ''));
   }
 
   /**
-   * Selector-free confirmation that a suggestion list is open. Signals, in order:
-   * aria-expanded on the input, a visible role=listbox/option, a Google Places
-   * .pac-container, or any NEW visible element whose text contains the typed street.
+   * Is a suggestion list open? Checks, in order: Google Places classic `.pac-container`
+   * with items, ARIA listbox/option (Playwright locators pierce open shadow roots, which
+   * covers the newer Google widget), aria-expanded on the focused input, then any NEW
+   * visible element (shadow roots walked) whose text contains the typed street.
    */
-  private async waitForSuggestionSignal(_input: Locator, needle: string, maxMs: number): Promise<{ kind: string; detail: string } | null> {
+  private async waitForSuggestionSignal(needle: string, maxMs: number): Promise<{ kind: string; detail: string } | null> {
     const deadline = Date.now() + maxMs;
+    const pac = this.page.locator('.pac-container .pac-item').filter({ visible: true });
+    const aria = this.page.locator('[role="option"]').filter({ visible: true });
     while (Date.now() < deadline) {
       try {
+        const n1 = await pac.count();
+        if (n1 > 0) return { kind: 'google pac-container', detail: `${n1} item(s): ${(await pac.first().innerText()).replace(/\s+/g, ' ').slice(0, 80)}` };
+        const n2 = await aria.count();
+        if (n2 > 0) return { kind: 'role=option', detail: `${n2} option(s): ${(await aria.first().innerText()).replace(/\s+/g, ' ').slice(0, 80)}` };
         const r = await this.page.evaluate<{ kind: string; detail: string } | null>(pageScript('signal', needle));
         if (r) return r;
       } catch { /* re-render */ }
@@ -381,9 +401,20 @@ export class SiteB {
     return null;
   }
 
-  /** Bounding box of the deepest NEW visible element containing the typed street, for a real mouse click. */
-  private newElementBox(needle: string): Promise<{ x: number; y: number; w: number; h: number; text: string } | null> {
-    return this.page.evaluate(pageScript('box', needle));
+  /** Real mouse click on the first suggestion. Returns a description of what was clicked, or null. */
+  private async clickFirstSuggestion(needle: string): Promise<string | null> {
+    for (const sel of ['.pac-container .pac-item', '[role="option"]']) {
+      const first = this.page.locator(sel).filter({ visible: true }).first();
+      if ((await first.count()) > 0) {
+        const text = (await first.innerText().catch(() => sel)).replace(/\s+/g, ' ').slice(0, 80);
+        await first.click({ timeout: this.cfg.timeouts.action });
+        return `${sel}: ${text}`;
+      }
+    }
+    const box = await this.page.evaluate<{ x: number; y: number; w: number; h: number; text: string } | null>(pageScript('box', needle));
+    if (!box) return null;
+    await this.page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
+    return `element at (${Math.round(box.x)},${Math.round(box.y)}): ${box.text}`;
   }
 
   /** Human-readable list of elements that appeared since typing began, to identify the dropdown's DOM. */
@@ -561,24 +592,23 @@ export class SiteB {
  * Page-side scripts as source strings (evaluated in the browser). Kept as strings so
  * the TypeScript runner's helper wrappers (e.g. esbuild's __name) never leak into the page.
  */
-function pageScript(kind: 'signal' | 'box' | 'describe', needle: string): string {
+function pageScript(kind: 'mark' | 'signal' | 'box' | 'describe', needle: string): string {
   const common = `
     const needleLc = ${JSON.stringify(needle.toLowerCase())};
+    const walk = (root, out) => { for (const el of root.querySelectorAll('*')) { out.push(el); if (el.shadowRoot) walk(el.shadowRoot, out); } return out; };
+    const everything = walk(document, []);
     const vis = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
     const skip = ['INPUT', 'SELECT', 'TEXTAREA', 'SCRIPT', 'STYLE'];
-    const fresh = [...document.querySelectorAll('*')].filter((el) => !el.__preAc && vis(el) && !skip.includes(el.tagName));
+    const fresh = everything.filter((el) => !el.__preAc && vis(el) && !skip.includes(el.tagName));
     const txt = (el) => (el.textContent || '').trim().replace(/\\s+/g, ' ');
     const hits = fresh.filter((el) => txt(el).toLowerCase().includes(needleLc) && txt(el).length < 400);
-    const desc = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/).slice(0, 3).join('.') : '') + (el.getAttribute('role') ? '[role=' + el.getAttribute('role') + ']' : '') + ' "' + txt(el).slice(0, 60) + '"';
+    const desc = (el) => el.tagName.toLowerCase() + (el.id ? '#' + el.id : '') + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/).slice(0, 3).join('.') : '') + (el.getAttribute('role') ? '[role=' + el.getAttribute('role') + ']' : '') + (el.getRootNode() !== document ? '{shadow}' : '') + ' "' + txt(el).slice(0, 60) + '"';
   `;
+  if (kind === 'mark') return `(() => { ${common} for (const el of everything) el.__preAc = true; })()`;
   if (kind === 'signal') {
     return `(() => { ${common}
       const active = document.activeElement;
       if (active && active.getAttribute('aria-expanded') === 'true') return { kind: 'aria-expanded', detail: '' };
-      const lb = [...document.querySelectorAll('[role="listbox"], [role="option"]')].filter(vis);
-      if (lb.length) return { kind: 'role=listbox/option', detail: lb.length + ' element(s)' };
-      const pac = [...document.querySelectorAll('.pac-container')].filter(vis);
-      if (pac.length && pac[0].children.length) return { kind: 'pac-container', detail: pac[0].children.length + ' item(s)' };
       if (hits.length) return { kind: 'new element with typed street', detail: desc(hits[0]) };
       return null;
     })()`;
@@ -593,7 +623,7 @@ function pageScript(kind: 'signal' | 'box' | 'describe', needle: string): string
     })()`;
   }
   return `(() => { ${common}
-    const all = [...document.querySelectorAll('*')].filter((el) => !el.__preAc && vis(el) && el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE');
+    const all = everything.filter((el) => !el.__preAc && vis(el) && el.tagName !== 'SCRIPT' && el.tagName !== 'STYLE');
     const top = all.filter((el) => !all.some((o) => o !== el && o.contains(el)));
     return 'new visible elements: ' + all.length + ' (' + hits.length + ' containing "' + needleLc + '")' + (top.length ? '; top-level: ' + top.slice(0, 6).map(desc).join(' | ') : '');
   })()`;

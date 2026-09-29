@@ -34,6 +34,8 @@ export interface AddressSearchConfig {
   keySequences: string[][];
   /** Pause between keys of a sequence so the widget can render the highlight. */
   keyDelayMs: number;
+  /** true: press the keys even when no suggestion list was detected (Enter may then submit the form; handled). */
+  enterWithoutList: boolean;
   /** Fields that must become visible after Enter to count the address as accepted. */
   revealFields: string[];
   revealTimeoutMs: number;
@@ -127,6 +129,7 @@ export function loadConfig(): SiteBConfig {
           settleMs: raw.addressSearch.settleMs ?? 150,
           keySequences: raw.addressSearch.keySequences ?? [['ArrowDown', 'Enter'], ['Enter']],
           keyDelayMs: raw.addressSearch.keyDelayMs ?? 100,
+          enterWithoutList: raw.addressSearch.enterWithoutList ?? true,
           revealFields: raw.addressSearch.revealFields ?? ['state'],
           revealTimeoutMs: raw.addressSearch.revealTimeoutMs ?? 6000,
           dependentFields: raw.addressSearch.dependentFields ?? [],

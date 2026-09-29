@@ -162,12 +162,16 @@ export class Workflow {
     if (this.drainPromise) await this.drainPromise; // let an in-flight fill finish
 
     try {
-      await this.finalReconciliation(snapshot);
+      const next = await this.finalReconciliation(snapshot);
 
       this.capture.arm();
 
-      await this.siteB.clickLastSubmit();
-      this.tl.mark('Website B submit clicked');
+      if (next === 'submit') {
+        await this.siteB.clickLastSubmit();
+        this.tl.mark('Website B submit clicked');
+      } else {
+        this.tl.mark('submit click skipped', 'page already advanced');
+      }
 
       if (this.cfg.checkout.agreeButton) {
         const agreeFrame = await this.siteB.findFrameWith(this.cfg.checkout.agreeButton, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
@@ -226,7 +230,7 @@ export class Workflow {
    *   ordinary live fields → write-only check → deferred fields (address1) → done.
    * The caller clicks Website B's submit button immediately afterwards.
    */
-  private async finalReconciliation(snapshot: Record<string, string>): Promise<void> {
+  private async finalReconciliation(snapshot: Record<string, string>): Promise<'submit' | 'advanced'> {
     this.tl.mark('final reconciliation started');
 
     // 1. Ordinary live fields (state/city/zip included). Write-only and deferred fields are excluded here.
@@ -244,7 +248,11 @@ export class Workflow {
     const as = this.cfg.addressSearch;
     if (as) {
       this.tl.mark('address autocomplete started');
-      await this.siteB.acceptAddressViaAutocomplete(snapshot);
+      const outcome = await this.siteB.acceptAddressViaAutocomplete(snapshot);
+      if (outcome === 'advanced') {
+        this.tl.mark('final reconciliation complete', 'form already submitted by Enter');
+        return 'advanced';
+      }
       if (as.dependentFields.length) {
         const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
         this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
@@ -264,6 +272,7 @@ export class Workflow {
     }
 
     this.tl.mark('final reconciliation complete');
+    return 'submit';
   }
 
   // ---------- helpers ----------

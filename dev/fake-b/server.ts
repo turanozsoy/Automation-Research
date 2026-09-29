@@ -9,7 +9,8 @@ import { randomBytes } from 'node:crypto';
 
 const port = Number(process.env.FAKE_B_PORT ?? 3001);
 const autoLogin = process.env.FAKE_B_AUTOLOGIN === '1';
-const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget that never opens (tests that Enter is never pressed)
+const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget that never opens
+const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays enabled, so Enter in the form submits it (real-site behaviour)
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
 </head><body>${body}</body></html>`;
@@ -43,7 +44,7 @@ createServer((req, res) => {
         <div id="state-slot"></div>
         <label>ZIP<input name="zip" id="base-ui-_r_h_"></label>
         <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••" autocomplete="off"></label>
-        <button type="submit" id="go" disabled>Continue</button>
+        <button type="submit" id="go" ${enterSubmits ? '' : 'disabled'}>Continue</button>
       </form>
       <div id="checkout"></div>
       <script>

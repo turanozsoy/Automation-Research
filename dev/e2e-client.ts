@@ -71,7 +71,10 @@ ws.on('message', async (raw) => {
     for (const f of ['state', 'city', 'zip']) if (!deferred.has(f)) problems.push(`${f} was not deferred`);
     for (const f of ['city', 'zip']) if (acks.has(f)) problems.push(`${f} was filled into its own field`);
     if (acks.has('address1')) problems.push('address1 was live-synced');
-    for (const ev of ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'suggestions detected (new element with typed street)', 'ArrowDown + Enter sent', 'address accepted', 'final reconciliation complete', 'Website B submit clicked', 'Agree and continue clicked']) {
+    const expectAdvanced = process.env.E2E_EXPECT_ADVANCED === '1';
+    const expected = ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'final reconciliation complete', 'Agree and continue clicked',
+      ...(expectAdvanced ? ['form submitted by Enter, page advanced', 'submit click skipped'] : ['suggestions detected (new element with typed street)', 'address accepted', 'Website B submit clicked'])];
+    for (const ev of expected) {
       if (!seen.has(ev)) problems.push(`missing event: ${ev}`);
     }
     if (problems.length) { console.error('[e2e] FAILED: ' + problems.join('; ')); process.exit(1); }
