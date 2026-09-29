@@ -437,15 +437,29 @@ export class SiteB {
     return failed;
   }
 
-  /** True when the next step's element (agree button, else the checkout toggle) shows up within `timeout`. */
-  async nextStepAppeared(timeout: number): Promise<boolean> {
-    const sel = this.cfg.checkout.agreeButton ?? this.cfg.checkout.toggle;
-    try {
-      await this.findFrameWith(sel, timeout, 'INTERNAL');
-      return true;
-    } catch {
-      return false;
+  /**
+   * Right after the submit click, watch both outcomes at once until `timeout`:
+   *   'advanced'  — the next step's element (agree button, else the checkout toggle) is visible
+   *   'errors'    — the form is still on the page and Website B flags at least one field
+   *   'form-still-here' — the form stayed with nothing flagged (the next step's own wait decides)
+   *   'form-gone' — the form disappeared but the next step is not visible yet
+   */
+  async watchAfterSubmit(timeout: number): Promise<{ outcome: 'advanced' | 'errors' | 'form-still-here' | 'form-gone'; errors: { field: string; reason: string }[] }> {
+    const nextSel = this.cfg.checkout.agreeButton ?? this.cfg.checkout.toggle;
+    const firstField = Object.keys(this.cfg.fields)[0];
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      for (const f of this.page.frames()) {
+        const visible = await f.locator(nextSel).filter({ visible: true }).count().catch(() => 0);
+        if (visible > 0) return { outcome: 'advanced', errors: [] };
+      }
+      const formHere = await this.page.locator(this.cfg.fields[firstField].selectors.join(', ')).filter({ visible: true }).count().then((c) => c > 0).catch(() => false);
+      if (!formHere) return { outcome: 'form-gone', errors: [] };
+      const errors = await this.fieldsWithErrors();
+      if (errors.length) return { outcome: 'errors', errors };
+      await new Promise((r) => setTimeout(r, 250));
     }
+    return { outcome: 'form-still-here', errors: [] };
   }
 
   // ---------- submit ----------

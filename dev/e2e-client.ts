@@ -91,7 +91,7 @@ ws.on('message', async (raw) => {
       'final reconciliation started', 'ordinary fields reconciled', 'verifying final address', 'final address verified', 'authenticationCode verified (masked, not compared)', 'final reconciliation complete',
       ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
       ...(expectAdvanced ? [] : ['Website B submit clicked']),
-      ...(expectFieldError ? ['next step not visible after submit, checking fields for errors', 'field error detected: city', 'field re-filled: city', 'field errors fixed', 'submit retried (attempt 2)'] : [])];
+      ...(expectFieldError ? ['field error detected: city', 'field re-filled: city', 'field errors fixed', 'submit retried (attempt 2)'] : [])];
     expected.push('result', 'link opened by user (visited)', 'link state stored: visited', 'verification text found', 'link state stored: verified');
     for (const ev of expected) if (!run.seen.has(ev)) problems.push(`missing event: ${ev}`);
     finishRun(run, problems.length === 0, problems.join('; '));
