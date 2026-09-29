@@ -31,8 +31,11 @@ Then:
    The service clicks the "Recommended" link, resolves the field selectors and reports **READY**.
 4. Type into the local form. Each field is sent after a short debounce (`debounceMs` in the config)
    and filled into Website B. The event log shows transit / fill latency per field.
-5. Press **Submit (final action)**. The service reconciles every field against the full
-   snapshot, clicks the last `button[type=submit]`, waits for the checkout iframe, makes sure the
+5. Press **Submit (final action)**. The service reconciles the ordinary fields against the full
+   snapshot, then state/city/zip, then types the complete address and waits for the suggestion UI,
+   picks the suggestion that matches the typed street (fails with the list of what appeared if none
+   does), reconciles state/city/zip again, validates the masked authentication code without reading
+   it back, and only then clicks the last `button[type=submit]`, waits for the checkout iframe, makes sure the
    configured toggle is OFF, clicks primary, waits for the next state, clicks secondary, and
    captures the first URL matching the configured prefix/pattern. The URL appears on the test page.
 6. **Reset** reloads the target URL and returns to the waiting state for another run.
@@ -49,6 +52,10 @@ Every step is timestamped in both the terminal and the test page's event log.
 | `fields.<name>.selector` | One selector or an ordered list; the first that matches the page wins. |
 | `fields.<name>.kind` | `text` (fill, with key-press fallback for masked inputs) or `select` (`selectOption`). |
 | `fields.<name>.format` | `MM/DD/YYYY` converts an ISO date before filling. |
+| `fields.<name>.writeOnly` | Website B masks the value after entry (authentication code): filled, then checked for presence / `aria-invalid` only. Never read back for comparison, never logged. |
+| `fields.<name>.syncMode` | `live` (default) fills as the user types. `deferred` keeps the value in the snapshot and applies it only during submit (address1). |
+| `fields.<name>.inputMethod` | `fill` (default) or `type` (key presses, no delay) for widgets that need key events, e.g. address autocomplete. |
+| `fields.<name>.autocomplete` | `suggestionSelectors`, `appearTimeoutMs`, `mode` (`auto` continues if no suggestion UI appears, `required` fails), `dependentFields` re-reconciled after a suggestion is picked. |
 | `submitButton` | The *last* visible, enabled match is clicked. |
 | `checkout.toggle` | Element inside the iframe that must end up unchecked/off. |
 | `checkout.primaryButton`, `checkout.secondaryButton` | Clicked inside the *current* frame, re-located for every step. |

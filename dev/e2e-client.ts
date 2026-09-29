@@ -18,6 +18,8 @@ const seq: Record<string, number> = {};
 const field = (f: string, v: string) => { seq[f] = (seq[f] ?? 0) + 1; send({ type: 'field.update', field: f, value: v, seq: seq[f] }); };
 
 const acks = new Map<string, string>();
+const deferred = new Set<string>();
+const seen = new Set<string>();
 let submitAt = 0;
 let started = false;
 
@@ -28,6 +30,8 @@ ws.on('message', async (raw) => {
   if (m.type === 'error') console.log(`[svc] ${m.fatal ? 'FATAL ' : ''}ERROR ${m.code}: ${m.message}`);
   if (m.type === 'field.ack') { acks.set(m.field, m.value); console.log(`[e2e] ack ${m.field}="${m.value}" transit ${m.receivedAt - m.sentAt} ms fill ${m.filledAt - m.receivedAt} ms`); }
   if (m.type === 'field.error') console.log(`[e2e] field.error ${m.field} ${m.code} ${m.message}`);
+  if (m.type === 'field.deferred') { deferred.add(m.field); console.log(`[e2e] deferred ${m.field}`); }
+  if (m.type === 'event') seen.add(m.name);
 
   if (m.type === 'state' && m.state === 'awaiting_user' && !started) {
     started = true;
@@ -57,10 +61,19 @@ ws.on('message', async (raw) => {
   }
   if (m.type === 'result') {
     console.log(`[e2e] RESULT ${m.url} via ${m.source} — ${Date.now() - submitAt} ms after submit`);
-    const expectAcks = ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'address1', 'city', 'state', 'zip', 'authenticationCode'];
+    const expectAcks = ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'city', 'state', 'zip', 'authenticationCode'];
     const missing = expectAcks.filter((f) => !acks.has(f));
-    if (missing.length) { console.error(`[e2e] missing acks: ${missing.join(',')}`); process.exit(1); }
-    if (acks.get('dateOfBirth') !== '05/17/1990') { console.error('[e2e] DOB not normalised'); process.exit(1); }
+    const problems: string[] = [];
+    if (missing.length) problems.push(`missing acks: ${missing.join(',')}`);
+    if (acks.get('dateOfBirth') !== '05/17/1990') problems.push('DOB not normalised');
+    if (acks.get('authenticationCode') !== '(masked)') problems.push(`auth code ack exposes value: ${acks.get('authenticationCode')}`);
+    if (!deferred.has('address1')) problems.push('address1 was not deferred');
+    if (acks.has('address1')) problems.push('address1 was live-synced');
+    for (const ev of ['final address sequence started', 'state/city/zip reconciled', 'address1 filled', 'address suggestion detected', 'address suggestion selected', 'state/city/zip reconciled after autocomplete', 'final reconciliation complete', 'Website B submit clicked']) {
+      if (!seen.has(ev)) problems.push(`missing event: ${ev}`);
+    }
+    if (problems.length) { console.error('[e2e] FAILED: ' + problems.join('; ')); process.exit(1); }
+    console.log('[e2e] all checks passed');
     clearTimeout(overall);
     ws.close();
     process.exit(0);

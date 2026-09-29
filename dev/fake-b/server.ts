@@ -36,15 +36,41 @@ createServer((req, res) => {
         <label>Last name<input id="last-name"></label>
         <label>Date of birth<input id="date-of-birth" placeholder="MM/DD/YYYY"></label>
         <label>Mobile<input id="mobile-number"></label>
-        <label>Address<input name="line1" id="base-ui-_r_f_"></label>
+        <label>Address<input name="line1" id="base-ui-_r_f_" autocomplete="off"></label>
+        <div id="ac" role="listbox" style="display:none;border:1px solid #888;width:280px;background:#fff"></div>
         <label>City<input name="city" id="base-ui-_r_g_"></label>
         <label>State<select name="state"><option value="">--</option><option value="NY">New York</option><option value="CA">California</option><option value="FL">Florida</option><option value="TX">Texas</option></select></label>
         <label>ZIP<input name="zip" id="base-ui-_r_h_"></label>
-        <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••"></label>
+        <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••" autocomplete="off"></label>
         <button type="submit">Continue</button>
       </form>
       <div id="checkout"></div>
       <script>
+        // Mask the auth code shortly after entry, like the real site does.
+        const code = document.getElementById('test-authentification-code');
+        code.addEventListener('input', () => { if (code.value && !code.value.startsWith('•')) { code.dataset.real = code.value; setTimeout(() => { code.value = '•••-••-••••'; }, 50); } });
+        // Address autocomplete: suggestions appear ~300 ms after typing; picking one overwrites city/state/zip.
+        const line1 = document.querySelector('input[name="line1"]');
+        const ac = document.getElementById('ac');
+        let acTimer;
+        line1.addEventListener('input', () => {
+          clearTimeout(acTimer); ac.style.display = 'none'; ac.innerHTML = '';
+          if (!line1.value.trim()) return;
+          acTimer = setTimeout(() => {
+            const v = line1.value.trim();
+            const opts = [
+              { text: v + ' Apt 2, Springfield, NY 10099', line1: v + ' Apt 2', city: 'Springfield', state: 'NY', zip: '10099' },
+              { text: v + ', Springfield, NY 10099', line1: v, city: 'Springfield', state: 'NY', zip: '10099' },
+              { text: '99 Elsewhere Rd, Miami, FL 33101', line1: '99 Elsewhere Rd', city: 'Miami', state: 'FL', zip: '33101' },
+            ];
+            for (const o of opts) {
+              const d = document.createElement('div'); d.setAttribute('role', 'option'); d.textContent = o.text; d.style.padding = '4px';
+              d.onclick = () => { line1.value = o.line1; document.querySelector('input[name="city"]').value = o.city; document.querySelector('select[name="state"]').value = o.state; document.querySelector('input[name="zip"]').value = o.zip; ac.style.display = 'none'; ac.innerHTML = ''; };
+              ac.appendChild(d);
+            }
+            ac.style.display = 'block';
+          }, 300);
+        });
         document.getElementById('f').addEventListener('submit', (e) => {
           e.preventDefault();
           document.getElementById('checkout').innerHTML = '<p>Loading checkout…</p>';

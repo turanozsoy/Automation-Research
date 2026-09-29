@@ -33,7 +33,7 @@ export function startServer(port: number, cfg: SiteBConfig, wf: Workflow, tl: Ti
 
   wss.on('connection', (socket) => {
     // hello first, then the replayed history, and only then the "connected" mark (so it is not delivered twice).
-    socket.send(JSON.stringify({ type: 'hello', ts: Date.now(), state: wf.state, debounceMs: cfg.debounceMs, fields: wf.fieldNames(), targetUrl: cfg.targetUrl } satisfies ServerMsg));
+    socket.send(JSON.stringify({ type: 'hello', ts: Date.now(), state: wf.state, debounceMs: cfg.debounceMs, fields: wf.fieldNames(), targetUrl: cfg.targetUrl, writeOnlyFields: wf.writeOnlyFields(), deferredFields: wf.deferredFields() } satisfies ServerMsg));
     for (const m of history) socket.send(JSON.stringify(m));
     tl.mark('test page connected');
 

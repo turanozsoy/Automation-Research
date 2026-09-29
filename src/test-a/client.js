@@ -10,6 +10,9 @@
   const seq = {};
   const timers = {};
   const lastSent = {};
+  let writeOnly = [];
+  let deferred = [];
+  const show = (name, v) => (writeOnly.includes(name) ? '(masked)' : `"${v}"`);
 
   const pad = (n, w = 2) => String(n).padStart(w, '0');
   const fmt = (ts) => { const d = new Date(ts); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`; };
@@ -46,8 +49,10 @@
         debounceMs = m.debounceMs;
         $('#debounce').textContent = debounceMs;
         $('#target').textContent = m.targetUrl;
+        writeOnly = m.writeOnlyFields || [];
+        deferred = m.deferredFields || [];
         setState(m.state);
-        log(m.ts, `hello — state=${m.state}, fields=${m.fields.join(',')}`, 'local');
+        log(m.ts, `hello — state=${m.state}, fields=${m.fields.join(',')}, write-only=${writeOnly.join(',') || '-'}, deferred=${deferred.join(',') || '-'}`, 'local');
         for (const f of fields) if (!m.fields.includes(f.dataset.field)) log(Date.now(), `WARNING: local field "${f.dataset.field}" has no mapping in config`, 'err');
         break;
       case 'state':
@@ -61,9 +66,15 @@
       case 'field.ack': {
         const total = m.filledAt - m.sentAt;
         const queued = m.startedAt - m.receivedAt;
-        log(m.ts, `Website B ${m.field} updated = "${m.value}" — transit ${m.receivedAt - m.sentAt} ms${queued > 5 ? `, queued ${queued} ms` : ''}, fill ${m.filledAt - m.startedAt} ms, total ${total} ms`, 'ack');
+        log(m.ts, `Website B ${m.field} updated = ${show(m.field, m.value)} — transit ${m.receivedAt - m.sentAt} ms${queued > 5 ? `, queued ${queued} ms` : ''}, fill ${m.filledAt - m.startedAt} ms, total ${total} ms`, 'ack');
         const s = document.querySelector(`[data-sync="${m.field}"]`);
         if (s) s.textContent = `✓ synced (${total} ms)`;
+        break;
+      }
+      case 'field.deferred': {
+        // The service's timeline event already logs this; only update the field marker here.
+        const s = document.querySelector(`[data-sync="${m.field}"]`);
+        if (s) s.textContent = '✓ saved (applied at submit)';
         break;
       }
       case 'field.error':
@@ -89,7 +100,7 @@
     const ts = Date.now();
     const s = document.querySelector(`[data-sync="${name}"]`);
     if (s) s.textContent = '… syncing';
-    log(ts, `${name} changed locally → "${f.value}" (seq ${seq[name]})`, 'local');
+    log(ts, `${name} changed locally → ${show(name, f.value)} (seq ${seq[name]})`, 'local');
     send({ type: 'field.update', ts, field: name, value: f.value, seq: seq[name] });
   }
 
@@ -107,6 +118,7 @@
   $('#btnSubmit').onclick = () => {
     const snapshot = {};
     for (const f of fields) { clearTimeout(timers[f.dataset.field]); snapshot[f.dataset.field] = f.value; }
+    // Any deferred field (e.g. address1) still waiting on its debounce is included in the snapshot above.
     submitRequestedAt = Date.now();
     $('#result').textContent = '… waiting for generated URL';
     log(submitRequestedAt, 'submit requested (full snapshot sent)', 'local');

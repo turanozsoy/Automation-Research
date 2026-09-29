@@ -27,6 +27,8 @@ export type ErrorCode =
   | 'TOGGLE_STATE_FAILED'
   | 'PRIMARY_NOT_FOUND'
   | 'SECONDARY_NOT_FOUND'
+  | 'ADDRESS_SUGGESTION_NOT_FOUND'
+  | 'ADDRESS_SUGGESTION_AMBIGUOUS'
   | 'URL_TIMEOUT'
   | 'BROWSER_CLOSED'
   | 'INVALID_STATE'
@@ -47,6 +49,10 @@ export type ClientMsg = StartMsg | FieldUpdateMsg | SubmitMsg | ResetMsg | PingM
 export interface HelloMsg {
   type: 'hello'; ts: number;
   state: WorkflowState; debounceMs: number; fields: string[]; targetUrl: string;
+  /** Fields whose value must never appear in logs (masked by Website B). */
+  writeOnlyFields: string[];
+  /** Fields kept locally and applied only at submit (e.g. address autocomplete). */
+  deferredFields: string[];
 }
 export interface StateMsg { type: 'state'; ts: number; state: WorkflowState; detail?: string }
 export interface EventMsg { type: 'event'; ts: number; name: string; detail?: string; sinceLastMs?: number }
@@ -54,9 +60,10 @@ export interface FieldAckMsg {
   type: 'field.ack'; ts: number; field: string; seq: number;
   sentAt: number; receivedAt: number; startedAt: number; filledAt: number; value: string;
 }
+export interface FieldDeferredMsg { type: 'field.deferred'; ts: number; field: string; seq: number }
 export interface FieldErrorMsg { type: 'field.error'; ts: number; field: string; seq: number; code: ErrorCode; message: string }
 export interface ResultMsg { type: 'result'; ts: number; url: string; source: string; submitRequestedAt: number }
 export interface ErrorMsg { type: 'error'; ts: number; code: ErrorCode; message: string; fatal: boolean }
 export interface PongMsg { type: 'pong'; ts: number; echo: number }
 
-export type ServerMsg = HelloMsg | StateMsg | EventMsg | FieldAckMsg | FieldErrorMsg | ResultMsg | ErrorMsg | PongMsg;
+export type ServerMsg = HelloMsg | StateMsg | EventMsg | FieldAckMsg | FieldDeferredMsg | FieldErrorMsg | ResultMsg | ErrorMsg | PongMsg;

@@ -37,6 +37,19 @@ export class Workflow {
     return Object.keys(this.cfg.fields);
   }
 
+  writeOnlyFields(): string[] {
+    return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].writeOnly);
+  }
+
+  deferredFields(): string[] {
+    return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].syncMode === 'deferred');
+  }
+
+  /** Value as it may appear in logs. */
+  private loggable(field: string, value: string): string {
+    return this.cfg.fields[field]?.writeOnly ? '(masked)' : `"${value}"`;
+  }
+
   // ---------- lifecycle ----------
 
   async boot(): Promise<void> {
@@ -80,7 +93,7 @@ export class Workflow {
   }
 
   handleFieldUpdate(m: FieldUpdateMsg): void {
-    const receivedAt = this.tl.mark(`update received: ${m.field}`, `"${m.value}" seq=${m.seq}`);
+    const receivedAt = this.tl.mark(`update received: ${m.field}`, `${this.loggable(m.field, m.value)} seq=${m.seq}`);
     if (!(m.field in this.cfg.fields)) {
       this.send({ type: 'field.error', ts: Date.now(), field: m.field, seq: m.seq, code: 'UNKNOWN_FIELD', message: `No mapping for "${m.field}" in config` });
       return;
@@ -90,6 +103,12 @@ export class Workflow {
       return;
     }
     this.snapshot.set(m.field, m.value);
+    if (this.cfg.fields[m.field].syncMode === 'deferred') {
+      // Kept in the snapshot only; applied during the final submit sequence (e.g. address autocomplete).
+      this.tl.mark(`${m.field} saved locally, autocomplete deferred until submit`);
+      this.send({ type: 'field.deferred', ts: Date.now(), field: m.field, seq: m.seq });
+      return;
+    }
     // Coalesce: a newer value for the same field replaces the older pending one.
     this.pending.set(m.field, { value: m.value, seq: m.seq, sentAt: m.ts, receivedAt });
     void this.drain();
@@ -111,7 +130,9 @@ export class Workflow {
       try {
         const startedAt = Date.now();
         const actual = await this.siteB.setField(field, upd.value);
-        const filledAt = this.tl.mark(`Website B ${field} updated`, `"${actual}"`);
+        const filledAt = this.cfg.fields[field].writeOnly
+          ? this.tl.mark(`${field} updated (masked by Website B)`)
+          : this.tl.mark(`Website B ${field} updated`, `"${actual}"`);
         this.send({ type: 'field.ack', ts: filledAt, field, seq: upd.seq, sentAt: upd.sentAt, receivedAt: upd.receivedAt, startedAt, filledAt, value: actual });
       } catch (e) {
         const ae = toAutomationError(e);
@@ -135,13 +156,12 @@ export class Workflow {
     if (this.drainPromise) await this.drainPromise; // let an in-flight fill finish
 
     try {
-      const corrected = await this.siteB.reconcile(snapshot);
-      this.tl.mark('fields reconciled', corrected.length ? `corrected: ${corrected.join(', ')}` : 'all fields already in sync');
+      await this.finalReconciliation(snapshot);
 
       this.capture.arm();
 
       await this.siteB.clickLastSubmit();
-      this.tl.mark('submit clicked');
+      this.tl.mark('Website B submit clicked');
 
       let frame = await this.siteB.findFrameWith(this.cfg.checkout.toggle, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
       this.tl.mark('iframe detected', frame.url());
@@ -187,6 +207,57 @@ export class Workflow {
     }
     this.tl.mark('reset requested');
     await this.boot();
+  }
+
+  /**
+   * Final sequence before the submit click:
+   *   ordinary fields → dependent fields (state/city/zip) → full address1 with
+   *   autocomplete → dependent fields again → write-only check → done.
+   */
+  private async finalReconciliation(snapshot: Record<string, string>): Promise<void> {
+    this.tl.mark('final address sequence started');
+
+    // 1. Ordinary live fields (write-only and deferred fields are excluded here).
+    const corrected = await this.siteB.reconcile(snapshot);
+    this.tl.mark('ordinary fields reconciled', corrected.length ? `corrected: ${corrected.join(', ')}` : 'all in sync');
+
+    // 2./3. Deferred fields with autocomplete, each followed by its dependent fields.
+    for (const name of this.deferredFields()) {
+      const field = this.cfg.fields[name];
+      const value = snapshot[name] ?? this.snapshot.get(name) ?? '';
+      const deps = field.autocomplete?.dependentFields ?? [];
+
+      if (deps.length) {
+        const fixed = await this.siteB.reconcile(snapshot, deps);
+        this.tl.mark(`${deps.join('/')} reconciled`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+      }
+
+      if (value.trim() === '') {
+        this.tl.mark(`${name} empty in snapshot, skipped`);
+        continue;
+      }
+
+      if (field.autocomplete) {
+        const r = await this.siteB.fillAddressWithAutocomplete(name, value, snapshot);
+        if (r.outcome === 'selected') this.tl.mark(`${name} now holds`, `"${r.finalValue}"`);
+      } else {
+        const actual = await this.siteB.setField(name, value);
+        this.tl.mark(`Website B ${name} updated`, `"${actual}"`);
+      }
+
+      if (deps.length) {
+        const fixed = await this.siteB.reconcile(snapshot, deps);
+        this.tl.mark(`${deps.join('/')} reconciled after autocomplete`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
+      }
+    }
+
+    // 4. Write-only fields: fill only if empty, otherwise validate without reading the value back.
+    for (const name of this.writeOnlyFields()) {
+      const r = await this.siteB.finaliseWriteOnly(name, snapshot[name] ?? this.snapshot.get(name) ?? '');
+      this.tl.mark(r === 'filled' ? `${name} updated (masked)` : r === 'verified' ? `${name} verified (masked, not compared)` : `${name} empty in snapshot, skipped`);
+    }
+
+    this.tl.mark('final reconciliation complete');
   }
 
   // ---------- helpers ----------

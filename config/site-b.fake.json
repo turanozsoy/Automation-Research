@@ -2,37 +2,79 @@
   "baseUrl": "http://localhost:3001",
   "targetUrl": "http://localhost:3001/",
   "loginPathPattern": "^/login(/|$)",
-
   "recommendedLink": "a:has-text(\"Recommended\")",
-
   "fields": {
-    "firstName":          { "selector": "#first-name", "kind": "text" },
-    "lastName":           { "selector": "#last-name", "kind": "text" },
-    "dateOfBirth":        { "selector": "#date-of-birth", "kind": "text", "format": "MM/DD/YYYY" },
-    "mobileNumber":       { "selector": "#mobile-number", "kind": "text" },
-    "address1":           { "selector": "input[name=\"line1\"]", "kind": "text" },
-    "city":               { "selector": "input[name=\"city\"]", "kind": "text" },
-    "state":              { "selector": "select[name=\"state\"]", "kind": "select" },
-    "zip":                { "selector": "input[name=\"zip\"]", "kind": "text" },
-    "authenticationCode": { "selector": ["input[placeholder=\"•••-••-••••\"]", "#test-authentification-code"], "kind": "text" }
+    "firstName": {
+      "selector": "#first-name",
+      "kind": "text"
+    },
+    "lastName": {
+      "selector": "#last-name",
+      "kind": "text"
+    },
+    "dateOfBirth": {
+      "selector": "#date-of-birth",
+      "kind": "text",
+      "format": "MM/DD/YYYY"
+    },
+    "mobileNumber": {
+      "selector": "#mobile-number",
+      "kind": "text"
+    },
+    "address1": {
+      "selector": "input[name=\"line1\"]",
+      "kind": "text",
+      "syncMode": "deferred",
+      "inputMethod": "type",
+      "autocomplete": {
+        "suggestionSelectors": [
+          "[role=\"listbox\"] [role=\"option\"]",
+          "ul[role=\"listbox\"] li",
+          ".pac-item"
+        ],
+        "appearTimeoutMs": 2500,
+        "mode": "auto",
+        "dependentFields": [
+          "state",
+          "city",
+          "zip"
+        ]
+      }
+    },
+    "city": {
+      "selector": "input[name=\"city\"]",
+      "kind": "text"
+    },
+    "state": {
+      "selector": "select[name=\"state\"]",
+      "kind": "select"
+    },
+    "zip": {
+      "selector": "input[name=\"zip\"]",
+      "kind": "text"
+    },
+    "authenticationCode": {
+      "selector": [
+        "input[placeholder=\"•••-••-••••\"]",
+        "#test-authentification-code"
+      ],
+      "kind": "text",
+      "writeOnly": true
+    }
   },
-
   "submitButton": "button[type=\"submit\"]",
-
   "checkout": {
     "frameUrlIncludes": "",
     "toggle": "#v-0-0-0-0-0-0",
     "primaryButton": "button[data-variant=\"primary\"]",
     "secondaryButton": "button[data-variant=\"secondary\"]"
   },
-
   "generatedUrl": {
     "prefix": "http://localhost:3001/test/it-worked/",
     "pattern": "^http://localhost:3001/test/it-worked/[^/?#\\s]+",
     "watchNavigationRequests": true,
     "anchorPollMs": 250
   },
-
   "timeouts": {
     "pageLoad": 60000,
     "action": 10000,
@@ -40,6 +82,5 @@
     "checkoutStep": 30000,
     "generatedUrl": 30000
   },
-
   "debounceMs": 150
 }

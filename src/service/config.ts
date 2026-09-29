@@ -1,12 +1,31 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+export interface AutocompleteConfig {
+  /** Selectors for suggestion options (any frame-less DOM, incl. portals). Tried as one combined selector. */
+  suggestionSelectors: string[];
+  /** How long to wait for the suggestion UI after typing the address. */
+  appearTimeoutMs: number;
+  /** 'required': fail if no suggestion UI appears. 'auto': continue with the typed value if none appears. */
+  mode: 'required' | 'auto';
+  /** Fields Website B may overwrite when a suggestion is picked; re-reconciled afterwards. */
+  dependentFields: string[];
+}
+
 export interface FieldConfig {
   /** Tried in order; the first selector that matches an element on the page wins. */
   selectors: string[];
   kind: 'text' | 'select';
   /** Optional normalisation applied before filling. */
   format?: 'MM/DD/YYYY';
+  /** 'live': filled as the user types. 'deferred': kept in the snapshot, applied only at submit. */
+  syncMode: 'live' | 'deferred';
+  /** 'fill' sets the value in one go; 'type' presses keys (no delay) for widgets that need key events. */
+  inputMethod: 'fill' | 'type';
+  /** Website B masks this field after entry: never read back for comparison, never log its value. */
+  writeOnly: boolean;
+  /** Present when the field drives an address-suggestion widget. */
+  autocomplete?: AutocompleteConfig;
 }
 
 export interface SiteBConfig {
@@ -38,7 +57,11 @@ export interface SiteBConfig {
   debounceMs: number;
 }
 
-interface RawFieldConfig { selector: string | string[]; kind?: 'text' | 'select'; format?: 'MM/DD/YYYY' }
+interface RawFieldConfig {
+  selector: string | string[]; kind?: 'text' | 'select'; format?: 'MM/DD/YYYY';
+  syncMode?: 'live' | 'deferred'; inputMethod?: 'fill' | 'type'; writeOnly?: boolean;
+  autocomplete?: Partial<AutocompleteConfig>;
+}
 
 export function loadConfig(): SiteBConfig {
   const path = resolve(process.cwd(), process.env.SITE_B_CONFIG ?? 'config/site-b.json');
@@ -48,7 +71,21 @@ export function loadConfig(): SiteBConfig {
   for (const [name, f] of Object.entries(raw.fields as Record<string, RawFieldConfig>)) {
     const selectors = Array.isArray(f.selector) ? f.selector : [f.selector];
     if (selectors.length === 0) throw new Error(`Field "${name}" has no selector in ${path}`);
-    fields[name] = { selectors, kind: f.kind ?? 'text', format: f.format };
+    const autocomplete: AutocompleteConfig | undefined = f.autocomplete
+      ? {
+          suggestionSelectors: f.autocomplete.suggestionSelectors ?? ['[role="listbox"] [role="option"]', 'ul[role="listbox"] li', '.pac-item'],
+          appearTimeoutMs: f.autocomplete.appearTimeoutMs ?? 2500,
+          mode: f.autocomplete.mode ?? 'auto',
+          dependentFields: f.autocomplete.dependentFields ?? [],
+        }
+      : undefined;
+    fields[name] = {
+      selectors, kind: f.kind ?? 'text', format: f.format,
+      syncMode: f.syncMode ?? 'live',
+      inputMethod: f.inputMethod ?? 'fill',
+      writeOnly: f.writeOnly ?? false,
+      autocomplete,
+    };
   }
 
   const required = ['baseUrl', 'targetUrl', 'loginPathPattern', 'recommendedLink', 'submitButton', 'checkout', 'generatedUrl', 'timeouts'];

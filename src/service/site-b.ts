@@ -93,7 +93,10 @@ export class SiteB {
     return this.fieldLocator(name).inputValue({ timeout: this.cfg.timeouts.action });
   }
 
-  /** Set one field and verify it stuck. Returns the value Website B now holds. */
+  /**
+   * Set one field and verify it stuck. Returns the value Website B now holds, or
+   * "(masked)" for write-only fields whose value must never be read back or logged.
+   */
   async setField(name: string, rawValue: string): Promise<string> {
     const field = this.cfg.fields[name];
     if (!field) throw new AutomationError('UNKNOWN_FIELD', `No config for field "${name}"`, false);
@@ -111,15 +114,17 @@ export class SiteB {
         return loc.inputValue({ timeout: t });
       }
 
-      await loc.fill(value, { timeout: t });
+      if (field.writeOnly) {
+        await this.setWriteOnly(name, loc, value);
+        return '(masked)';
+      }
+
+      await this.enterText(loc, value, field.inputMethod);
       let actual = await loc.inputValue({ timeout: t });
       if (valuesEquivalent(actual, value) || (value === '' && actual === '')) return actual;
 
       // Masked / controlled inputs sometimes reject fill(); fall back to real key presses (no artificial delay).
-      await loc.click({ timeout: t });
-      await loc.press('ControlOrMeta+a');
-      await loc.press('Backspace');
-      if (value !== '') await loc.pressSequentially(value, { timeout: t });
+      await this.enterText(loc, value, 'type');
       actual = await loc.inputValue({ timeout: t });
       if (valuesEquivalent(actual, value) || (value === '' && actual === '')) return actual;
 
@@ -130,15 +135,73 @@ export class SiteB {
     }
   }
 
+  private async enterText(loc: Locator, value: string, method: 'fill' | 'type'): Promise<void> {
+    const t = this.cfg.timeouts.action;
+    if (method === 'fill') {
+      await loc.fill(value, { timeout: t });
+      return;
+    }
+    await loc.click({ timeout: t });
+    await loc.press('ControlOrMeta+a');
+    await loc.press('Backspace');
+    if (value !== '') await loc.pressSequentially(value, { timeout: t });
+  }
+
   /**
-   * Bring every field on Website B in line with the snapshot. Returns the list of
-   * fields that had to be corrected. Throws if any field cannot be corrected.
+   * Write-only field (Website B masks it after entry). Never compares the read-back
+   * value and never puts the value in an error message. Checks only that the field
+   * still exists, is non-empty, and is not flagged invalid.
    */
-  async reconcile(snapshot: Record<string, string>): Promise<string[]> {
+  private async setWriteOnly(name: string, loc: Locator, value: string): Promise<void> {
+    await this.enterText(loc, value, this.cfg.fields[name].inputMethod);
+    // Let Website B react (masking, validation) before checking. Playwright waits on the element, no fixed sleep.
+    if (value !== '' && (await this.isEmpty(loc))) {
+      await this.enterText(loc, value, 'type');
+    }
+    await this.checkWriteOnly(name, loc, value !== '');
+  }
+
+  private async isEmpty(loc: Locator): Promise<boolean> {
+    const v = await loc.inputValue({ timeout: this.cfg.timeouts.action });
+    return v.length === 0;
+  }
+
+  /** Validation for a write-only field without exposing its value. */
+  async checkWriteOnly(name: string, loc: Locator, expectNonEmpty: boolean): Promise<void> {
+    const t = this.cfg.timeouts.action;
+    if ((await loc.count()) === 0) throw new AutomationError('FIELD_NOT_FOUND', `Field "${name}" disappeared after entry`, false);
+    if (expectNonEmpty && (await this.isEmpty(loc))) {
+      throw new AutomationError('FIELD_FILL_FAILED', `Field "${name}" is empty after entry`, false);
+    }
+    const state = await loc.evaluate((el) => {
+      const invalid = el.getAttribute('aria-invalid') === 'true';
+      const errId = el.getAttribute('aria-errormessage') || el.getAttribute('aria-describedby');
+      let errText: string | null = null;
+      if (errId) {
+        for (const id of errId.split(/\s+/)) {
+          const n = document.getElementById(id);
+          if (n && /error|invalid/i.test(n.className + ' ' + (n.getAttribute('role') ?? '')) && n.textContent?.trim()) errText = n.textContent.trim();
+        }
+      }
+      return { invalid, errText };
+    });
+    if (state.invalid || state.errText) {
+      throw new AutomationError('FIELD_FILL_FAILED', `Field "${name}" is flagged invalid by Website B${state.errText ? `: ${state.errText}` : ''}`, false);
+    }
+    void t;
+  }
+
+  /**
+   * Bring the given fields on Website B in line with the snapshot. Returns the list
+   * of fields that had to be corrected. Throws if any field cannot be corrected.
+   * Write-only and deferred fields are skipped unless listed explicitly in `only`.
+   */
+  async reconcile(snapshot: Record<string, string>, only?: string[]): Promise<string[]> {
     const corrected: string[] = [];
     const failures: string[] = [];
-    for (const name of Object.keys(this.cfg.fields)) {
-      if (!(name in snapshot)) continue;
+    const names = only ?? Object.keys(this.cfg.fields).filter((n) => !this.cfg.fields[n].writeOnly && this.cfg.fields[n].syncMode === 'live');
+    for (const name of names) {
+      if (!(name in snapshot) || !(name in this.cfg.fields)) continue;
       const want = normaliseValue(this.cfg.fields[name], snapshot[name] ?? '');
       const have = await this.readField(name);
       if (valuesEquivalent(have, want) || (want === '' && have === '')) continue;
@@ -151,6 +214,83 @@ export class SiteB {
     }
     if (failures.length) throw new AutomationError('RECONCILE_MISMATCH', failures.join('; '));
     return corrected;
+  }
+
+  /**
+   * Final check for a write-only field: fill it only if Website B shows it empty,
+   * otherwise just validate. Never compares or logs the value.
+   */
+  async finaliseWriteOnly(name: string, value: string): Promise<'filled' | 'verified' | 'empty'> {
+    const loc = this.fieldLocator(name);
+    if (value === '') return 'empty';
+    if (await this.isEmpty(loc)) {
+      await this.setField(name, value);
+      return 'filled';
+    }
+    await this.checkWriteOnly(name, loc, true);
+    return 'verified';
+  }
+
+  // ---------- address autocomplete ----------
+
+  /**
+   * Type the complete address, wait for the suggestion UI, pick the suggestion that
+   * matches what was typed (never an unrelated one), then wait for the widget to close.
+   * Returns what happened so the caller can log it. Throws when suggestions appear
+   * but none matches, or when none appear and the config says one is required.
+   */
+  async fillAddressWithAutocomplete(name: string, rawValue: string, snapshot: Record<string, string>): Promise<{ outcome: 'selected' | 'no-suggestions'; chosen?: string; finalValue: string }> {
+    const field = this.cfg.fields[name];
+    const ac = field.autocomplete;
+    if (!ac) throw new AutomationError('INTERNAL', `Field "${name}" has no autocomplete config`);
+    const value = normaliseValue(field, rawValue);
+    const loc = this.fieldLocator(name);
+
+    await this.enterText(loc, value, field.inputMethod);
+    this.tl.mark('address1 filled', `"${value}"`);
+
+    this.tl.mark('waiting for address suggestion', `selectors: ${ac.suggestionSelectors.join(' | ')} (up to ${ac.appearTimeoutMs} ms)`);
+    const options = this.page.locator(ac.suggestionSelectors.join(', ')).filter({ visible: true });
+    try {
+      await options.first().waitFor({ state: 'visible', timeout: ac.appearTimeoutMs });
+    } catch {
+      if (ac.mode === 'required') {
+        throw new AutomationError('ADDRESS_SUGGESTION_NOT_FOUND', `No suggestion UI appeared within ${ac.appearTimeoutMs} ms for ${ac.suggestionSelectors.join(' | ')}`);
+      }
+      this.tl.mark('no address suggestion UI appeared', 'continuing with the typed value (autocomplete.mode=auto)');
+      return { outcome: 'no-suggestions', finalValue: await loc.inputValue() };
+    }
+
+    // Suggestion lists often fill in incrementally; wait until the count is stable for a moment (bounded).
+    const texts = await this.settledTexts(options, 100, 1000);
+    this.tl.mark('address suggestion detected', `${texts.length} option(s): ${texts.map((t, i) => `[${i}] ${t.replace(/\s+/g, ' ').trim()}`).join(' || ')}`);
+
+    const idx = pickSuggestion(texts, value, snapshot);
+    if (idx < 0) {
+      throw new AutomationError('ADDRESS_SUGGESTION_AMBIGUOUS', `None of the ${texts.length} suggestion(s) matches "${value}". Shown: ${texts.map((t) => t.replace(/\s+/g, ' ').trim()).join(' || ')}`);
+    }
+    await options.nth(idx).click({ timeout: this.cfg.timeouts.action });
+    this.tl.mark('address suggestion selected', `[${idx}] ${texts[idx].replace(/\s+/g, ' ').trim()}`);
+
+    // Wait for the widget to close (or the value to change), bounded; then read what Website B settled on.
+    await options.first().waitFor({ state: 'hidden', timeout: 2000 }).catch(() => {});
+    const finalValue = await loc.inputValue();
+    return { outcome: 'selected', chosen: texts[idx], finalValue };
+  }
+
+  private async settledTexts(options: Locator, quietMs: number, maxMs: number): Promise<string[]> {
+    const deadline = Date.now() + maxMs;
+    let last = await options.allInnerTexts();
+    let lastChange = Date.now();
+    while (Date.now() < deadline && Date.now() - lastChange < quietMs) {
+      await new Promise((r) => setTimeout(r, 30));
+      const now = await options.allInnerTexts();
+      if (now.length !== last.length || now.some((t, i) => t !== last[i])) {
+        last = now;
+        lastChange = Date.now();
+      }
+    }
+    return last;
   }
 
   // ---------- submit ----------
@@ -293,6 +433,36 @@ export class SiteB {
       throw new AutomationError(code, `Could not click ${selector}: ${msg(e)}`);
     }
   }
+}
+
+/**
+ * Choose the suggestion that actually corresponds to the typed address. A candidate
+ * must contain the typed text (or every token of it); ties are broken by the
+ * snapshot's zip / city / state appearing in the suggestion, then by list order.
+ * Returns -1 when nothing qualifies, so the caller fails instead of guessing.
+ */
+export function pickSuggestion(texts: string[], typed: string, snapshot: Record<string, string>): number {
+  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const want = norm(typed);
+  if (!want) return -1;
+  const tokens = want.split(' ').filter(Boolean);
+  const zip = norm(snapshot.zip ?? ''), city = norm(snapshot.city ?? ''), state = norm(snapshot.state ?? '');
+  let best = -1, bestScore = 0;
+  texts.forEach((raw, i) => {
+    const t = norm(raw);
+    let score = 0;
+    const street = norm(raw.split(',')[0] ?? '');
+    if (street === want) score = 130;          // exact street match beats "same street + apartment"
+    else if (t.startsWith(want)) score = 100;
+    else if (t.includes(want)) score = 60;
+    else if (tokens.every((tok) => t.split(' ').includes(tok))) score = 40;
+    else return;
+    if (zip && t.split(' ').includes(zip)) score += 20;
+    if (city && t.includes(city)) score += 10;
+    if (state && t.split(' ').includes(state)) score += 5;
+    if (score > bestScore) { bestScore = score; best = i; }
+  });
+  return best;
 }
 
 function msg(e: unknown): string {
