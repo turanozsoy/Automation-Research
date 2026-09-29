@@ -231,78 +231,26 @@ export class SiteB {
     return 'verified';
   }
 
-  // ---------- address autocomplete ----------
-
-  /**
-   * Type the complete address, wait for the suggestion UI, pick the suggestion that
-   * matches what was typed (never an unrelated one), then wait for the widget to close.
-   * Returns what happened so the caller can log it. Throws when suggestions appear
-   * but none matches, or when none appear and the config says one is required.
-   */
-  async fillAddressWithAutocomplete(name: string, rawValue: string, snapshot: Record<string, string>): Promise<{ outcome: 'selected' | 'no-suggestions'; chosen?: string; finalValue: string }> {
-    const field = this.cfg.fields[name];
-    const ac = field.autocomplete;
-    if (!ac) throw new AutomationError('INTERNAL', `Field "${name}" has no autocomplete config`);
-    const value = normaliseValue(field, rawValue);
-    const loc = this.fieldLocator(name);
-
-    await this.enterText(loc, value, field.inputMethod);
-    this.tl.mark('address1 filled', `"${value}"`);
-
-    this.tl.mark('waiting for address suggestion', `selectors: ${ac.suggestionSelectors.join(' | ')} (up to ${ac.appearTimeoutMs} ms)`);
-    const options = this.page.locator(ac.suggestionSelectors.join(', ')).filter({ visible: true });
-    try {
-      await options.first().waitFor({ state: 'visible', timeout: ac.appearTimeoutMs });
-    } catch {
-      if (ac.mode === 'required') {
-        throw new AutomationError('ADDRESS_SUGGESTION_NOT_FOUND', `No suggestion UI appeared within ${ac.appearTimeoutMs} ms for ${ac.suggestionSelectors.join(' | ')}`);
-      }
-      this.tl.mark('no address suggestion UI appeared', 'continuing with the typed value (autocomplete.mode=auto)');
-      return { outcome: 'no-suggestions', finalValue: await loc.inputValue() };
-    }
-
-    // Suggestion lists often fill in incrementally; wait until the count is stable for a moment (bounded).
-    const texts = await this.settledTexts(options, 100, 1000);
-    this.tl.mark('address suggestion detected', `${texts.length} option(s): ${texts.map((t, i) => `[${i}] ${t.replace(/\s+/g, ' ').trim()}`).join(' || ')}`);
-
-    const idx = pickSuggestion(texts, value, snapshot);
-    if (idx < 0) {
-      throw new AutomationError('ADDRESS_SUGGESTION_AMBIGUOUS', `None of the ${texts.length} suggestion(s) matches "${value}". Shown: ${texts.map((t) => t.replace(/\s+/g, ' ').trim()).join(' || ')}`);
-    }
-    await options.nth(idx).click({ timeout: this.cfg.timeouts.action });
-    this.tl.mark('address suggestion selected', `[${idx}] ${texts[idx].replace(/\s+/g, ' ').trim()}`);
-
-    // Wait for the widget to close (or the value to change), bounded; then read what Website B settled on.
-    await options.first().waitFor({ state: 'hidden', timeout: 2000 }).catch(() => {});
-    const finalValue = await loc.inputValue();
-    return { outcome: 'selected', chosen: texts[idx], finalValue };
-  }
-
-  private async settledTexts(options: Locator, quietMs: number, maxMs: number): Promise<string[]> {
-    const deadline = Date.now() + maxMs;
-    let last = await options.allInnerTexts();
-    let lastChange = Date.now();
-    while (Date.now() < deadline && Date.now() - lastChange < quietMs) {
-      await new Promise((r) => setTimeout(r, 30));
-      const now = await options.allInnerTexts();
-      if (now.length !== last.length || now.some((t, i) => t !== last[i])) {
-        last = now;
-        lastChange = Date.now();
-      }
-    }
-    return last;
-  }
-
   // ---------- submit ----------
 
-  /** Click the LAST visible + enabled button matching the configured submit selector. */
+  /**
+   * Click the LAST visible + enabled button matching the configured submit selector.
+   * If an overlay (e.g. an address-autocomplete dropdown) intercepts the click,
+   * press Escape to dismiss it and retry once.
+   */
   async clickLastSubmit(): Promise<void> {
     const all = this.page.locator(this.cfg.submitButton);
     const n = await all.count();
     for (let i = n - 1; i >= 0; i--) {
       const b = all.nth(i);
       if ((await b.isVisible()) && (await b.isEnabled())) {
-        await b.click({ timeout: this.cfg.timeouts.action });
+        try {
+          await b.click({ timeout: Math.min(3000, this.cfg.timeouts.action) });
+        } catch {
+          this.tl.mark('submit click intercepted, dismissing overlay and retrying');
+          await this.page.keyboard.press('Escape');
+          await b.click({ timeout: this.cfg.timeouts.action });
+        }
         return;
       }
     }
@@ -433,36 +381,6 @@ export class SiteB {
       throw new AutomationError(code, `Could not click ${selector}: ${msg(e)}`);
     }
   }
-}
-
-/**
- * Choose the suggestion that actually corresponds to the typed address. A candidate
- * must contain the typed text (or every token of it); ties are broken by the
- * snapshot's zip / city / state appearing in the suggestion, then by list order.
- * Returns -1 when nothing qualifies, so the caller fails instead of guessing.
- */
-export function pickSuggestion(texts: string[], typed: string, snapshot: Record<string, string>): number {
-  const norm = (x: string) => x.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
-  const want = norm(typed);
-  if (!want) return -1;
-  const tokens = want.split(' ').filter(Boolean);
-  const zip = norm(snapshot.zip ?? ''), city = norm(snapshot.city ?? ''), state = norm(snapshot.state ?? '');
-  let best = -1, bestScore = 0;
-  texts.forEach((raw, i) => {
-    const t = norm(raw);
-    let score = 0;
-    const street = norm(raw.split(',')[0] ?? '');
-    if (street === want) score = 130;          // exact street match beats "same street + apartment"
-    else if (t.startsWith(want)) score = 100;
-    else if (t.includes(want)) score = 60;
-    else if (tokens.every((tok) => t.split(' ').includes(tok))) score = 40;
-    else return;
-    if (zip && t.split(' ').includes(zip)) score += 20;
-    if (city && t.includes(city)) score += 10;
-    if (state && t.split(' ').includes(state)) score += 5;
-    if (score > bestScore) { bestScore = score; best = i; }
-  });
-  return best;
 }
 
 function msg(e: unknown): string {

@@ -118,7 +118,6 @@
   $('#btnSubmit').onclick = () => {
     const snapshot = {};
     for (const f of fields) { clearTimeout(timers[f.dataset.field]); snapshot[f.dataset.field] = f.value; }
-    // Any deferred field (e.g. address1) still waiting on its debounce is included in the snapshot above.
     submitRequestedAt = Date.now();
     $('#result').textContent = '… waiting for generated URL';
     log(submitRequestedAt, 'submit requested (full snapshot sent)', 'local');

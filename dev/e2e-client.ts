@@ -69,7 +69,7 @@ ws.on('message', async (raw) => {
     if (acks.get('authenticationCode') !== '(masked)') problems.push(`auth code ack exposes value: ${acks.get('authenticationCode')}`);
     if (!deferred.has('address1')) problems.push('address1 was not deferred');
     if (acks.has('address1')) problems.push('address1 was live-synced');
-    for (const ev of ['final address sequence started', 'state/city/zip reconciled', 'address1 filled', 'address suggestion detected', 'address suggestion selected', 'state/city/zip reconciled after autocomplete', 'final reconciliation complete', 'Website B submit clicked']) {
+    for (const ev of ['final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address1 filled', 'final reconciliation complete', 'Website B submit clicked']) {
       if (!seen.has(ev)) problems.push(`missing event: ${ev}`);
     }
     if (problems.length) { console.error('[e2e] FAILED: ' + problems.join('; ')); process.exit(1); }

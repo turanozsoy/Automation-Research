@@ -25,21 +25,7 @@
       "selector": "input[name=\"line1\"]",
       "kind": "text",
       "syncMode": "deferred",
-      "inputMethod": "type",
-      "autocomplete": {
-        "suggestionSelectors": [
-          "[role=\"listbox\"] [role=\"option\"]",
-          "ul[role=\"listbox\"] li",
-          ".pac-item"
-        ],
-        "appearTimeoutMs": 2500,
-        "mode": "auto",
-        "dependentFields": [
-          "state",
-          "city",
-          "zip"
-        ]
-      }
+      "inputMethod": "type"
     },
     "city": {
       "selector": "input[name=\"city\"]",
