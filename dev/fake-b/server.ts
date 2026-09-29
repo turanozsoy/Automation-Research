@@ -11,7 +11,8 @@ const port = Number(process.env.FAKE_B_PORT ?? 3001);
 const autoLogin = process.env.FAKE_B_AUTOLOGIN === '1';
 const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget that never opens
 const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays enabled, so Enter in the form submits it (real-site behaviour)
-const noAgree = process.env.FAKE_B_NO_AGREE === '1'; // no "Agree and continue" button: the agree step fails and the workflow pauses
+const noAgree = process.env.FAKE_B_NO_AGREE === '1';
+const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1'; // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
 </head><body>${body}</body></html>`;
@@ -120,7 +121,11 @@ createServer((req, res) => {
     return page(`<h2>Checkout — step 2</h2>
       <p><button data-variant="secondary" id="finish">Continue on phone</button></p>
       <script>
-        document.getElementById('finish').onclick = () => { setTimeout(() => location.href = '/test/it-worked/${randomBytes(6).toString('hex')}', 500); };
+        document.getElementById('finish').onclick = () => { setTimeout(() => {
+          ${urlAsText
+            ? "document.body.innerHTML = '<h2>Done</h2><p>Scan or open: <span>http://localhost:" + port + "/test/it-worked/" + randomBytes(6).toString('hex') + "</span></p>';"
+            : "location.href = '/test/it-worked/" + randomBytes(6).toString('hex') + "';"}
+        }, 500); };
       </script>`);
   }
   if (url.pathname.startsWith('/test/it-worked/')) return page(`<h2>It worked</h2><p>${url.pathname}</p>`);
