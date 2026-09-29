@@ -1,10 +1,11 @@
-/* Local Website A stand-in. Talks straight to the automation service over one WebSocket. */
+/* Local Website A stand-in. One workflow per page; talks to the automation service over one WebSocket. */
 (() => {
   const $ = (s) => document.querySelector(s);
   const logEl = $('#log');
   const fields = [...document.querySelectorAll('[data-field]')];
   let debounceMs = 150;
   let state = 'connecting';
+  let workflowId = null;
   let submitRequestedAt = 0;
   let lastLogTs = null;
   const seq = {};
@@ -32,19 +33,26 @@
     state = s;
     $('#state').textContent = s;
     $('#detail').textContent = detail ? `— ${detail}` : '';
-    $('#btnStart').disabled = s !== 'awaiting_user';
+    const terminal = ['completed', 'failed', 'abandoned'].includes(s);
+    $('#btnStart').disabled = !(s === 'idle' || terminal);
     $('#btnSubmit').disabled = s !== 'ready';
+    $('#btnEnd').disabled = !workflowId || terminal || s === 'idle';
     if (s !== 'paused') $('#pausePanel').style.display = 'none';
+    if (terminal) workflowId = null;
   }
+  const showPool = (p) => { $('#pool').textContent = `${p.available} available / ${p.live} live / ${p.cooldown} cooldown / ${p.expired + p.invalid} out / ${p.queued} queued (max ${p.maxWorkflows})`; };
 
   const ws = new WebSocket(`ws://${location.host}/ws`);
   const send = (m) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(m)); };
+  const mine = (m) => !m.workflowId || m.workflowId === workflowId;
 
   ws.onopen = () => log(Date.now(), 'connected to automation service', 'local');
   ws.onclose = () => { log(Date.now(), 'disconnected from automation service (reload the page after restarting it)', 'err'); setState('disconnected'); };
 
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
+    if (m.type === 'pool.status') { showPool(m.pool); return; }
+    if (!mine(m)) return;
     switch (m.type) {
       case 'hello':
         debounceMs = m.debounceMs;
@@ -52,16 +60,25 @@
         $('#target').textContent = m.targetUrl;
         writeOnly = m.writeOnlyFields || [];
         deferred = m.deferredFields || [];
-        setState(m.state);
-        log(m.ts, `hello — state=${m.state}, fields=${m.fields.join(',')}, write-only=${writeOnly.join(',') || '-'}, deferred=${deferred.join(',') || '-'}`, 'local');
+        showPool(m.pool);
+        setState('idle', 'press Start workflow');
+        log(m.ts, `hello — fields=${m.fields.join(',')}, write-only=${writeOnly.join(',') || '-'}, deferred=${deferred.join(',') || '-'}`, 'local');
         for (const f of fields) if (!m.fields.includes(f.dataset.field)) log(Date.now(), `WARNING: local field "${f.dataset.field}" has no mapping in config`, 'err');
+        break;
+      case 'workflow.accepted':
+        workflowId = m.workflowId;
+        $('#wfid').textContent = workflowId.slice(0, 8);
+        setState(m.queuePosition ? 'allocating' : 'allocating', m.queuePosition ? `queued, position ${m.queuePosition}` : 'profile reserved');
+        log(m.ts, `workflow ${workflowId.slice(0, 8)} accepted${m.queuePosition ? ` (queue position ${m.queuePosition})` : ''}`, 'state');
+        // Anything typed before Start is sent now so it is buffered and applied at READY.
+        for (const f of fields) if (f.value) sendField(f, true);
         break;
       case 'state':
         setState(m.state, m.detail);
         log(m.ts, `state → ${m.state}${m.detail ? ` — ${m.detail}` : ''}`, 'state');
         break;
       case 'event':
-        if (m.name.startsWith('state →')) break; // already logged via the 'state' message
+        if (m.name.startsWith('state →')) break;
         log(m.ts, `${m.name}${m.detail ? ` — ${m.detail}` : ''}`);
         break;
       case 'field.ack': {
@@ -73,7 +90,6 @@
         break;
       }
       case 'field.deferred': {
-        // The service's timeline event already logs this; only update the field marker here.
         const s = document.querySelector(`[data-sync="${m.field}"]`);
         if (s) s.textContent = '✓ saved (applied at submit)';
         break;
@@ -102,38 +118,41 @@
   function sendField(f, force) {
     const name = f.dataset.field;
     clearTimeout(timers[name]);
-    if (!force && lastSent[name] === f.value) return; // blur after a debounced send: nothing new
+    if (!workflowId) return; // typed before Start: sent in bulk on workflow.accepted
+    if (!force && lastSent[name] === f.value) return;
     lastSent[name] = f.value;
     seq[name] = (seq[name] || 0) + 1;
     const ts = Date.now();
     const s = document.querySelector(`[data-sync="${name}"]`);
     if (s) s.textContent = '… syncing';
     log(ts, `${name} changed locally → ${show(name, f.value)} (seq ${seq[name]})`, 'local');
-    send({ type: 'field.update', ts, field: name, value: f.value, seq: seq[name] });
+    send({ type: 'field.update', ts, workflowId, field: name, value: f.value, seq: seq[name] });
   }
 
   for (const f of fields) {
     const name = f.dataset.field;
-    f.addEventListener('input', () => {
-      clearTimeout(timers[name]);
-      timers[name] = setTimeout(() => sendField(f), debounceMs);
-    });
-    // blur / select change: flush immediately, no need to wait for the debounce.
+    f.addEventListener('input', () => { clearTimeout(timers[name]); timers[name] = setTimeout(() => sendField(f), debounceMs); });
     f.addEventListener('change', () => sendField(f));
   }
 
-  $('#btnStart').onclick = () => { log(Date.now(), 'start requested locally', 'local'); send({ type: 'start', ts: Date.now() }); };
+  $('#btnStart').onclick = () => {
+    $('#result').textContent = '— no URL yet —';
+    for (const s of document.querySelectorAll('[data-sync]')) s.textContent = '';
+    for (const k of Object.keys(lastSent)) delete lastSent[k];
+    log(Date.now(), 'workflow start requested', 'local');
+    send({ type: 'workflow.start', ts: Date.now() });
+  };
   $('#btnSubmit').onclick = () => {
     const snapshot = {};
     for (const f of fields) { clearTimeout(timers[f.dataset.field]); snapshot[f.dataset.field] = f.value; }
     submitRequestedAt = Date.now();
     $('#result').textContent = '… waiting for generated URL';
     log(submitRequestedAt, 'submit requested (full snapshot sent)', 'local');
-    send({ type: 'submit', ts: submitRequestedAt, snapshot });
+    send({ type: 'submit', ts: submitRequestedAt, workflowId, snapshot });
   };
-  $('#btnRetry').onclick = () => { log(Date.now(), 'retry step requested', 'local'); send({ type: 'resume', ts: Date.now(), mode: 'retry' }); };
-  $('#btnSkip').onclick = () => { log(Date.now(), 'skip step requested (done manually)', 'local'); send({ type: 'resume', ts: Date.now(), mode: 'skip' }); };
-  $('#btnAbort').onclick = () => { send({ type: 'resume', ts: Date.now(), mode: 'abort' }); };
-  $('#btnReset').onclick = () => { $('#result').textContent = '— no URL yet —'; send({ type: 'reset', ts: Date.now() }); };
+  $('#btnEnd').onclick = () => { if (workflowId) send({ type: 'workflow.end', ts: Date.now(), workflowId, reason: 'user ended it' }); };
+  $('#btnRetry').onclick = () => { log(Date.now(), 'retry step requested', 'local'); send({ type: 'resume', ts: Date.now(), workflowId, mode: 'retry' }); };
+  $('#btnSkip').onclick = () => { log(Date.now(), 'skip step requested (done manually)', 'local'); send({ type: 'resume', ts: Date.now(), workflowId, mode: 'skip' }); };
+  $('#btnAbort').onclick = () => { send({ type: 'resume', ts: Date.now(), workflowId, mode: 'abort' }); };
   $('#btnClear').onclick = () => { logEl.innerHTML = ''; lastLogTs = null; };
 })();

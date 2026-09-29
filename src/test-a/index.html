@@ -19,7 +19,7 @@
 <body>
 <div>
   <h3>Website A (local test)</h3>
-  <div id="status">state: <b id="state">connecting</b> <span id="detail"></span></div>
+  <div id="status">state: <b id="state">connecting</b> <span id="detail"></span><br><small>workflow: <span id="wfid">—</span> · pool: <span id="pool">?</span></small></div>
 
   <label>First name <span class="sync" data-sync="firstName"></span></label>
   <input data-field="firstName" autocomplete="off">
@@ -64,9 +64,9 @@
     <div id="pauseSteps" style="font-family:monospace;font-size:11px;margin-top:6px"></div>
   </div>
   <div>
-    <button id="btnStart" disabled>Start automation</button>
+    <button id="btnStart" disabled>Start workflow</button>
     <button id="btnSubmit" disabled>Submit (final action)</button>
-    <button id="btnReset">Reset</button>
+    <button id="btnEnd" disabled>End workflow</button>
     <button id="btnClear">Clear log</button>
   </div>
   <p style="font-size:12px;color:#666">Debounce: <span id="debounce">?</span> ms · Target: <span id="target">?</span></p>

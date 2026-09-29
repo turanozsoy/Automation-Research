@@ -5,54 +5,65 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { ClientMsg, ServerMsg } from '../shared/messages.js';
 import type { SiteBConfig } from './config.js';
 import type { Timeline } from './timeline.js';
-import type { Workflow } from './workflow.js';
+import type { WorkflowRegistry } from './workflows.js';
 
 const STATIC_DIR = resolve(process.cwd(), 'src/test-a');
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
-/** Serves the local test page and hosts the WebSocket the page talks to. */
-export function startServer(port: number, cfg: SiteBConfig, wf: Workflow, tl: Timeline): Promise<void> {
+/** Serves the local test page and hosts the WebSocket; routes every workflow message by workflowId. */
+export function startServer(port: number, cfg: SiteBConfig, registry: WorkflowRegistry, tl: Timeline): Promise<void> {
   const server = createServer(serveStatic);
   const wss = new WebSocketServer({ server, path: '/ws' });
 
-  // Keep recent events so a page that connects late still sees the boot timeline.
-  const history: ServerMsg[] = [];
-  const remember = (m: ServerMsg) => {
-    history.push(m);
-    if (history.length > 300) history.shift();
-  };
-
   const broadcast = (m: ServerMsg) => {
-    remember(m);
     const data = JSON.stringify(m);
     for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(data);
   };
-
   tl.onEvent(broadcast);
-  wf.setSender(broadcast);
+  registry.setSender(broadcast);
 
-  wss.on('connection', (socket) => {
-    // hello first, then the replayed history, and only then the "connected" mark (so it is not delivered twice).
-    socket.send(JSON.stringify({ type: 'hello', ts: Date.now(), state: wf.state, debounceMs: cfg.debounceMs, fields: wf.fieldNames(), targetUrl: cfg.targetUrl, writeOnlyFields: wf.writeOnlyFields(), deferredFields: wf.deferredFields() } satisfies ServerMsg));
-    for (const m of history) socket.send(JSON.stringify(m));
-    tl.mark('test page connected');
+  const fields = Object.keys(cfg.fields);
+  const writeOnlyFields = fields.filter((n) => cfg.fields[n].writeOnly);
+  const deferredFields = fields.filter((n) => cfg.fields[n].syncMode === 'deferred');
 
+  wss.on('connection', (socket, req) => {
+    const clientIp = (req.socket.remoteAddress ?? '').replace('::ffff:', '');
+    socket.send(JSON.stringify({ type: 'hello', ts: Date.now(), debounceMs: cfg.debounceMs, fields, targetUrl: cfg.targetUrl, writeOnlyFields, deferredFields, pool: registry.poolStatus() } satisfies ServerMsg));
+    tl.mark('client connected', clientIp);
+
+    const own = new Set<string>();
     socket.on('message', (raw) => {
       let m: ClientMsg;
-      try {
-        m = JSON.parse(raw.toString());
-      } catch {
-        return;
-      }
+      try { m = JSON.parse(raw.toString()); } catch { return; }
+      const reply = (r: ServerMsg) => socket.send(JSON.stringify(r));
       switch (m.type) {
-        case 'start': void wf.start(); break;
-        case 'field.update': wf.handleFieldUpdate(m); break;
-        case 'submit': void wf.submit(m.snapshot, m.ts); break;
-        case 'reset': void wf.reset(); break;
-        case 'resume': void wf.resume(m.mode); break;
-        case 'ping': socket.send(JSON.stringify({ type: 'pong', ts: Date.now(), echo: m.ts } satisfies ServerMsg)); break;
+        case 'workflow.start': {
+          const { workflowId, queuePosition } = registry.startWorkflow(m.clientIp ?? clientIp);
+          own.add(workflowId);
+          reply({ type: 'workflow.accepted', ts: Date.now(), workflowId, queuePosition });
+          break;
+        }
+        case 'field.update': case 'submit': case 'resume': case 'workflow.end': {
+          const wf = registry.get(m.workflowId);
+          if (m.type === 'workflow.end') { registry.end(m.workflowId, m.reason ?? 'client ended the workflow'); own.delete(m.workflowId); break; }
+          if (m.type === 'field.update') {
+            if (registry.handleFieldUpdate(m) === 'unknown') reply({ type: 'error', ts: Date.now(), workflowId: m.workflowId, code: 'UNKNOWN_WORKFLOW', message: 'No workflow with this id (ended or unknown)', fatal: false });
+            break;
+          }
+          if (!wf) {
+            const known = registry.isKnown(m.workflowId);
+            reply({ type: 'error', ts: Date.now(), workflowId: m.workflowId, code: known ? 'INVALID_STATE' : 'UNKNOWN_WORKFLOW', message: known ? 'Workflow is not ready yet' : 'No workflow with this id (ended or unknown)', fatal: false });
+            break;
+          }
+          if (m.type === 'submit') void wf.submit(m.snapshot, m.ts);
+          else void wf.resume(m.mode);
+          break;
+        }
+        case 'ping': reply({ type: 'pong', ts: Date.now(), echo: m.ts }); break;
       }
     });
+    // A client that disconnects abandons the workflows it started (after their own idle grace inside the registry).
+    socket.on('close', () => { for (const id of own) registry.end(id, 'client disconnected'); });
   });
 
   return new Promise((res) => server.listen(port, () => res()));

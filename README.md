@@ -1,52 +1,59 @@
-# Automation Research — Phase 1 local prototype
-
-Local proof of the core loop:
+# Automation Research — local prototype with a profile pool
 
 ```
-localhost test form (Website A stand-in)
-  → WebSocket → local Node automation service
-  → Playwright → VISIBLE Chromium → Website B (real, online)
-  → generated URL captured → WebSocket → shown on the test form
+localhost test form(s)  →  WebSocket  →  Node automation service  →  Playwright
+   one workflow per tab                    profile pool (SQLite, encrypted)      one isolated Chromium context per workflow
+                                                                                 →  Website B (real, online)  →  generated URL back
 ```
 
-Phase 1 deliberately has **one** browser, **one** page, **one** workflow, manual login,
-no cookie pool, no headless mode, no deployment. See the conversation notes for the
-production architecture that this grows into.
+What exists now:
+
+- **Profile pool.** Authenticated Website B sessions (Playwright storageState) stored encrypted in
+  SQLite. Each workflow atomically reserves one profile; a profile is never held by two live workflows
+  (enforced by the database). States: available → reserved → starting → active → cooldown → available,
+  plus expired / invalid / disabled (out of rotation until you re-seed or enable).
+- **Isolated workflows.** `workflowId → profileId → browser context`. Field updates and commands are
+  routed by workflow id; values typed before the context exists are buffered; if a profile turns out to
+  be expired during preparation the workflow is moved to another profile with its values carried over.
+- **Release policy.** completed / abandoned / failed → cooldown (configurable, default 60 s);
+  session lost → expired; unreadable session → invalid; three consecutive failures → invalid;
+  service restart → orphaned assignments marked lost and their profiles put in cooldown.
+- **Queue.** When every profile is busy or `MAX_WORKFLOWS` is reached, new workflows wait (bounded)
+  and are served as profiles are released.
+- Everything from the earlier phase: debounced live sync, masked authentication code, keyboard-driven
+  Google address autocomplete, pausable submit steps with manual retry/skip, final-URL capture.
+
+Not yet: headless by default, process sharding, warm pool, IP handling, deployment.
 
 ## Run it
 
 ```bash
 npm install
-npx playwright install chromium      # once, downloads the Chromium build Playwright expects
-# edit config/site-b.json  (target URL, selectors, generated URL prefix…)
+npx playwright install chromium
+# put your real URLs/selectors in config/site-b.local.json (gitignored, merged over config/site-b.json)
+
+# seed one profile per Website B account (opens a visible Chromium; log in by hand, press Enter)
+npm run profile -- seed --label acct1 --account user1@example.com
+npm run profile -- list
+
 npm start
 ```
 
-Then:
+Then open <http://localhost:3000> in one tab per user you want to simulate. Each tab:
+**Start workflow** (a profile is reserved and Website B opens in its own context, already logged in),
+type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 
-1. A visible Chromium opens on the configured Website B target URL.
-2. If Website B shows `/login/*`, log in manually in that window and reach the target page.
-   The service waits for you; it does not time out.
-3. Open <http://localhost:3000> and press **Start automation** (or press Enter in the terminal).
-   The service clicks the "Recommended" link, resolves the field selectors and reports **READY**.
-4. Type into the local form. Each field is sent after a short debounce (`debounceMs` in the config)
-   and filled into Website B. The event log shows transit / fill latency per field.
-5. Press **Submit (final action)**. The service reconciles the ordinary fields against the full
-   snapshot (state/city/zip included), validates the masked authentication code without reading it
-   back, then runs the keyboard-driven address autocomplete (types "address1, State, city, zip",
-   ArrowDown, Enter, waits for the State field to appear, retries once with plain Enter). City and
-   zip are never typed into their own fields. It then clicks the last `button[type=submit]`, clicks
-   "Agree and continue" when it appears, waits for the checkout iframe, makes sure the
-   configured toggle is OFF, clicks primary, waits for the next state, clicks secondary, and
-   captures the first URL matching the configured prefix/pattern. The URL appears on the test page.
-6. If any submit step fails (address, submit click, agree, iframe/toggle, primary, secondary, URL capture)
-   the workflow **pauses** instead of failing. The test page shows the failed step with three buttons:
-   **Retry this step**, **I did it manually — continue with next step** (do the step yourself in the
-   Chromium window first), or **Abort**. The URL detectors stay armed while paused, so a URL produced by
-   hand is still captured and returned.
-7. **Reset** reloads the target URL and returns to the waiting state for another run.
+Profile commands (`npm run profile -- <cmd>`): `seed`, `import --file <storageState.json>`,
+`reseed <label>`, `list`, `verify <label>`, `disable`, `enable`, `remove`, `events <label>`.
 
-Every step is timestamped in both the terminal and the test page's event log.
+Service settings are environment variables (see `.env.example`): `MAX_WORKFLOWS`, `COOLDOWN_MS`,
+`IDLE_TIMEOUT_MS`, `LEASE_MS`, `QUEUE_TIMEOUT_MS`, `MAX_REASSIGN`, `DATA_DIR`, `PROFILE_MASTER_KEY`.
+
+### Encryption
+
+storageState blobs are encrypted with AES-256-GCM under a random per-profile data key, which is itself
+wrapped by a 32-byte master key (`PROFILE_MASTER_KEY`, base64). For development a key is generated once
+into `data/master.key` (gitignored). Rotating the master key only re-wraps the small data keys.
 
 ## Configuration (`config/site-b.json`)
 
@@ -89,12 +96,16 @@ popup/new tab, visible anchor `href`, navigation request.
 ## Developing without the real Website B
 
 `dev/fake-b/` is a throwaway local imitation of Website B with the same selectors
-(login redirect, Recommended link, form, checkout iframe with a pre-checked box, primary → secondary → generated URL).
+(login redirect, Recommended link, form, Google-style address suggestions, State revealed after an
+address is accepted, Agree button, checkout iframe with a pre-checked box, primary → secondary → generated URL).
 
 ```bash
-npm run fake-b                     # terminal 1: http://localhost:3001  (FAKE_B_AUTOLOGIN=1 to auto-login)
-npm run start:fake                 # terminal 2: service using config/site-b.fake.json
-npm run e2e                        # terminal 3 (optional): scripted client that drives the whole loop
+npm run fake-b                     # terminal 1: http://localhost:3001
+npm run profile:fake -- import --label fake1 --account a1 --file dev/fake-b/profile.storage-state.json
+npm run profile:fake -- import --label fake2 --account a2 --file dev/fake-b/profile.storage-state.json
+npm run start:fake                 # terminal 2: service using config/site-b.fake.json and data/fake
+E2E_PARALLEL=3 npm run e2e         # terminal 3 (optional): 3 simultaneous scripted workflows (2 profiles + 1 queued)
+npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 ```
 
 `HEADLESS=1` and `CHROMIUM_PATH=…` exist only for automated testing in containers. On your machine leave them unset so the browser is visible.
@@ -105,14 +116,20 @@ npm run e2e                        # terminal 3 (optional): scripted client that
 config/site-b.json          Website B description (the only place selectors/URLs live)
 config/site-b.fake.json     same shape, pointing at the local fake
 src/shared/messages.ts      WebSocket message types (test page ⇄ service)
-src/service/main.ts         boot: launch Chromium, open Website B, serve test page, wait for Start
-src/service/config.ts       config loader + login-URL check
-src/service/browser.ts      Chromium launch (visible by default)
-src/service/site-b.ts       everything that touches Website B's UI (fields, submit, frames, toggle, buttons)
-src/service/url-capture.ts  generated-URL detectors
-src/service/workflow.ts     the single workflow: state, snapshot, coalescing queue, submit sequence
-src/service/ws.ts           static test page + WebSocket server
-src/service/timeline.ts     timestamped event log
+src/service/main.ts         boot: db, pool recovery, Chromium, registry, server
+src/service/settings.ts     service settings from environment
+src/service/config.ts       Website B config loader (+ local override) and login-URL check
+src/service/db.ts           SQLite + migrations
+src/service/crypto.ts       envelope encryption for storageState
+src/service/profiles/store.ts   profiles, atomic allocation, leases, release policy, recovery
+src/service/browser/manager.ts  one Chromium, one isolated context per workflow
+src/service/workflows.ts    registry: allocation, queue, prepare, reassignment, idle/lease upkeep, release
+src/service/workflow.ts     one workflow runtime: snapshot, coalescing queue, pausable submit steps
+src/service/site-b.ts       everything that touches Website B's UI
+src/service/url-capture.ts  generated-URL detectors (+ settle on the final URL)
+src/service/ws.ts           static test page + WebSocket server, routing by workflow id
+src/service/timeline.ts     timestamped event log (per-workflow children)
+scripts/profile.ts          profile CLI
 src/test-a/                 the local Website A stand-in (index.html + client.js)
 dev/fake-b/                 local fake Website B (testing only)
 dev/e2e-client.ts           scripted end-to-end run

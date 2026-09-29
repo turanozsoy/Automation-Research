@@ -10,14 +10,21 @@ type Listener = (ev: EventMsg) => void;
 
 /**
  * Timestamped event log. Every mark is printed to the terminal and forwarded to
- * listeners (the WebSocket layer broadcasts it to the test page).
+ * listeners (the WebSocket layer broadcasts it). `child(workflowId)` returns a
+ * timeline whose marks are tagged with that workflow and keep their own delta.
  */
 export class Timeline {
   private lastTs: number | null = null;
   private listeners: Listener[] = [];
 
+  constructor(private workflowId?: string, private parent?: Timeline) {}
+
   onEvent(fn: Listener): void {
-    this.listeners.push(fn);
+    (this.parent ?? this).listeners.push(fn);
+  }
+
+  child(workflowId: string): Timeline {
+    return new Timeline(workflowId, this.parent ?? this);
   }
 
   mark(name: string, detail?: string): number {
@@ -25,9 +32,10 @@ export class Timeline {
     const sinceLastMs = this.lastTs === null ? undefined : ts - this.lastTs;
     this.lastTs = ts;
     const delta = sinceLastMs === undefined ? '' : ` (+${sinceLastMs} ms)`;
-    console.log(`${fmtTime(ts)} — ${name}${detail ? ` — ${detail}` : ''}${delta}`);
-    const ev: EventMsg = { type: 'event', ts, name, detail, sinceLastMs };
-    for (const fn of this.listeners) fn(ev);
+    const tag = this.workflowId ? `[wf ${this.workflowId.slice(0, 8)}] ` : '';
+    console.log(`${fmtTime(ts)} — ${tag}${name}${detail ? ` — ${detail}` : ''}${delta}`);
+    const ev: EventMsg = { type: 'event', ts, workflowId: this.workflowId, name, detail, sinceLastMs };
+    for (const fn of (this.parent ?? this).listeners) fn(ev);
     return ts;
   }
 }

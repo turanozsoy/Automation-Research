@@ -4,3 +4,4 @@ profiles/
 .env
 .DS_Store
 config/*.local.json
+data/

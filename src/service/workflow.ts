@@ -1,6 +1,6 @@
 import type { Frame } from 'playwright';
 import type { ErrorCode, FieldUpdateMsg, ServerMsg, WorkflowState } from '../shared/messages.js';
-import type { BrowserBundle } from './browser.js';
+import type { ContextBundle } from './browser/manager.js';
 import { isLoginUrl, type SiteBConfig } from './config.js';
 import { SiteB } from './site-b.js';
 import { AutomationError, type Timeline } from './timeline.js';
@@ -8,103 +8,105 @@ import { UrlCapture } from './url-capture.js';
 
 interface PendingUpdate { value: string; seq: number; sentAt: number; receivedAt: number }
 
+export type TerminalOutcome = 'completed' | 'failed' | 'abandoned' | 'auth_expired' | 'browser_lost' | 'uncertain';
+
+type DistributiveOmit<T, K extends keyof any> = T extends unknown ? Omit<T, K> : never;
+type Send = (msg: DistributiveOmit<ServerMsg, 'workflowId'>) => void;
+
 /**
- * Phase 1: exactly one workflow bound to the one open page. Holds the latest
- * snapshot, coalesces field updates per field, and runs the submit sequence.
- * Later phases wrap this in a per-workflow runtime with its own context.
+ * One workflow = one profile = one isolated browser context. Holds the latest
+ * snapshot, coalesces field updates per field, and runs the submit sequence as
+ * pausable steps. The registry owns allocation and release; this class reports
+ * its terminal outcome through `onTerminal`.
  */
 export class Workflow {
-  state: WorkflowState = 'booting';
+  state: WorkflowState = 'allocating';
+  lastActivityAt = Date.now();
   private snapshot = new Map<string, string>();
   private pending = new Map<string, PendingUpdate>();
   private drainPromise: Promise<void> | null = null;
   private siteB: SiteB;
   private capture: UrlCapture;
-  private send: (msg: ServerMsg) => void = () => {};
-  private lastLoginWarnUrl: string | null = null;
+  private terminal: TerminalOutcome | null = null;
+  private onTerminal: (outcome: TerminalOutcome, code?: ErrorCode) => void = () => {};
 
-  constructor(private bundle: BrowserBundle, private cfg: SiteBConfig, private tl: Timeline) {
+  constructor(
+    public readonly id: string,
+    private bundle: ContextBundle,
+    private cfg: SiteBConfig,
+    private tl: Timeline,
+    private rawSend: (msg: ServerMsg) => void,
+  ) {
     this.siteB = new SiteB(bundle.page, cfg, tl);
     this.capture = new UrlCapture(bundle.page, bundle.context, cfg, tl);
     this.watchBrowser();
   }
 
-  setSender(fn: (msg: ServerMsg) => void): void {
-    this.send = fn;
+  setTerminalHandler(fn: (outcome: TerminalOutcome, code?: ErrorCode) => void): void {
+    this.onTerminal = fn;
   }
 
-  fieldNames(): string[] {
-    return Object.keys(this.cfg.fields);
-  }
+  private send: Send = (msg) => {
+    this.rawSend({ ...msg, workflowId: this.id } as ServerMsg);
+  };
 
-  writeOnlyFields(): string[] {
-    return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].writeOnly);
-  }
+  fieldNames(): string[] { return Object.keys(this.cfg.fields); }
+  writeOnlyFields(): string[] { return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].writeOnly); }
+  deferredFields(): string[] { return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].syncMode === 'deferred'); }
+  private loggable(field: string, value: string): string { return this.cfg.fields[field]?.writeOnly ? '(masked)' : `"${value}"`; }
 
-  deferredFields(): string[] {
-    return Object.keys(this.cfg.fields).filter((n) => this.cfg.fields[n].syncMode === 'deferred');
-  }
+  // ---------- prepare ----------
 
-  /** Value as it may appear in logs. */
-  private loggable(field: string, value: string): string {
-    return this.cfg.fields[field]?.writeOnly ? '(masked)' : `"${value}"`;
-  }
-
-  // ---------- lifecycle ----------
-
-  async boot(): Promise<void> {
-    this.setState('booting', 'opening Website B');
-    try {
-      await this.siteB.openTarget();
-      this.tl.mark('Website B opened', this.siteB.currentUrl());
-    } catch (e) {
-      this.tl.mark('Website B did not finish loading', msg(e));
-    }
-    this.warnIfLoginPage(this.siteB.currentUrl());
-    this.setState('awaiting_user', 'log in / navigate manually in Chromium, then press Start');
-  }
-
-  async start(): Promise<void> {
-    if (this.state !== 'awaiting_user') {
-      this.emitError('INVALID_STATE', `Start is only allowed in awaiting_user (current: ${this.state})`, false);
-      return;
-    }
+  /**
+   * Open Website B with the profile's session, verify it is authenticated, click
+   * Recommended, resolve field selectors. Throws LOGIN_REQUIRED when the profile's
+   * session is not valid (the registry then releases it as expired and reassigns).
+   */
+  async prepare(): Promise<void> {
+    this.setState('preparing', 'opening Website B with the assigned profile');
+    await this.siteB.openTarget();
     const url = this.siteB.currentUrl();
-    if (isLoginUrl(this.cfg, url)) {
-      this.emitError('LOGIN_REQUIRED', `Still on the login page (${url}). Log in first, then press Start again.`, false);
-      return;
-    }
-    this.setState('starting');
-    this.tl.mark('start requested', url);
-    try {
-      await this.siteB.clickRecommended();
-      this.tl.mark('Recommended clicked');
-      await this.siteB.resolveFields();
-      this.setState('ready', 'field sync active');
-      this.tl.mark('READY', `${this.pending.size} buffered update(s) to apply`);
-      void this.drain();
-    } catch (e) {
-      // Recoverable: the user can fix the page in Chromium and press Start again.
-      const ae = toAutomationError(e);
-      this.tl.mark(`start failed: ${ae.code}`, ae.message);
-      this.emitError(ae.code, ae.message, false);
-      this.setState('awaiting_user', 'start failed, fix the page and press Start again');
-    }
+    this.tl.mark('Website B opened', url);
+    if (isLoginUrl(this.cfg, url)) throw new AutomationError('LOGIN_REQUIRED', `profile session not valid: redirected to ${url}`);
+    this.tl.mark('session verified');
+    await this.siteB.clickRecommended();
+    this.tl.mark('Recommended clicked');
+    await this.siteB.resolveFields();
+    this.setState('ready', 'field sync active');
+    this.tl.mark('READY', `${this.pending.size} buffered update(s) to apply`);
+    void this.drain();
   }
+
+  // ---------- snapshot carry-over (reassignment) ----------
+
+  getSnapshot(): Record<string, string> { return Object.fromEntries(this.snapshot); }
+
+  /** Seed values received before this runtime existed (buffered by the registry, or from a previous profile). */
+  seedSnapshot(values: Record<string, string>): void {
+    const now = Date.now();
+    for (const [field, value] of Object.entries(values)) {
+      if (!(field in this.cfg.fields)) continue;
+      this.snapshot.set(field, value);
+      if (this.cfg.fields[field].syncMode === 'live') this.pending.set(field, { value, seq: 0, sentAt: now, receivedAt: now });
+    }
+    if (Object.keys(values).length) this.tl.mark('snapshot carried over', `${Object.keys(values).length} field(s)`);
+  }
+
+  // ---------- live field sync ----------
 
   handleFieldUpdate(m: FieldUpdateMsg): void {
+    this.touch();
     const receivedAt = this.tl.mark(`update received: ${m.field}`, `${this.loggable(m.field, m.value)} seq=${m.seq}`);
     if (!(m.field in this.cfg.fields)) {
       this.send({ type: 'field.error', ts: Date.now(), field: m.field, seq: m.seq, code: 'UNKNOWN_FIELD', message: `No mapping for "${m.field}" in config` });
       return;
     }
-    if (this.state === 'submitting' || this.state === 'paused' || this.state === 'completed' || this.state === 'failed') {
+    if (!(this.state === 'allocating' || this.state === 'preparing' || this.state === 'ready')) {
       this.send({ type: 'field.error', ts: Date.now(), field: m.field, seq: m.seq, code: 'INVALID_STATE', message: `Field updates are not accepted in state ${this.state}` });
       return;
     }
     this.snapshot.set(m.field, m.value);
     if (this.cfg.fields[m.field].syncMode === 'deferred') {
-      // Kept in the snapshot only; applied during the final submit sequence (e.g. address autocomplete).
       this.tl.mark(`${m.field} saved locally, applied at submit`);
       this.send({ type: 'field.deferred', ts: Date.now(), field: m.field, seq: m.seq });
       return;
@@ -114,11 +116,9 @@ export class Workflow {
     void this.drain();
   }
 
-  /** Apply pending updates one field at a time. Only one drain runs at a time; new updates are picked up by the running loop. */
   private drain(): Promise<void> {
     if (this.drainPromise) return this.drainPromise;
     if (this.state !== 'ready' || this.pending.size === 0) return Promise.resolve();
-    // .finally runs asynchronously, so the assignment below always happens before the reset.
     this.drainPromise = this.runDrain().finally(() => { this.drainPromise = null; });
     return this.drainPromise;
   }
@@ -137,7 +137,6 @@ export class Workflow {
       } catch (e) {
         const ae = toAutomationError(e);
         if (ae.code === 'FIELD_NOT_FOUND' && !this.cfg.fields[field].requiredAtStart) {
-          // Not on the page until a later step (e.g. state after the address is accepted); reconciled at submit.
           this.tl.mark(`${field} not on page yet, applied after address is accepted`);
           this.send({ type: 'field.deferred', ts: Date.now(), field, seq: upd.seq });
           continue;
@@ -150,7 +149,7 @@ export class Workflow {
 
   // ---------- submit: ordered steps, pausable ----------
 
-  private submitCtx: { snapshot: Record<string, string>; requestedAt: number; advanced: boolean; frame: Frame | null } | null = null;
+  private submitCtx: { snapshot: Record<string, string>; requestedAt: number; advanced: boolean } | null = null;
   private stepIndex = 0;
   private stepNames(): string[] {
     const names = ['reconcile', 'address', 'submit-click'];
@@ -160,27 +159,24 @@ export class Workflow {
   }
 
   async submit(snapshot: Record<string, string>, requestedAt: number): Promise<void> {
+    this.touch();
     if (this.state !== 'ready') {
       this.emitError('INVALID_STATE', `Submit is only allowed in ready (current: ${this.state})`, false);
       return;
     }
     this.setState('submitting');
     this.tl.mark('submit received', `${Object.keys(snapshot).length} fields in snapshot, ${Date.now() - requestedAt} ms after request`);
-
-    // The snapshot supersedes anything still queued.
     for (const [k, v] of Object.entries(snapshot)) this.snapshot.set(k, v);
     this.pending.clear();
-    if (this.drainPromise) await this.drainPromise; // let an in-flight fill finish
-
-    this.submitCtx = { snapshot, requestedAt, advanced: false, frame: null };
+    if (this.drainPromise) await this.drainPromise;
+    this.submitCtx = { snapshot, requestedAt, advanced: false };
     this.stepIndex = 0;
-    // Armed for the whole sequence, so a URL produced while paused (manual steps) is still captured.
     this.capture.arm();
     await this.runSteps();
   }
 
-  /** Retry the failed step, skip it (the user did it by hand in Chromium), or abort. */
   async resume(mode: 'retry' | 'skip' | 'abort'): Promise<void> {
+    this.touch();
     if (this.state !== 'paused' || !this.submitCtx) {
       this.emitError('INVALID_STATE', `Resume is only allowed while paused (current: ${this.state})`, false);
       return;
@@ -191,12 +187,8 @@ export class Workflow {
       this.fail(new AutomationError('INTERNAL', `Aborted by user at step "${names[this.stepIndex]}"`));
       return;
     }
-    if (mode === 'skip') {
-      this.tl.mark(`step "${names[this.stepIndex]}" skipped by user (done manually)`);
-      this.stepIndex++;
-    } else {
-      this.tl.mark(`step "${names[this.stepIndex]}" retried by user`);
-    }
+    if (mode === 'skip') { this.tl.mark(`step "${names[this.stepIndex]}" skipped by user (done manually)`); this.stepIndex++; }
+    else this.tl.mark(`step "${names[this.stepIndex]}" retried by user`);
     this.setState('submitting', `resuming at step ${names[this.stepIndex] ?? 'done'}`);
     await this.runSteps();
   }
@@ -210,7 +202,7 @@ export class Workflow {
         this.stepIndex++;
       } catch (e) {
         const ae = toAutomationError(e);
-        if (ae.code === 'BROWSER_CLOSED' || this.state === 'failed') return; // already handled by fail()
+        if (this.terminal) return;
         this.tl.mark(`step "${name}" failed: ${ae.code}`, ae.message);
         this.send({ type: 'paused', ts: Date.now(), step: name, stepIndex: this.stepIndex, steps: names, code: ae.code, message: ae.message });
         this.setState('paused', `step "${name}" failed — retry it, do it manually in Chromium and skip, or abort`);
@@ -244,7 +236,6 @@ export class Workflow {
             this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
           }
         }
-        // Any other deferred field: set once, last. Fields consumed by the address search string are never filled individually.
         for (const n of this.deferredFields()) {
           if (as && (n === as.field || as.order.includes(n))) continue;
           const value = snapshot[n] ?? this.snapshot.get(n) ?? '';
@@ -283,7 +274,6 @@ export class Workflow {
         await this.siteB.clickInFrame(f, sel, 'PRIMARY_NOT_FOUND');
         this.tl.mark('primary clicked');
         if (secondaryVisibleBefore > 0) {
-          // A secondary button already existed in this state; make sure we wait for the NEXT state before clicking one.
           const changed = await this.waitForStateChange(f, sel, this.cfg.timeouts.checkoutStep);
           this.tl.mark(changed ? 'checkout state changed after primary' : 'no state change detected after primary, continuing');
         }
@@ -304,6 +294,7 @@ export class Workflow {
         this.tl.mark('URL sent to Website A', `${Date.now() - ctx.requestedAt} ms after submit requested`);
         this.setState('completed', url);
         this.submitCtx = null;
+        this.finish('completed');
         return;
       }
       default:
@@ -311,22 +302,40 @@ export class Workflow {
     }
   }
 
-  async reset(): Promise<void> {
+  // ---------- ending ----------
+
+  /** Client closed the form, or idle timeout. */
+  end(reason: string): void {
+    if (this.terminal) return;
     this.capture.disarm();
-    this.submitCtx = null;
-    this.pending.clear();
-    this.snapshot.clear();
-    if (this.bundle.page.isClosed()) {
-      this.emitError('BROWSER_CLOSED', 'The page is closed. Restart the service.', true);
-      return;
-    }
-    this.tl.mark('reset requested');
-    await this.boot();
+    this.tl.mark('workflow ended', reason);
+    this.setState('abandoned', reason);
+    this.finish('abandoned');
   }
+
+  /** True once the workflow reached a terminal state. */
+  isTerminal(): boolean { return this.terminal !== null; }
+
+  /**
+   * Silently retire this runtime (the registry is moving the workflow to another
+   * profile): no messages, no terminal callback, and closing the context afterwards
+   * must not be reported as a browser loss.
+   */
+  detach(): void {
+    this.capture.disarm();
+    this.terminal = 'failed';
+  }
+
+  private finish(outcome: TerminalOutcome, code?: ErrorCode): void {
+    if (this.terminal) return;
+    this.terminal = outcome;
+    this.onTerminal(outcome, code);
+  }
+
+  private touch(): void { this.lastActivityAt = Date.now(); }
 
   // ---------- helpers ----------
 
-  /** Resolve true when the primary button disappears or the frame navigates/detaches; false on timeout. */
   private waitForStateChange(frame: Frame, primarySelector: string, timeout: number): Promise<boolean> {
     const page = this.bundle.page;
     return new Promise<boolean>((resolve) => {
@@ -348,57 +357,52 @@ export class Workflow {
   }
 
   private watchBrowser(): void {
-    const { page, browser } = this.bundle;
+    const { page, context } = this.bundle;
     page.on('framenavigated', (f) => {
-      if (f !== page.mainFrame()) return;
+      if (f !== page.mainFrame() || this.terminal) return;
       const url = f.url();
       if (!isLoginUrl(this.cfg, url)) return;
-      if (this.state === 'awaiting_user' || this.state === 'booting') {
-        this.warnIfLoginPage(url);
-      } else if (this.state !== 'failed' && this.state !== 'completed') {
-        this.fail(new AutomationError('LOGIN_REQUIRED', `Session lost: Website B redirected to ${url} during ${this.state}`));
-      }
+      if (this.state === 'preparing') return; // prepare() checks and throws itself
+      this.fail(new AutomationError('LOGIN_REQUIRED', `Session lost: Website B redirected to ${url} during ${this.state}`));
     });
-    page.on('close', () => this.onBrowserGone('page closed'));
-    browser.on('disconnected', () => this.onBrowserGone('browser disconnected'));
-  }
-
-  private warnIfLoginPage(url: string): void {
-    if (!isLoginUrl(this.cfg, url) || this.lastLoginWarnUrl === url) return;
-    this.lastLoginWarnUrl = url;
-    this.emitError('LOGIN_REQUIRED', `Website B is on its login page (${url}). Log in manually in the Chromium window, reach the target page, then press Start.`, false);
+    page.on('close', () => { if (!this.terminal) this.onBrowserGone('page closed'); });
+    context.on('close', () => { if (!this.terminal) this.onBrowserGone('context closed'); });
   }
 
   private onBrowserGone(reason: string): void {
-    if (this.state === 'failed') return;
     this.capture.disarm();
-    this.fail(new AutomationError('BROWSER_CLOSED', `${reason}. Restart the service.`));
-  }
-
-  private fail(e: unknown): void {
-    const ae = toAutomationError(e);
+    const ae = new AutomationError('BROWSER_CLOSED', `${reason}.`);
     this.tl.mark(`FAILED: ${ae.code}`, ae.message);
     this.emitError(ae.code, ae.message, true);
     this.setState('failed', `${ae.code}: ${ae.message}`);
+    this.finish('browser_lost', ae.code);
+  }
+
+  /** Terminal failure. Maps LOGIN_REQUIRED to auth_expired so the registry retires the profile. */
+  fail(e: unknown): void {
+    if (this.terminal) return;
+    const ae = toAutomationError(e);
+    this.capture.disarm();
+    this.tl.mark(`FAILED: ${ae.code}`, ae.message);
+    this.emitError(ae.code, ae.message, true);
+    this.setState('failed', `${ae.code}: ${ae.message}`);
+    const uncertain = this.submitCtx !== null && this.stepIndex > this.stepNames().indexOf('submit-click');
+    this.finish(ae.code === 'LOGIN_REQUIRED' ? 'auth_expired' : uncertain ? 'uncertain' : 'failed', ae.code);
   }
 
   private emitError(code: ErrorCode, message: string, fatal: boolean): void {
-    console.error(`[error] ${code}: ${message}`);
+    console.error(`[error] [wf ${this.id.slice(0, 8)}] ${code}: ${message}`);
     this.send({ type: 'error', ts: Date.now(), code, message, fatal });
   }
 
-  private setState(state: WorkflowState, detail?: string): void {
+  setState(state: WorkflowState, detail?: string): void {
     this.state = state;
     this.tl.mark(`state → ${state}`, detail);
     this.send({ type: 'state', ts: Date.now(), state, detail });
   }
 }
 
-function toAutomationError(e: unknown): AutomationError {
+export function toAutomationError(e: unknown): AutomationError {
   if (e instanceof AutomationError) return e;
-  return new AutomationError('INTERNAL', msg(e));
-}
-
-function msg(e: unknown): string {
-  return e instanceof Error ? e.message.split('\n')[0] : String(e);
+  return new AutomationError('INTERNAL', e instanceof Error ? e.message.split('\n')[0] : String(e));
 }
