@@ -68,7 +68,9 @@ ws.on('message', async (raw) => {
     await sleep(100);
     field(run, 'lastName', 'Doe'); field(run, 'dateOfBirth', '1990-05-17'); field(run, 'mobileNumber', '5551234567');
     field(run, 'address1', '1 Main St'); field(run, 'city', 'Springfield'); field(run, 'state', 'NY'); field(run, 'zip', '10001'); field(run, 'authenticationCode', '123-45-6789');
-    await sleep(1200);
+    // A person only presses Submit after the code was typed; wait for the finalisation + code (bounded).
+    for (let i = 0; i < 100 && !run.seen.has('authenticationCode updated (masked)'); i++) await sleep(100);
+    await sleep(300);
     run.submitAt = Date.now();
     send({ type: 'submit', workflowId: run.id, snapshot: { firstName: 'John', lastName: 'Doe', dateOfBirth: '05/17/1990', mobileNumber: '5551234567', address1: '1 Main St', city: 'Springfield', state: 'NY', zip: '10002', authenticationCode: '123-45-6789' } });
   }
@@ -83,10 +85,11 @@ ws.on('message', async (raw) => {
     for (const f of ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'authenticationCode']) if (!run.acks.has(f)) problems.push(`missing ack ${f}`);
     if (run.acks.get('dateOfBirth') !== '05/17/1990') problems.push('DOB not normalised');
     if (run.acks.get('authenticationCode') !== '(masked)') problems.push('auth code ack exposes value');
-    for (const f of ['address1', 'state', 'city', 'zip']) if (!run.deferred.has(f)) problems.push(`${f} was not deferred`);
-    const expected = ['session verified', 'final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'final reconciliation complete',
+    for (const f of ['address1', 'city', 'zip']) if (!run.acks.has(f)) problems.push(`${f} was not live-synced`);
+    const expected = ['session verified', 'authenticationCode started, finalizing address', 'pending address updates flushed', 'Enter pressed on address1', 'address autocomplete finalized', 'authenticationCode updated (masked)',
+      'final reconciliation started', 'ordinary fields reconciled', 'verifying final address', 'final address verified', 'authenticationCode verified (masked, not compared)', 'final reconciliation complete',
       ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
-      ...(expectAdvanced ? ['form submitted by Enter, page advanced', 'submit click skipped'] : ['address accepted', 'Website B submit clicked'])];
+      ...(expectAdvanced ? [] : ['Website B submit clicked'])];
     expected.push('result', 'link opened by user (visited)', 'link state stored: visited', 'verification text found', 'link state stored: verified');
     for (const ev of expected) if (!run.seen.has(ev)) problems.push(`missing event: ${ev}`);
     finishRun(run, problems.length === 0, problems.join('; '));

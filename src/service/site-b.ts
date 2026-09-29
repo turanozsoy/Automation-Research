@@ -254,130 +254,113 @@ export class SiteB {
     return 'verified';
   }
 
-  // ---------- address autocomplete (keyboard only) ----------
+  // ---------- address finalisation (Enter on the address input, then verify / repair) ----------
 
-  /** The search string typed into the autocomplete field, built from the snapshot in the configured order. */
-  buildAddressSearch(snapshot: Record<string, string>): string {
-    const a = this.cfg.addressSearch!;
-    const parts: string[] = [];
-    for (const name of a.order) {
-      let v = (snapshot[name] ?? '').trim();
-      if (!v) continue;
-      if (name === 'state' && a.stateAs === 'name') v = US_STATE_NAMES[v.toUpperCase()] ?? v;
-      parts.push(v);
+  /** Current Website B values of the address fields; null when a field is not on the page (e.g. state before acceptance). */
+  async readAddress(fields: string[]): Promise<Record<string, string | null>> {
+    const out: Record<string, string | null> = {};
+    for (const n of fields) {
+      if (!(await this.isOnPage(n))) { out[n] = null; continue; }
+      out[n] = await this.readField(n).catch(() => null);
     }
-    return parts.join(a.separator);
+    return out;
   }
 
   /**
-   * Type the search string, wait for a suggestion list (Google Places classic
-   * `.pac-container`, the newer shadow-DOM widget, ARIA roles, or any newly
-   * rendered element containing the typed street), then press the configured keys
-   * with focus on the input.
-   *
-   * Outcomes:
-   *   'accepted' — reveal fields visible and the input value changed (a place was picked)
-   *   'advanced' — Enter submitted the form and the page moved on (submit button gone /
-   *                agree button visible / URL changed); the caller skips the submit click
-   * Falls back to a real mouse click on the first suggestion, retries, then throws.
+   * Compare Website B's address fields with Website A's snapshot. Normalised: trimmed,
+   * case-insensitive, punctuation-insensitive; state compared by its two-letter value.
+   * Returns the names of fields that are missing or materially different.
    */
-  async acceptAddressViaAutocomplete(snapshot: Record<string, string>): Promise<'accepted' | 'advanced'> {
-    const a = this.cfg.addressSearch!;
-    const search = this.buildAddressSearch(snapshot);
-    if (!search) throw new AutomationError('ADDRESS_NOT_ACCEPTED', 'Address search string is empty');
-    const loc = await this.fieldLocator(a.field);
-    const t = this.cfg.timeouts.action;
-    const needle = addressNeedle(snapshot[a.field] ?? search);
-    const urlBefore = this.page.url();
-    let lastDiag = '';
-
-    for (let attempt = 1; attempt <= a.retries + 1; attempt++) {
-      await this.markExistingElements();
-      await loc.click({ timeout: t });
-      await loc.press('ControlOrMeta+a');
-      await loc.press('Backspace');
-      await loc.pressSequentially(search, { timeout: t });
-      this.tl.mark(attempt === 1 ? 'address search typed' : `address search retyped (attempt ${attempt})`, `"${search}"`);
-
-      const signal = await this.waitForSuggestionSignal(needle, a.suggestionsWaitMs);
-      if (signal) {
-        this.tl.mark(`suggestions detected (${signal.kind})`, signal.detail);
-        if (a.settleMs > 0) await new Promise((r) => setTimeout(r, a.settleMs));
-      } else {
-        lastDiag = await this.describeNewElements(needle);
-        this.tl.mark(`no suggestion list detected within ${a.suggestionsWaitMs} ms`, lastDiag);
-        if (!a.enterWithoutList) continue;
-        this.tl.mark('pressing keys anyway (enterWithoutList=true)');
-      }
-
-      const focused = await loc.evaluate((el) => document.activeElement === el || (el.getRootNode() instanceof ShadowRoot && (el.getRootNode() as ShadowRoot).activeElement === el), undefined, { timeout: 1000 }).catch(() => true);
-      if (!focused) await loc.focus({ timeout: 1000 }).catch(() => {});
-
-      // If the widget already highlights a row (Google's newer widget does), ArrowDown would move to the
-      // second row, so plain Enter is used instead.
-      let keys = a.keySequences[Math.min(attempt - 1, a.keySequences.length - 1)] ?? ['ArrowDown', 'Enter'];
-      if (keys[0] === 'ArrowDown' && (await this.optionAlreadyHighlighted())) {
-        keys = keys.slice(1);
-        this.tl.mark('a suggestion is already highlighted, skipping ArrowDown');
-      }
-      for (let k = 0; k < keys.length; k++) {
-        if (k > 0 && a.keyDelayMs > 0) await new Promise((r) => setTimeout(r, a.keyDelayMs));
-        await this.page.keyboard.press(keys[k]);
-      }
-      this.tl.mark(`${keys.join(' + ')} sent`);
-
-      let outcome = await this.waitForOutcome(loc, search, a.revealFields, urlBefore, a.revealTimeoutMs);
-      if (outcome === 'none') {
-        this.tl.mark('keys did not accept a suggestion', `${a.field}="${await loc.inputValue({ timeout: 1000 }).catch(() => '?')}"`);
-        // Mouse fallback: first visible suggestion (Google .pac-item / ARIA option, shadow DOM pierced), else the deepest new element with the street.
-        const clicked = await this.clickFirstSuggestion(needle);
-        if (clicked) {
-          this.tl.mark('suggestion clicked with mouse', clicked);
-          outcome = await this.waitForOutcome(loc, search, a.revealFields, urlBefore, a.revealTimeoutMs);
-        }
-      }
-      if (outcome === 'accepted') {
-        for (const name of a.revealFields) await this.resolveLater(name);
-        this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue({ timeout: 1000 }).catch(() => '?')}"`);
-        return 'accepted';
-      }
-      if (outcome === 'advanced') {
-        this.tl.mark('form submitted by Enter, page advanced', `url=${this.page.url()}`);
-        return 'advanced';
-      }
-      lastDiag = await this.describeNewElements(needle).catch(() => lastDiag);
-      this.tl.mark('address not accepted on this attempt', lastDiag);
+  async verifyAddress(snapshot: Record<string, string>, fields: string[]): Promise<{ mismatches: string[]; current: Record<string, string | null> }> {
+    const current = await this.readAddress(fields);
+    const mismatches: string[] = [];
+    for (const n of fields) {
+      const want = normaliseValue(this.cfg.fields[n], snapshot[n] ?? '');
+      if (want === '') continue; // nothing required from Website A for this field
+      const have = current[n];
+      if (have === null || have.trim() === '' || !valuesEquivalent(have, want)) mismatches.push(n);
     }
-    throw new AutomationError('ADDRESS_NOT_ACCEPTED', `Address suggestion could not be accepted after ${a.retries + 1} attempt(s). ${lastDiag}`);
+    return { mismatches, current };
   }
 
-  /** 'accepted' (value changed + reveal fields visible), 'advanced' (form moved on), or 'none' after timeout. */
-  private async waitForOutcome(input: Locator, typed: string, reveal: string[], urlBefore: string, timeout: number): Promise<'accepted' | 'advanced' | 'none'> {
-    const deadline = Date.now() + timeout;
-    const agree = this.cfg.checkout.agreeButton ? this.page.locator(this.cfg.checkout.agreeButton).filter({ visible: true }) : null;
-    const submit = this.page.locator(this.cfg.submitButton).filter({ visible: true });
-    while (Date.now() < deadline) {
-      try {
-        if (this.page.url() !== urlBefore) return 'advanced';
-        if (agree && (await agree.count()) > 0) return 'advanced';
-        const inputGone = (await input.count().catch(() => 0)) === 0;
-        if (inputGone && (await submit.count()) === 0) return 'advanced';
-        if (!inputGone) {
-          const value = await input.inputValue({ timeout: 1000 });
-          if (value.trim() !== typed.trim() && (await this.revealVisible(reveal))) return 'accepted';
+  /**
+   * Bounded verify → repair (in field order) → verify. Returns true when every
+   * address field matches Website A. Never loops: at most `rounds` repairs.
+   */
+  async verifyAndRepairAddress(snapshot: Record<string, string>, fields: string[], rounds: number, strict: boolean): Promise<boolean> {
+    this.tl.mark('verifying final address');
+    let { mismatches } = await this.verifyAddress(snapshot, fields);
+    if (!mismatches.length) { this.tl.mark('final address verified'); return true; }
+    for (let round = 1; round <= rounds && mismatches.length; round++) {
+      for (const n of mismatches) this.tl.mark(`address mismatch detected: ${n}`);
+      for (const n of fields) {
+        if (!mismatches.includes(n)) continue;
+        const want = snapshot[n] ?? '';
+        try {
+          await this.setField(n, want);
+        } catch (e) {
+          this.tl.mark(`address repair failed: ${n}`, msg(e));
         }
-      } catch { /* re-render */ }
+      }
+      this.tl.mark('address fields repaired', `round ${round}: ${mismatches.join(', ')}`);
+      ({ mismatches } = await this.verifyAddress(snapshot, fields));
+    }
+    if (!mismatches.length) { this.tl.mark('final address verified'); return true; }
+    const { current } = await this.verifyAddress(snapshot, fields);
+    const detail = mismatches.map((n) => `${n}: Website B has "${current[n] ?? '(missing)'}", Website A has "${snapshot[n] ?? ''}"`).join('; ');
+    if (strict) throw new AutomationError('ADDRESS_MISMATCH', `Address still differs after ${rounds} repair round(s): ${detail}`);
+    this.tl.mark('address still differs (will be re-checked at submit)', detail);
+    return false;
+  }
+
+  /**
+   * Focus the address input and press Enter so the site's autocomplete finalises the
+   * address, then wait for the address fields to stop changing. Enter is only pressed
+   * when a suggestion list is open (Enter into a closed list would submit the form);
+   * if none is open, the list is re-triggered once with a harmless Space+Backspace.
+   */
+  async finalizeAddressWithEnter(snapshot: Record<string, string>): Promise<{ enterPressed: boolean; changed: string[] }> {
+    const a = this.cfg.addressFinalize!;
+    const input = await this.fieldLocator(a.inputField);
+    const before = await this.readAddress(a.fields);
+    const needle = addressNeedle(snapshot[a.inputField] ?? '');
+
+    await this.markExistingElements();
+    await input.click({ timeout: this.cfg.timeouts.action });
+    await input.press('End').catch(() => {});
+    let signal = await this.waitForSuggestionSignal(needle, a.suggestionsWaitMs);
+    if (!signal) {
+      // The list closed when other fields were filled; nudge the widget with real keys.
+      await input.press('Space'); await input.press('Backspace');
+      signal = await this.waitForSuggestionSignal(needle, a.suggestionsWaitMs);
+    }
+    if (!signal) {
+      this.tl.mark('no suggestion list open, Enter NOT pressed on address1', 'address kept as typed');
+      return { enterPressed: false, changed: [] };
+    }
+    this.tl.mark(`suggestions detected (${signal.kind})`, signal.detail);
+    const focused = await input.evaluate((el) => document.activeElement === el || (el.getRootNode() instanceof ShadowRoot && (el.getRootNode() as ShadowRoot).activeElement === el), undefined, { timeout: 1000 }).catch(() => true);
+    if (!focused) await input.focus({ timeout: 1000 }).catch(() => {});
+    await this.page.keyboard.press('Enter');
+    this.tl.mark('Enter pressed on address1');
+
+    const after = await this.waitForAddressSettle(a.fields, a.settleQuietMs, a.settleMaxMs);
+    const changed = a.fields.filter((n) => (before[n] ?? '') !== (after[n] ?? ''));
+    this.tl.mark('address autocomplete finalized', changed.length ? `changed: ${changed.map((n) => `${n}="${after[n] ?? '(missing)'}"`).join(', ')}` : 'no field changed');
+    return { enterPressed: true, changed };
+  }
+
+  /** Poll the address fields until their values are unchanged for `quietMs` (bounded by `maxMs`). */
+  private async waitForAddressSettle(fields: string[], quietMs: number, maxMs: number): Promise<Record<string, string | null>> {
+    const deadline = Date.now() + maxMs;
+    let last = await this.readAddress(fields);
+    let lastChange = Date.now();
+    while (Date.now() < deadline && Date.now() - lastChange < quietMs) {
       await new Promise((r) => setTimeout(r, 100));
+      const now = await this.readAddress(fields);
+      if (fields.some((n) => now[n] !== last[n])) { last = now; lastChange = Date.now(); }
     }
-    return 'none';
-  }
-
-  private async revealVisible(names: string[]): Promise<boolean> {
-    for (const n of names) {
-      const ok = await this.page.locator(this.cfg.fields[n].selectors.join(', ')).filter({ visible: true }).count().then((c) => c > 0).catch(() => false);
-      if (!ok) return false;
-    }
-    return true;
+    return last;
   }
 
   /** Tag every element (shadow roots included) so newly rendered ones can be told apart. */
@@ -407,50 +390,6 @@ export class SiteB {
       await new Promise((r) => setTimeout(r, 50));
     }
     return null;
-  }
-
-  /** True when a suggestion row is already highlighted/selected (aria-selected, Google .pac-item-selected, or aria-activedescendant on the input). */
-  private async optionAlreadyHighlighted(): Promise<boolean> {
-    const sel = this.page.locator('[role="option"][aria-selected="true"], .pac-item-selected').filter({ visible: true });
-    if ((await sel.count().catch(() => 0)) > 0) return true;
-    return this.page.evaluate<boolean>(`(() => {
-      const deep = (root) => { const a = root.activeElement; return a && a.shadowRoot ? deep(a.shadowRoot) : a; };
-      const el = deep(document);
-      return !!(el && el.getAttribute && el.getAttribute('aria-activedescendant'));
-    })()`).catch(() => false);
-  }
-
-  /** Real mouse click on the first suggestion. Returns a description of what was clicked, or null. */
-  private async clickFirstSuggestion(needle: string): Promise<string | null> {
-    for (const sel of ['.pac-container .pac-item', '[role="option"]']) {
-      const first = this.page.locator(sel).filter({ visible: true }).first();
-      if ((await first.count()) > 0) {
-        const text = (await first.innerText().catch(() => sel)).replace(/\s+/g, ' ').slice(0, 80);
-        await first.click({ timeout: this.cfg.timeouts.action });
-        return `${sel}: ${text}`;
-      }
-    }
-    const box = await this.page.evaluate<{ x: number; y: number; w: number; h: number; text: string } | null>(pageScript('box', needle));
-    if (!box) return null;
-    await this.page.mouse.click(box.x + box.w / 2, box.y + box.h / 2);
-    return `element at (${Math.round(box.x)},${Math.round(box.y)}): ${box.text}`;
-  }
-
-  /** Human-readable list of elements that appeared since typing began, to identify the dropdown's DOM. */
-  private describeNewElements(needle: string): Promise<string> {
-    return this.page.evaluate(pageScript('describe', needle));
-  }
-
-  /** True once every reveal field's selector is visible on the page. */
-  private async waitForReveal(names: string[], timeout: number): Promise<boolean> {
-    try {
-      await Promise.all(
-        names.map((n) => this.page.locator(this.cfg.fields[n].selectors.join(', ')).first().waitFor({ state: 'visible', timeout })),
-      );
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   // ---------- submit ----------
@@ -653,17 +592,6 @@ function addressNeedle(address1: string): string {
   const tokens = address1.trim().split(/\s+/).filter(Boolean);
   return (tokens.length >= 2 ? tokens.slice(0, 2).join(' ') : tokens[0] ?? '').toLowerCase();
 }
-
-const US_STATE_NAMES: Record<string, string> = {
-  AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut',
-  DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois',
-  IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland',
-  MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana',
-  NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York',
-  NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania',
-  RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah',
-  VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
-};
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message.split('\n')[0] : String(e);

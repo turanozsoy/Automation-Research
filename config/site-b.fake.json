@@ -24,26 +24,26 @@
     "address1": {
       "selector": "input[name=\"line1\"]",
       "kind": "text",
-      "syncMode": "deferred",
+      "syncMode": "live",
       "inputMethod": "type"
     },
     "city": {
       "selector": "input[name=\"city\"]",
       "kind": "text",
       "requiredAtStart": false,
-      "syncMode": "deferred"
+      "syncMode": "live"
     },
     "state": {
       "selector": "select[name=\"state\"]",
       "kind": "select",
       "requiredAtStart": false,
-      "syncMode": "deferred"
+      "syncMode": "live"
     },
     "zip": {
       "selector": "input[name=\"zip\"]",
       "kind": "text",
       "requiredAtStart": false,
-      "syncMode": "deferred"
+      "syncMode": "live"
     },
     "authenticationCode": {
       "selector": [
@@ -55,35 +55,19 @@
     }
   },
   "submitButton": "button[type=\"submit\"]",
-  "addressSearch": {
-    "field": "address1",
-    "order": [
+  "addressFinalize": {
+    "fields": [
       "address1",
-      "state",
       "city",
+      "state",
       "zip"
     ],
-    "separator": ", ",
-    "stateAs": "name",
+    "inputField": "address1",
+    "trigger": "authenticationCode",
     "suggestionsWaitMs": 1500,
-    "settleMs": 150,
-    "keySequences": [
-      [
-        "ArrowDown",
-        "Enter"
-      ],
-      [
-        "Enter"
-      ]
-    ],
-    "keyDelayMs": 100,
-    "revealFields": [
-      "state"
-    ],
-    "revealTimeoutMs": 6000,
-    "dependentFields": [],
-    "retries": 1,
-    "enterWithoutList": true
+    "settleQuietMs": 400,
+    "settleMaxMs": 4000,
+    "repairRounds": 2
   },
   "checkout": {
     "frameUrlIncludes": "",

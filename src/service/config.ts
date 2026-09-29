@@ -17,6 +17,45 @@ export interface FieldConfig {
   requiredAtStart: boolean;
 }
 
+/**
+ * Address finalisation. The address fields sync live; when the trigger field (the
+ * authentication code) first arrives, the address input is focused and Enter is
+ * pressed so Website B's autocomplete can finalise the address, the resulting values
+ * are read, and mismatches against Website A are repaired. At submit the same
+ * verify + repair runs strictly and blocks the submit click on failure.
+ */
+export interface AddressFinalizeConfig {
+  /** Address fields in sync/repair order, e.g. ["address1","city","state","zip"]. */
+  fields: string[];
+  /** The autocomplete input (a key of `fields`), where Enter is pressed. */
+  inputField: string;
+  /** Field whose first update triggers the finalisation (write-only authentication code). */
+  trigger: string;
+  /** Wait for a suggestion list before pressing Enter (Enter into a closed list would submit the form). */
+  suggestionsWaitMs: number;
+  /** After Enter: address values must stay unchanged this long to count as settled. */
+  settleQuietMs: number;
+  settleMaxMs: number;
+  /** Bounded repair rounds before giving up (submit is then refused). */
+  repairRounds: number;
+}
+
+export interface FieldConfig {
+  /** Tried in order; the first selector that matches an element on the page wins. */
+  selectors: string[];
+  kind: 'text' | 'select';
+  /** Optional normalisation applied before filling. */
+  format?: 'MM/DD/YYYY';
+  /** 'live': filled as the user types. 'deferred': kept in the snapshot, applied only at submit. */
+  syncMode: 'live' | 'deferred';
+  /** 'fill' sets the value in one go; 'type' presses keys (no delay) for widgets that need key events. */
+  inputMethod: 'fill' | 'type';
+  /** Website B masks this field after entry: never read back for comparison, never log its value. */
+  writeOnly: boolean;
+  /** false: the field may not exist until a later step (e.g. state appears after an address is accepted). */
+  requiredAtStart: boolean;
+}
+
 /** Address autocomplete driven purely by keyboard: type one search string, ArrowDown, Enter, verify reveal. */
 export interface AddressSearchConfig {
   /** The autocomplete input field (a key under `fields`). */
@@ -52,7 +91,7 @@ export interface SiteBConfig {
   recommendedLink: string;
   fields: Record<string, FieldConfig>;
   submitButton: string;
-  addressSearch?: AddressSearchConfig;
+  addressFinalize?: AddressFinalizeConfig;
   /** After the URL is delivered: watch the automated page for a success text, then close the workflow. */
   verification: {
     /** Any of these (case-insensitive, apostrophes normalised) in any frame's visible text counts as verified. */
@@ -136,21 +175,15 @@ export function loadConfig(): SiteBConfig {
       pollMs: raw.verification?.pollMs ?? 1000,
       timeoutMs: raw.verification?.timeoutMs ?? 10 * 60_000,
     },
-    addressSearch: raw.addressSearch
+    addressFinalize: raw.addressFinalize
       ? {
-          field: raw.addressSearch.field ?? 'address1',
-          order: raw.addressSearch.order ?? ['address1', 'state', 'city', 'zip'],
-          separator: raw.addressSearch.separator ?? ', ',
-          stateAs: raw.addressSearch.stateAs ?? 'name',
-          suggestionsWaitMs: raw.addressSearch.suggestionsWaitMs ?? 1500,
-          settleMs: raw.addressSearch.settleMs ?? 150,
-          keySequences: raw.addressSearch.keySequences ?? [['ArrowDown', 'Enter'], ['Enter']],
-          keyDelayMs: raw.addressSearch.keyDelayMs ?? 100,
-          enterWithoutList: raw.addressSearch.enterWithoutList ?? true,
-          revealFields: raw.addressSearch.revealFields ?? ['state'],
-          revealTimeoutMs: raw.addressSearch.revealTimeoutMs ?? 6000,
-          dependentFields: raw.addressSearch.dependentFields ?? [],
-          retries: raw.addressSearch.retries ?? 1,
+          fields: raw.addressFinalize.fields ?? ['address1', 'city', 'state', 'zip'],
+          inputField: raw.addressFinalize.inputField ?? 'address1',
+          trigger: raw.addressFinalize.trigger ?? 'authenticationCode',
+          suggestionsWaitMs: raw.addressFinalize.suggestionsWaitMs ?? 1500,
+          settleQuietMs: raw.addressFinalize.settleQuietMs ?? 400,
+          settleMaxMs: raw.addressFinalize.settleMaxMs ?? 4000,
+          repairRounds: raw.addressFinalize.repairRounds ?? 2,
         }
       : undefined,
     checkout: {
@@ -178,9 +211,9 @@ export function loadConfig(): SiteBConfig {
     debounceMs: raw.debounceMs ?? 150,
   };
 
-  if (cfg.addressSearch) {
-    for (const n of [cfg.addressSearch.field, ...cfg.addressSearch.order, ...cfg.addressSearch.revealFields, ...cfg.addressSearch.dependentFields]) {
-      if (!(n in cfg.fields)) throw new Error(`addressSearch references unknown field "${n}" in ${path}`);
+  if (cfg.addressFinalize) {
+    for (const n of [cfg.addressFinalize.inputField, cfg.addressFinalize.trigger, ...cfg.addressFinalize.fields]) {
+      if (!(n in cfg.fields)) throw new Error(`addressFinalize references unknown field "${n}" in ${path}`);
     }
   }
 

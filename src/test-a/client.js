@@ -98,7 +98,7 @@
       }
       case 'field.deferred': {
         const s = document.querySelector(`[data-sync="${m.field}"]`);
-        if (s) s.textContent = '✓ saved (applied at submit)';
+        if (s) s.textContent = '✓ saved (applied later)';
         break;
       }
       case 'field.error':
@@ -156,7 +156,12 @@
 
   for (const f of fields) {
     const name = f.dataset.field;
-    f.addEventListener('input', () => { clearTimeout(timers[name]); timers[name] = setTimeout(() => sendField(f), debounceMs); });
+    f.addEventListener('input', () => {
+      // The authentication code triggers the address finalisation on the service: make sure every
+      // other field's pending (debounced) value is sent BEFORE the first code update.
+      if (writeOnly.includes(name)) for (const o of fields) if (o !== f && timers[o.dataset.field]) sendField(o);
+      clearTimeout(timers[name]); timers[name] = setTimeout(() => sendField(f), debounceMs);
+    });
     f.addEventListener('change', () => sendField(f));
   }
 

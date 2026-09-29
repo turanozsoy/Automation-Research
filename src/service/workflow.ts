@@ -136,21 +136,71 @@ export class Workflow {
     return this.drainPromise;
   }
 
+  private addressFinalized = false;
+
+  /**
+   * Apply pending updates of the address fields now, in the configured order, so the
+   * finalisation always works on the latest address regardless of arrival order.
+   */
+  private async flushPendingAddress(fields: string[]): Promise<void> {
+    let flushed = 0;
+    for (const field of fields) {
+      const upd = this.pending.get(field);
+      if (!upd) continue;
+      this.pending.delete(field);
+      try {
+        const actual = await this.siteB.setField(field, upd.value);
+        const filledAt = this.tl.mark(`${field} synchronized`, `"${actual}"`);
+        this.send({ type: 'field.ack', ts: filledAt, field, seq: upd.seq, sentAt: upd.sentAt, receivedAt: upd.receivedAt, startedAt: filledAt, filledAt, value: actual });
+        flushed++;
+      } catch (e) {
+        const ae = toAutomationError(e);
+        if (ae.code === 'FIELD_NOT_FOUND' && !this.cfg.fields[field].requiredAtStart) { this.tl.mark(`${field} not on page yet, applied after the address is finalized`); this.send({ type: 'field.deferred', ts: Date.now(), field, seq: upd.seq }); continue; }
+        this.tl.mark(`field update failed: ${field}`, ae.message);
+        this.send({ type: 'field.error', ts: Date.now(), field, seq: upd.seq, code: ae.code, message: ae.message });
+      }
+    }
+    this.tl.mark('pending address updates flushed', `${flushed} applied`);
+  }
+
+  /** First authentication-code update: finalise the address on Website B before the code is typed. */
+  private async finalizeAddressOnTrigger(): Promise<void> {
+    const af = this.cfg.addressFinalize!;
+    this.addressFinalized = true;
+    this.tl.mark(`${af.trigger} started, finalizing address`);
+    await this.flushPendingAddress(af.fields);
+    const snapshot = this.getSnapshot();
+    try {
+      await this.siteB.finalizeAddressWithEnter(snapshot);
+      await this.siteB.verifyAndRepairAddress(snapshot, af.fields, af.repairRounds, false);
+    } catch (e) {
+      this.tl.mark('address finalization problem (will be re-checked at submit)', toAutomationError(e).message);
+    }
+  }
+
   private async runDrain(): Promise<void> {
     while (this.pending.size > 0 && this.state === 'ready') {
       const [field, upd] = this.pending.entries().next().value as [string, PendingUpdate];
+      const af = this.cfg.addressFinalize;
+      if (af && field === af.trigger && !this.addressFinalized) {
+        await this.finalizeAddressOnTrigger();
+        if (this.state !== 'ready') return;
+        continue; // the trigger update is still pending; it is applied on the next iteration
+      }
       this.pending.delete(field);
       try {
         const startedAt = Date.now();
         const actual = await this.siteB.setField(field, upd.value);
         const filledAt = this.cfg.fields[field].writeOnly
-          ? this.tl.mark(`${field} updated (masked by Website B)`)
-          : this.tl.mark(`Website B ${field} updated`, `"${actual}"`);
+          ? this.tl.mark(`${field} updated (masked)`)
+          : this.cfg.addressFinalize?.fields.includes(field)
+            ? this.tl.mark(`${field} synchronized`, `"${actual}"`)
+            : this.tl.mark(`Website B ${field} updated`, `"${actual}"`);
         this.send({ type: 'field.ack', ts: filledAt, field, seq: upd.seq, sentAt: upd.sentAt, receivedAt: upd.receivedAt, startedAt, filledAt, value: actual });
       } catch (e) {
         const ae = toAutomationError(e);
         if (ae.code === 'FIELD_NOT_FOUND' && !this.cfg.fields[field].requiredAtStart) {
-          this.tl.mark(`${field} not on page yet, applied after address is accepted`);
+          this.tl.mark(`${field} not on page yet, applied after the address is finalized`);
           this.send({ type: 'field.deferred', ts: Date.now(), field, seq: upd.seq });
           continue;
         }
@@ -162,7 +212,7 @@ export class Workflow {
 
   // ---------- submit: ordered steps, pausable ----------
 
-  private submitCtx: { snapshot: Record<string, string>; requestedAt: number; advanced: boolean } | null = null;
+  private submitCtx: { snapshot: Record<string, string>; requestedAt: number } | null = null;
   private stepIndex = 0;
   private stepNames(): string[] {
     const names = ['reconcile', 'address', 'submit-click'];
@@ -182,7 +232,7 @@ export class Workflow {
     for (const [k, v] of Object.entries(snapshot)) this.snapshot.set(k, v);
     this.pending.clear();
     if (this.drainPromise) await this.drainPromise;
-    this.submitCtx = { snapshot, requestedAt, advanced: false };
+    this.submitCtx = { snapshot, requestedAt };
     this.stepIndex = 0;
     this.onSubmitState('submitting');
     this.capture.arm();
@@ -228,40 +278,36 @@ export class Workflow {
   private async runStep(name: string): Promise<void> {
     const ctx = this.submitCtx!;
     const { snapshot } = ctx;
+    void ctx;
     switch (name) {
       case 'reconcile': {
         this.tl.mark('final reconciliation started');
-        const corrected = await this.siteB.reconcile(snapshot);
+        const af = this.cfg.addressFinalize;
+        const normal = Object.keys(this.cfg.fields).filter((n) => !this.cfg.fields[n].writeOnly && this.cfg.fields[n].syncMode === 'live' && !(af && af.fields.includes(n)));
+        const corrected = await this.siteB.reconcile(snapshot, normal);
         this.tl.mark('ordinary fields reconciled', corrected.length ? `corrected: ${corrected.join(', ')}` : 'all in sync');
+        return;
+      }
+      case 'address': {
+        const af = this.cfg.addressFinalize;
+        if (af) {
+          // Strict: verify → repair (address1 → city → state → zip) → verify; refuses to continue on mismatch.
+          await this.siteB.verifyAndRepairAddress(snapshot, af.fields, af.repairRounds, true);
+        }
         for (const n of this.writeOnlyFields()) {
           const r = await this.siteB.finaliseWriteOnly(n, snapshot[n] ?? this.snapshot.get(n) ?? '');
           this.tl.mark(r === 'filled' ? `${n} updated (masked)` : r === 'verified' ? `${n} verified (masked, not compared)` : `${n} empty in snapshot, skipped`);
         }
-        return;
-      }
-      case 'address': {
-        const as = this.cfg.addressSearch;
-        if (as) {
-          this.tl.mark('address autocomplete started');
-          const outcome = await this.siteB.acceptAddressViaAutocomplete(snapshot);
-          if (outcome === 'advanced') ctx.advanced = true;
-          else if (as.dependentFields.length) {
-            const fixed = await this.siteB.reconcile(snapshot, as.dependentFields);
-            this.tl.mark(`${as.dependentFields.join('/')} reconciled after address`, fixed.length ? `corrected: ${fixed.join(', ')}` : 'all in sync');
-          }
-        }
         for (const n of this.deferredFields()) {
-          if (as && (n === as.field || as.order.includes(n))) continue;
           const value = snapshot[n] ?? this.snapshot.get(n) ?? '';
           if (value.trim() === '') { this.tl.mark(`${n} empty in snapshot, skipped`); continue; }
           const actual = await this.siteB.setField(n, value);
           this.tl.mark(`Website B ${n} updated`, `"${actual}"`);
         }
-        this.tl.mark('final reconciliation complete', ctx.advanced ? 'form already submitted by Enter' : undefined);
+        this.tl.mark('final reconciliation complete');
         return;
       }
       case 'submit-click': {
-        if (ctx.advanced) { this.tl.mark('submit click skipped', 'page already advanced'); return; }
         await this.siteB.clickLastSubmit();
         this.tl.mark('Website B submit clicked');
         return;

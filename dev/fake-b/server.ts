@@ -87,6 +87,7 @@ createServer((req, res) => {
             ac.style.display = 'block';
           }, 300);
         });
+        line1.addEventListener('focus', () => { if (line1.value.trim() && ac.style.display !== 'block') line1.dispatchEvent(new Event('input')); });
         line1.addEventListener('keydown', (e) => {
           const items = [...ac.querySelectorAll('.sugg-item')];
           if (ac.style.display !== 'block' || !items.length) return;
