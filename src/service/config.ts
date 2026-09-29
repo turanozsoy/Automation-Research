@@ -66,6 +66,10 @@ export interface SiteBConfig {
     pattern: string;
     watchNavigationRequests: boolean;
     anchorPollMs: number;
+    /** After the first match, keep watching until no new matching URL appears for this long; report the final one. 0 = first match wins. */
+    settleMs: number;
+    /** Upper bound on the settle phase. */
+    settleMaxMs: number;
   };
   timeouts: {
     pageLoad: number;
@@ -148,6 +152,8 @@ export function loadConfig(): SiteBConfig {
       pattern: raw.generatedUrl.pattern,
       watchNavigationRequests: raw.generatedUrl.watchNavigationRequests ?? true,
       anchorPollMs: raw.generatedUrl.anchorPollMs ?? 250,
+      settleMs: raw.generatedUrl.settleMs ?? 1500,
+      settleMaxMs: raw.generatedUrl.settleMaxMs ?? 10000,
     },
     timeouts: {
       pageLoad: raw.timeouts.pageLoad ?? 60000,

@@ -96,7 +96,9 @@
     "prefix": "https://secondsubdomain.com/test/it-worked/",
     "pattern": "^https://secondsubdomain\\.com/test/it-worked/[^/?#\\s]+",
     "watchNavigationRequests": true,
-    "anchorPollMs": 250
+    "anchorPollMs": 250,
+    "settleMs": 1500,
+    "settleMaxMs": 10000
   },
   "timeouts": {
     "pageLoad": 60000,

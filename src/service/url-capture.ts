@@ -57,6 +57,9 @@ function diagScript(host: string): string {
 export class UrlCapture {
   private armed = false;
   private captured: CapturedUrl | null = null;
+  private latest: CapturedUrl | null = null;
+  private settleTimer: NodeJS.Timeout | null = null;
+  private settleDeadline: NodeJS.Timeout | null = null;
   private resolveFn: ((v: CapturedUrl) => void) | null = null;
   private pattern: RegExp;
   private pollTimer: NodeJS.Timeout | null = null;
@@ -81,6 +84,7 @@ export class UrlCapture {
     if (this.armed) return;
     this.armed = true;
     this.captured = null;
+    this.latest = null;
     this.pages.add(this.page);
     this.page.on('framenavigated', this.onFrameNav);
     this.page.on('frameattached', this.onFrameAttached);
@@ -122,19 +126,51 @@ export class UrlCapture {
     this.context.off('page', this.onPopup);
     if (this.pollTimer) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.settleDeadline) clearTimeout(this.settleDeadline);
+    this.settleTimer = this.settleDeadline = null;
     this.resolveFn = null;
     this.captured = null;
+    this.latest = null;
   }
 
   private consider(url: string, source: string): void {
     if (!this.armed || !url) return;
-    if (url.startsWith(this.cfg.generatedUrl.prefix) && this.pattern.test(url)) {
-      if (this.captured) return;
-      this.captured = { url, source };
-      const fn = this.resolveFn;
-      if (fn) fn({ url, source });
-      else this.tl.mark('generated URL seen while no step was waiting for it', `${source}: ${url}`);
+    if (!(url.startsWith(this.cfg.generatedUrl.prefix) && this.pattern.test(url))) return;
+    if (this.captured) return; // already final
+    const isNew = !this.latest || this.latest.url !== url;
+    if (isNew) this.tl.mark(this.latest ? 'generated URL changed' : 'generated URL first seen', `${source}: ${url}`);
+    this.latest = { url, source };
+
+    const { settleMs, settleMaxMs } = this.cfg.generatedUrl;
+    if (settleMs <= 0) { this.finish(); return; }
+    // Wait until no NEW matching URL shows up for settleMs (bounded by settleMaxMs), then report the final one.
+    if (isNew || !this.settleTimer) {
+      if (this.settleTimer) clearTimeout(this.settleTimer);
+      this.settleTimer = setTimeout(() => void this.finish(), settleMs);
     }
+    if (!this.settleDeadline) this.settleDeadline = setTimeout(() => void this.finish(), settleMaxMs);
+  }
+
+  /** Report the URL the page actually ended on: a frame currently AT a matching URL wins over the last event seen. */
+  private async finish(): Promise<void> {
+    if (this.captured || !this.armed) return;
+    let final: CapturedUrl | null = null;
+    for (const p of this.pages) {
+      if (p.isClosed()) continue;
+      for (const f of p.frames()) {
+        const u = f.url();
+        if (u.startsWith(this.cfg.generatedUrl.prefix) && this.pattern.test(u)) final = { url: u, source: 'frame-final-url' };
+      }
+    }
+    this.captured = final ?? this.latest;
+    if (!this.captured) return;
+    if (this.settleTimer) clearTimeout(this.settleTimer);
+    if (this.settleDeadline) clearTimeout(this.settleDeadline);
+    this.settleTimer = this.settleDeadline = null;
+    const fn = this.resolveFn;
+    if (fn) fn(this.captured);
+    else this.tl.mark('generated URL settled while no step was waiting for it', `${this.captured.source}: ${this.captured.url}`);
   }
 
   /** What the pages look like when capture times out: frame URLs, links on the target host, text mentions. */

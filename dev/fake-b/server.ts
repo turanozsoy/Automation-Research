@@ -12,7 +12,8 @@ const autoLogin = process.env.FAKE_B_AUTOLOGIN === '1';
 const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget that never opens
 const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays enabled, so Enter in the form submits it (real-site behaviour)
 const noAgree = process.env.FAKE_B_NO_AGREE === '1';
-const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1'; // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
+const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1';
+const urlRedirects = process.env.FAKE_B_URL_REDIRECTS === '1'; // the first it-worked URL redirects to a different final one after loading // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
 </head><body>${body}</body></html>`;
@@ -128,7 +129,13 @@ createServer((req, res) => {
         }, 500); };
       </script>`);
   }
-  if (url.pathname.startsWith('/test/it-worked/')) return page(`<h2>It worked</h2><p>${url.pathname}</p>`);
+  if (url.pathname.startsWith('/test/it-worked/')) {
+    if (urlRedirects && !url.searchParams.has('final')) {
+      // intermediate page: loads, then navigates to the final URL a moment later (like a real handoff)
+      return page(`<h2>Redirecting…</h2><script>setTimeout(() => location.replace('/test/it-worked/${randomBytes(6).toString('hex')}?final=1'), 700)</script>`);
+    }
+    return page(`<h2>It worked</h2><p>${url.pathname}${url.search}</p>`);
+  }
   if (url.pathname === '/other') return page(`<h1>Other plan</h1>`);
 
   res.writeHead(404); res.end('not found');

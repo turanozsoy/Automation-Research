@@ -70,6 +70,7 @@ Every step is timestamped in both the terminal and the test page's event log.
 | `checkout.frameUrlIncludes` | Optional substring to restrict which frames are searched. |
 | `generatedUrl.prefix`, `generatedUrl.pattern` | What counts as the generated URL. |
 | `generatedUrl.watchNavigationRequests` | Also watch navigation *requests* (fires before the response). No API traffic is inspected. |
+| `generatedUrl.settleMs`, `generatedUrl.settleMaxMs` | After the first match, keep watching until no *new* matching URL appears for `settleMs` (capped by `settleMaxMs`), then report the URL a frame actually ended on. `settleMs: 0` = first match wins. |
 | `timeouts.*` | Per-step timeouts in ms. |
 | `debounceMs` | Client-side debounce per field. |
 
