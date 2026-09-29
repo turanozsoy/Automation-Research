@@ -69,6 +69,13 @@
     "settleMaxMs": 4000,
     "repairRounds": 2
   },
+  "fieldErrors": {
+    "attribute": "data-accent-color",
+    "value": "red",
+    "ancestorLevels": 3,
+    "postSubmitWaitMs": 6000,
+    "maxRetries": 2
+  },
   "checkout": {
     "frameUrlIncludes": "",
     "agreeButton": "button[aria-label=\"Agree and continue\"]",

@@ -392,6 +392,62 @@ export class SiteB {
     return null;
   }
 
+  // ---------- field errors ----------
+
+  /**
+   * Fields Website B currently flags as invalid: the configured marker attribute on the
+   * input or one of its ancestors (e.g. data-accent-color="red" on the wrapper), or
+   * aria-invalid="true", or a required input left empty. Values are never returned.
+   */
+  async fieldsWithErrors(): Promise<{ field: string; reason: string }[]> {
+    const fe = this.cfg.fieldErrors;
+    const out: { field: string; reason: string }[] = [];
+    for (const name of Object.keys(this.cfg.fields)) {
+      if (!(await this.isOnPage(name))) continue;
+      const loc = await this.fieldLocator(name);
+      const r = await loc.evaluate((el, o: { attr: string; val: string; levels: number }) => {
+        let n: Element | null = el;
+        for (let i = 0; i <= o.levels && n; i++, n = n.parentElement) {
+          if (n.getAttribute(o.attr) === o.val) return `${o.attr}=${o.val}${i ? ' on ancestor' : ''}`;
+        }
+        if (el.getAttribute('aria-invalid') === 'true') return 'aria-invalid';
+        const i = el as HTMLInputElement;
+        if (i.required && typeof i.value === 'string' && i.value.trim() === '') return 'required but empty';
+        return null;
+      }, { attr: fe.attribute, val: fe.value, levels: fe.ancestorLevels }, { timeout: 1500 }).catch(() => null);
+      if (r) out.push({ field: name, reason: r });
+    }
+    return out;
+  }
+
+  /** Re-enter the given fields from the snapshot (write-only fields included). Returns the ones that failed. */
+  async refillFields(names: string[], snapshot: Record<string, string>): Promise<string[]> {
+    const failed: string[] = [];
+    for (const name of names) {
+      const value = snapshot[name] ?? '';
+      if (value.trim() === '') { failed.push(name); this.tl.mark(`cannot re-fill ${name}: empty on Website A`); continue; }
+      try {
+        await this.setField(name, value);
+        this.tl.mark(`field re-filled: ${name}`);
+      } catch (e) {
+        failed.push(name);
+        this.tl.mark(`re-fill failed: ${name}`, msg(e));
+      }
+    }
+    return failed;
+  }
+
+  /** True when the next step's element (agree button, else the checkout toggle) shows up within `timeout`. */
+  async nextStepAppeared(timeout: number): Promise<boolean> {
+    const sel = this.cfg.checkout.agreeButton ?? this.cfg.checkout.toggle;
+    try {
+      await this.findFrameWith(sel, timeout, 'INTERNAL');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ---------- submit ----------
 
   /**

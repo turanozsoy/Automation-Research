@@ -106,6 +106,7 @@ into `data/master.key` (gitignored). Rotating the master key only re-wraps the s
 | `checkout.frameUrlIncludes` | Optional substring to restrict which frames are searched. |
 | `generatedUrl.prefix`, `generatedUrl.pattern` | What counts as the generated URL. |
 | `generatedUrl.watchNavigationRequests` | Also watch navigation *requests* (fires before the response). No API traffic is inspected. |
+| `fieldErrors` | How Website B flags an invalid field: `attribute` + `value` (default `data-accent-color="red"`) on the input or up to `ancestorLevels` ancestors, plus `aria-invalid` and required-but-empty. Checked before the submit click and, when the next step does not appear within `postSubmitWaitMs`, after it; flagged fields are re-filled from Website A and submit is retried up to `maxRetries` times. |
 | `verification.successTexts`, `verification.pollMs`, `verification.timeoutMs` | Texts that mark the Website B page as verified after the link was delivered (any frame, shadow DOM included, apostrophes normalised); how often to look; when to give up (workflow ends as abandoned, record stays visited/none). |
 | `generatedUrl.settleMs`, `generatedUrl.settleMaxMs` | After the first match, keep watching until no *new* matching URL appears for `settleMs` (capped by `settleMaxMs`), then report the URL a frame actually ended on. `settleMs: 0` = first match wins. |
 | `timeouts.*` | Per-step timeouts in ms. |

@@ -11,6 +11,7 @@ const port = Number(process.env.PORT ?? 3000);
 const parallel = Number(process.env.E2E_PARALLEL ?? 1);
 const expectAdvanced = process.env.E2E_EXPECT_ADVANCED === '1';
 const expectPause = process.env.E2E_EXPECT_PAUSE === '1';
+const expectFieldError = process.env.E2E_EXPECT_FIELD_ERROR === '1';
 const overall = setTimeout(() => { console.error('[e2e] TIMEOUT'); process.exit(1); }, 150_000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,7 +90,8 @@ ws.on('message', async (raw) => {
     const expected = ['session verified', 'authenticationCode started, finalizing address', 'pending address updates flushed', 'Enter pressed on address1', 'address autocomplete finalized', 'authenticationCode updated (masked)',
       'final reconciliation started', 'ordinary fields reconciled', 'verifying final address', 'final address verified', 'authenticationCode verified (masked, not compared)', 'final reconciliation complete',
       ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
-      ...(expectAdvanced ? [] : ['Website B submit clicked'])];
+      ...(expectAdvanced ? [] : ['Website B submit clicked']),
+      ...(expectFieldError ? ['next step not visible after submit, checking fields for errors', 'field error detected: city', 'field re-filled: city', 'field errors fixed', 'submit retried (attempt 2)'] : [])];
     expected.push('result', 'link opened by user (visited)', 'link state stored: visited', 'verification text found', 'link state stored: verified');
     for (const ev of expected) if (!run.seen.has(ev)) problems.push(`missing event: ${ev}`);
     finishRun(run, problems.length === 0, problems.join('; '));

@@ -308,9 +308,19 @@ export class Workflow {
         return;
       }
       case 'submit-click': {
-        await this.siteB.clickLastSubmit();
-        this.tl.mark('Website B submit clicked');
-        return;
+        const fe = this.cfg.fieldErrors;
+        // Before the first click: fix anything Website B already flags as invalid.
+        await this.fixFieldErrors(snapshot, 'before submit');
+        for (let attempt = 1; attempt <= fe.maxRetries + 1; attempt++) {
+          await this.siteB.clickLastSubmit();
+          this.tl.mark(attempt === 1 ? 'Website B submit clicked' : `submit retried (attempt ${attempt})`);
+          if (await this.siteB.nextStepAppeared(fe.postSubmitWaitMs)) return;
+          this.tl.mark('next step not visible after submit, checking fields for errors');
+          const fixed = await this.fixFieldErrors(snapshot, `after submit attempt ${attempt}`);
+          if (!fixed) return; // no field errors to fix: let the next step's own wait / pause handle it
+          if (this.cfg.addressFinalize) await this.siteB.verifyAndRepairAddress(snapshot, this.cfg.addressFinalize.fields, this.cfg.addressFinalize.repairRounds, true);
+        }
+        throw new AutomationError('FIELD_FILL_FAILED', `Website B still reports field errors after ${fe.maxRetries + 1} submit attempt(s)`);
       }
       case 'agree': {
         const sel = this.cfg.checkout.agreeButton!;
@@ -423,6 +433,18 @@ export class Workflow {
   private stopVerificationMonitor(): void {
     if (this.monitorTimer) clearTimeout(this.monitorTimer);
     this.monitorTimer = null;
+  }
+
+  /** Detect fields Website B marks as invalid and re-fill them from the snapshot. Returns true when something was re-filled. */
+  private async fixFieldErrors(snapshot: Record<string, string>, when: string): Promise<boolean> {
+    const errors = await this.siteB.fieldsWithErrors();
+    if (!errors.length) return false;
+    for (const e of errors) this.tl.mark(`field error detected: ${e.field}`, `${e.reason} (${when})`);
+    const failed = await this.siteB.refillFields(errors.map((e) => e.field), snapshot);
+    const still = await this.siteB.fieldsWithErrors();
+    if (still.length) this.tl.mark('fields still flagged after re-fill', still.map((e) => `${e.field} (${e.reason})`).join(', '));
+    else this.tl.mark('field errors fixed', errors.map((e) => e.field).join(', '));
+    return failed.length < errors.length;
   }
 
   // ---------- ending ----------

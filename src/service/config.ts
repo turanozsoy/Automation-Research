@@ -1,6 +1,19 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+/** How Website B marks a field as invalid, and how submit reacts to it. */
+export interface FieldErrorsConfig {
+  /** Attribute + value that marks an invalid input (checked on the input and its ancestors). */
+  attribute: string;
+  value: string;
+  /** How far up from the input the marker may sit (0 = input only). */
+  ancestorLevels: number;
+  /** After the submit click: how long to wait for the next step's element before checking for field errors. */
+  postSubmitWaitMs: number;
+  /** Extra submit attempts after re-filling erroring fields. */
+  maxRetries: number;
+}
+
 export interface FieldConfig {
   /** Tried in order; the first selector that matches an element on the page wins. */
   selectors: string[];
@@ -38,6 +51,19 @@ export interface AddressFinalizeConfig {
   settleMaxMs: number;
   /** Bounded repair rounds before giving up (submit is then refused). */
   repairRounds: number;
+}
+
+/** How Website B marks a field as invalid, and how submit reacts to it. */
+export interface FieldErrorsConfig {
+  /** Attribute + value that marks an invalid input (checked on the input and its ancestors). */
+  attribute: string;
+  value: string;
+  /** How far up from the input the marker may sit (0 = input only). */
+  ancestorLevels: number;
+  /** After the submit click: how long to wait for the next step's element before checking for field errors. */
+  postSubmitWaitMs: number;
+  /** Extra submit attempts after re-filling erroring fields. */
+  maxRetries: number;
 }
 
 export interface FieldConfig {
@@ -92,6 +118,7 @@ export interface SiteBConfig {
   fields: Record<string, FieldConfig>;
   submitButton: string;
   addressFinalize?: AddressFinalizeConfig;
+  fieldErrors: FieldErrorsConfig;
   /** After the URL is delivered: watch the automated page for a success text, then close the workflow. */
   verification: {
     /** Any of these (case-insensitive, apostrophes normalised) in any frame's visible text counts as verified. */
@@ -170,6 +197,13 @@ export function loadConfig(): SiteBConfig {
     recommendedLink: raw.recommendedLink,
     fields,
     submitButton: raw.submitButton,
+    fieldErrors: {
+      attribute: raw.fieldErrors?.attribute ?? 'data-accent-color',
+      value: raw.fieldErrors?.value ?? 'red',
+      ancestorLevels: raw.fieldErrors?.ancestorLevels ?? 3,
+      postSubmitWaitMs: raw.fieldErrors?.postSubmitWaitMs ?? 6000,
+      maxRetries: raw.fieldErrors?.maxRetries ?? 2,
+    },
     verification: {
       successTexts: raw.verification?.successTexts ?? ["You're good to go"],
       pollMs: raw.verification?.pollMs ?? 1000,

@@ -13,7 +13,8 @@ const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget th
 const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays enabled, so Enter in the form submits it (real-site behaviour)
 const noAgree = process.env.FAKE_B_NO_AGREE === '1';
 const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1';
-const urlRedirects = process.env.FAKE_B_URL_REDIRECTS === '1'; // the first it-worked URL redirects to a different final one after loading // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
+const urlRedirects = process.env.FAKE_B_URL_REDIRECTS === '1';
+const cityError = process.env.FAKE_B_CITY_ERROR === '1'; // first submit: clear city, flag it red (data-accent-color) and refuse to advance // the first it-worked URL redirects to a different final one after loading // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
 </head><body>${body}</body></html>`;
@@ -43,7 +44,7 @@ createServer((req, res) => {
         <label>Mobile<input id="mobile-number"></label>
         <label>Address<input name="line1" id="base-ui-_r_f_" autocomplete="off"></label>
         <div id="ac" class="sugg" style="display:none;border:1px solid #888;width:280px;background:#fff"></div>
-        <label>City<input name="city" id="base-ui-_r_g_"></label>
+        <label>City<div id="city-wrap"><input name="city" id="base-ui-_r_g_" required></div></label>
         <div id="state-slot"></div>
         <label>ZIP<input name="zip" id="base-ui-_r_h_"></label>
         <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••" autocomplete="off"></label>
@@ -57,6 +58,8 @@ createServer((req, res) => {
         // Address autocomplete: suggestions appear ~300 ms after typing. Keyboard: ArrowDown highlights the
         // next option, Enter accepts the highlighted one (Enter with no list open submits the form, like a real form).
         // Accepting reveals the State select and populates city/state/zip.
+        const cityIn = document.querySelector('input[name="city"]');
+        cityIn.addEventListener('input', () => { if (cityIn.value.trim()) { cityIn.removeAttribute('data-accent-color'); document.getElementById('city-wrap').removeAttribute('data-accent-color'); } });
         const line1 = document.querySelector('input[name="line1"]');
         const ac = document.getElementById('ac');
         let acTimer, hi = -1;
@@ -95,8 +98,14 @@ createServer((req, res) => {
           else if (e.key === 'Enter') { e.preventDefault(); setTimeout(() => accept(JSON.parse(items[Math.max(hi, 0)].dataset.o)), 250); }
           else if (e.key === 'Escape') closeAc();
         });
+        let submits = 0;
         document.getElementById('f').addEventListener('submit', (e) => {
           e.preventDefault();
+          submits++;
+          const cityEl = document.querySelector('input[name="city"]'), wrap = document.getElementById('city-wrap');
+          if (${cityError} && submits === 1) { cityEl.value = ''; wrap.setAttribute('data-accent-color', 'red'); cityEl.setAttribute('data-accent-color', 'red'); return; }
+          if (!cityEl.value.trim()) { wrap.setAttribute('data-accent-color', 'red'); cityEl.setAttribute('data-accent-color', 'red'); return; }
+          wrap.removeAttribute('data-accent-color'); cityEl.removeAttribute('data-accent-color');
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
           setTimeout(() => {
