@@ -3,6 +3,7 @@ import { BrowserManager } from './browser/manager.js';
 import { loadConfig } from './config.js';
 import { Vault } from './crypto.js';
 import { openDb } from './db.js';
+import { ProfileInbox } from './profiles/inbox.js';
 import { ProfileStore } from './profiles/store.js';
 import { loadSettings } from './settings.js';
 import { Timeline } from './timeline.js';
@@ -29,17 +30,24 @@ async function main(): Promise<void> {
 
   const registry = new WorkflowRegistry(settings, cfg, store, browser, tl);
   registry.start();
-  await startServer(settings.port, cfg, registry, tl);
+  await startServer({ cfg, registry, store, browser, settings, tl });
   tl.mark('test page available', `http://localhost:${settings.port}`);
 
+  const inbox = new ProfileInbox(settings.dataDir, store, browser, cfg, tl);
+  inbox.start();
+  tl.mark('profile inbox watching', inbox.path());
+
   console.log('\n────────────────────────────────────────────────────────────');
-  console.log(`  Test page:  http://localhost:${settings.port}   (open it in several tabs for several workflows)`);
-  console.log(`  Profiles:   npm run profile -- list`);
-  console.log(`  Settings:   maxWorkflows=${settings.maxWorkflows} cooldown=${settings.cooldownMs}ms idle=${settings.idleTimeoutMs}ms lease=${settings.leaseMs}ms`);
+  console.log(`  Test page:   http://localhost:${settings.port}   (open it in several tabs for several workflows)`);
+  console.log(`  Import URL:  http://localhost:${settings.port}/import   (the browser extension posts sessions here)`);
+  console.log(`  Drop folder: ${inbox.path()}   (drop an exported session .json to import it)`);
+  console.log(`  Profiles:    npm run profile -- list`);
+  console.log(`  Settings:    maxWorkflows=${settings.maxWorkflows} cooldown=${settings.cooldownMs}ms idle=${settings.idleTimeoutMs}ms lease=${settings.leaseMs}ms importToken=${settings.importToken ? 'set' : 'none'}`);
   console.log('────────────────────────────────────────────────────────────\n');
 
   const shutdown = async () => {
     tl.mark('shutting down');
+    inbox.stop();
     await registry.stop();
     await browser.close();
     db.close();

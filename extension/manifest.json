@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Automation Session Exporter",
+  "version": "1.0.0",
+  "description": "Export your own logged-in Website B session (cookies + localStorage) into the automation profile pool. For your own authorized account.",
+  "permissions": ["cookies", "storage", "scripting", "tabs"],
+  "host_permissions": ["<all_urls>"],
+  "action": { "default_popup": "popup.html", "default_title": "Export session" },
+  "options_page": "options.html"
+}

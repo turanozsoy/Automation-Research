@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 520px; margin: 24px; font-size: 14px; }
+  label { display: block; margin: 12px 0 4px; color: #444; }
+  input { width: 100%; padding: 6px; box-sizing: border-box; font-size: 14px; }
+  button { padding: 8px 14px; margin-top: 14px; font-size: 14px; }
+  #saved { margin-left: 10px; color: #080; }
+  p.small { color: #666; font-size: 12px; }
+</style>
+</head>
+<body>
+  <h2>Automation Session Exporter — options</h2>
+  <label>Automation service URL</label>
+  <input id="serviceUrl" placeholder="http://localhost:3000">
+  <p class="small">Where the running service listens. Its <code>/import</code> endpoint receives the session.</p>
+  <label>Import token (optional)</label>
+  <input id="token" placeholder="leave empty unless IMPORT_TOKEN is set on the service">
+  <p class="small">Must equal the <code>IMPORT_TOKEN</code> environment variable of the service, if you set one.</p>
+  <button id="save">Save</button><span id="saved"></span>
+  <script src="options.js"></script>
+</body>
+</html>

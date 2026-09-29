@@ -49,8 +49,28 @@ Then open <http://localhost:3000> in one tab per user you want to simulate. Each
 **Start workflow** (a profile is reserved and Website B opens in its own context, already logged in),
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 
-Profile commands (`npm run profile -- <cmd>`): `seed`, `import --file <storageState.json>`,
-`reseed <label>`, `list`, `verify <label>`, `disable`, `enable`, `remove`, `events <label>`.
+### Adding profiles with the browser extension (recommended)
+
+`extension/` is a small Chrome extension (Manifest V3) that exports the session of the tab you are
+logged in on and hands it to the service. Load it once: `chrome://extensions` → enable *Developer mode*
+→ *Load unpacked* → pick the `extension` folder. Then, on a Website B tab where you are logged in:
+
+1. Click the extension icon.
+2. Enter a profile label and the account key (email/username, unique per profile).
+3. **Send to service** posts the session to `http://localhost:3000/import` while `npm start` is running.
+   The service stores it encrypted, opens Website B with it to verify, and the popup reports
+   *session valid* or *NOT authenticated* (then the profile is marked expired).
+   **Download file** saves `<label>.profile.json` instead; drop it into `data/inbox/` (created by the
+   service) and it is imported the same way, then the plaintext file is deleted.
+
+Sending the same account key again re-seeds the existing profile (fresh cookies after a re-login).
+Set `IMPORT_TOKEN` on the service and the same token in the extension's options page if the service is
+reachable by anyone other than you. The service URL is configurable in the options page for later
+(VPS) use.
+
+Profile commands (`npm run profile -- <cmd>`): `seed` (manual login in a visible Chromium),
+`import --file <storageState.json>`, `reseed <label>`, `list`, `verify <label>`, `disable`, `enable`,
+`remove`, `events <label>`, `workflows`.
 
 Service settings are environment variables (see `.env.example`): `MAX_WORKFLOWS`, `COOLDOWN_MS`,
 `IDLE_TIMEOUT_MS`, `LEASE_MS`, `QUEUE_TIMEOUT_MS`, `MAX_REASSIGN`, `DATA_DIR`, `PROFILE_MASTER_KEY`.
@@ -137,6 +157,9 @@ src/service/url-capture.ts  generated-URL detectors (+ settle on the final URL)
 src/service/ws.ts           static test page + WebSocket server, routing by workflow id
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
+src/service/profiles/import.ts  storageState normalisation + insert/reseed + verify (used by /import and the inbox)
+src/service/profiles/inbox.ts   watched data/inbox folder for manually dropped session files
+extension/                  Chrome extension: export the logged-in session to the service (or a file)
 src/test-a/                 the local Website A stand-in (index.html + client.js)
 dev/fake-b/                 local fake Website B (testing only)
 dev/e2e-client.ts           scripted end-to-end run
