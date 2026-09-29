@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 export interface AutocompleteConfig {
@@ -65,7 +65,15 @@ interface RawFieldConfig {
 
 export function loadConfig(): SiteBConfig {
   const path = resolve(process.cwd(), process.env.SITE_B_CONFIG ?? 'config/site-b.json');
-  const raw = JSON.parse(readFileSync(path, 'utf8'));
+  let raw = JSON.parse(readFileSync(path, 'utf8'));
+
+  // Optional gitignored override next to the base file (site-b.json -> site-b.local.json).
+  // Lets you keep real URLs/selectors locally without conflicting with repo updates.
+  const localPath = path.replace(/\.json$/, '.local.json');
+  if (existsSync(localPath)) {
+    raw = deepMerge(raw, JSON.parse(readFileSync(localPath, 'utf8')));
+    console.log(`[config] merged override ${localPath}`);
+  }
 
   const fields: Record<string, FieldConfig> = {};
   for (const [name, f] of Object.entries(raw.fields as Record<string, RawFieldConfig>)) {
@@ -128,6 +136,13 @@ export function loadConfig(): SiteBConfig {
 
   console.log(`[config] loaded ${path}`);
   return cfg;
+}
+
+function deepMerge(base: any, override: any): any {
+  if (Array.isArray(base) || Array.isArray(override) || typeof base !== 'object' || typeof override !== 'object' || !base || !override) return override;
+  const out: any = { ...base };
+  for (const [k, v] of Object.entries(override)) out[k] = k in base ? deepMerge(base[k], v) : v;
+  return out;
 }
 
 /** True when `url` is on Website B's host and its path matches the login pattern. */

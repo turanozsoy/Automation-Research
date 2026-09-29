@@ -65,6 +65,13 @@ Every step is timestamped in both the terminal and the test page's event log.
 | `timeouts.*` | Per-step timeouts in ms. |
 | `debounceMs` | Client-side debounce per field. |
 
+**Local override:** put your real URLs and selectors in `config/site-b.local.json` (gitignored). It is
+deep-merged over `config/site-b.json`, so repo updates never conflict with your edits. Example:
+
+```json
+{ "baseUrl": "https://your-real-domain.com", "targetUrl": "https://your-real-domain.com/path" }
+```
+
 Field names on the local form (`data-field` attributes in `src/test-a/index.html`) must match the keys under `fields`.
 
 URL detectors, first match wins: frame navigation, newly attached iframe, top-level navigation,

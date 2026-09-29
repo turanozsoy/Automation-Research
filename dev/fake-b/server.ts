@@ -90,7 +90,7 @@ createServer((req, res) => {
   }
   if (url.pathname === '/checkout/step2') {
     return page(`<h2>Checkout — step 2</h2>
-      <p><button data-variant="secondary" id="finish">Finish</button></p>
+      <p><button data-variant="secondary" id="finish">Continue on phone</button></p>
       <script>
         document.getElementById('finish').onclick = () => { setTimeout(() => location.href = '/test/it-worked/${randomBytes(6).toString('hex')}', 500); };
       </script>`);

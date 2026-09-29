@@ -67,7 +67,7 @@
     "frameUrlIncludes": "",
     "toggle": "#v-0-0-0-0-0-0",
     "primaryButton": "button[data-variant=\"primary\"]",
-    "secondaryButton": "button[data-variant=\"secondary\"]"
+    "secondaryButton": "button:has-text(\"Continue on phone\")"
   },
   "generatedUrl": {
     "prefix": "http://localhost:3001/test/it-worked/",
