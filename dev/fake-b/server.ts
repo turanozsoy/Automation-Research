@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 
 const port = Number(process.env.FAKE_B_PORT ?? 3001);
 const autoLogin = process.env.FAKE_B_AUTOLOGIN === '1';
+const noSuggest = process.env.FAKE_B_NO_SUGGEST === '1'; // simulate a widget that never opens (tests that Enter is never pressed)
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
 </head><body>${body}</body></html>`;
@@ -37,12 +38,12 @@ createServer((req, res) => {
         <label>Date of birth<input id="date-of-birth" placeholder="MM/DD/YYYY"></label>
         <label>Mobile<input id="mobile-number"></label>
         <label>Address<input name="line1" id="base-ui-_r_f_" autocomplete="off"></label>
-        <div id="ac" role="listbox" style="display:none;border:1px solid #888;width:280px;background:#fff"></div>
+        <div id="ac" class="sugg" style="display:none;border:1px solid #888;width:280px;background:#fff"></div>
         <label>City<input name="city" id="base-ui-_r_g_"></label>
         <div id="state-slot"></div>
         <label>ZIP<input name="zip" id="base-ui-_r_h_"></label>
         <label>Auth code<input id="test-authentification-code" placeholder="•••-••-••••" autocomplete="off"></label>
-        <button type="submit">Continue</button>
+        <button type="submit" id="go" disabled>Continue</button>
       </form>
       <div id="checkout"></div>
       <script>
@@ -55,18 +56,19 @@ createServer((req, res) => {
         const line1 = document.querySelector('input[name="line1"]');
         const ac = document.getElementById('ac');
         let acTimer, hi = -1;
-        const closeAc = () => { ac.style.display = 'none'; ac.innerHTML = ''; hi = -1; line1.setAttribute('aria-expanded', 'false'); };
+        const closeAc = () => { ac.style.display = 'none'; ac.innerHTML = ''; hi = -1; };
         const accept = (o) => {
           line1.value = o.line1;
           if (!document.querySelector('select[name="state"]')) {
             document.getElementById('state-slot').innerHTML = '<label>State<select name="state"><option value="">--</option><option value="NY">New York</option><option value="CA">California</option><option value="FL">Florida</option><option value="TX">Texas</option></select></label>';
           }
           document.querySelector('input[name="city"]').value = o.city; document.querySelector('select[name="state"]').value = o.state; document.querySelector('input[name="zip"]').value = o.zip;
+          document.getElementById('go').disabled = false;
           closeAc();
         };
         line1.addEventListener('input', () => {
           clearTimeout(acTimer); closeAc();
-          if (!line1.value.trim()) return;
+          if (!line1.value.trim() || ${noSuggest}) return;
           acTimer = setTimeout(() => {
             const v = line1.value.split(',')[0].trim();
             const opts = [
@@ -74,15 +76,15 @@ createServer((req, res) => {
               { text: v + ' Apt 2, Springfield, NY 10099, USA', line1: v + ' Apt 2', city: 'Springfield', state: 'NY', zip: '10099' },
             ];
             for (const o of opts) {
-              const d = document.createElement('div'); d.setAttribute('role', 'option'); d.textContent = o.text; d.style.padding = '4px'; d.dataset.o = JSON.stringify(o);
+              const d = document.createElement('div'); d.className = 'sugg-item'; d.textContent = o.text; d.style.padding = '4px'; d.dataset.o = JSON.stringify(o);
               d.onclick = () => accept(o);
               ac.appendChild(d);
             }
-            ac.style.display = 'block'; line1.setAttribute('aria-expanded', 'true');
+            ac.style.display = 'block';
           }, 300);
         });
         line1.addEventListener('keydown', (e) => {
-          const items = [...ac.querySelectorAll('[role="option"]')];
+          const items = [...ac.querySelectorAll('.sugg-item')];
           if (ac.style.display !== 'block' || !items.length) return;
           if (e.key === 'ArrowDown') { e.preventDefault(); hi = Math.min(hi + 1, items.length - 1); items.forEach((it, i) => it.style.background = i === hi ? '#cde' : ''); }
           else if (e.key === 'Enter') { e.preventDefault(); setTimeout(() => accept(JSON.parse(items[Math.max(hi, 0)].dataset.o)), 250); }
