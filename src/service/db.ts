@@ -58,6 +58,11 @@ const MIGRATIONS: string[] = [
     reason TEXT, at INTEGER NOT NULL
   );
   `,
+  `
+  ALTER TABLE assignments ADD COLUMN link_state TEXT NOT NULL DEFAULT 'none';  -- none | visited | verified
+  ALTER TABLE assignments ADD COLUMN visited_at INTEGER;
+  ALTER TABLE assignments ADD COLUMN verified_at INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {

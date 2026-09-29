@@ -43,7 +43,7 @@ export function startServer(port: number, cfg: SiteBConfig, registry: WorkflowRe
           reply({ type: 'workflow.accepted', ts: Date.now(), workflowId, queuePosition });
           break;
         }
-        case 'field.update': case 'submit': case 'resume': case 'workflow.end': {
+        case 'field.update': case 'submit': case 'resume': case 'workflow.end': case 'link.opened': {
           const wf = registry.get(m.workflowId);
           if (m.type === 'workflow.end') { registry.end(m.workflowId, m.reason ?? 'client ended the workflow'); own.delete(m.workflowId); break; }
           if (m.type === 'field.update') {
@@ -56,6 +56,7 @@ export function startServer(port: number, cfg: SiteBConfig, registry: WorkflowRe
             break;
           }
           if (m.type === 'submit') void wf.submit(m.snapshot, m.ts);
+          else if (m.type === 'link.opened') wf.linkOpened();
           else void wf.resume(m.mode);
           break;
         }

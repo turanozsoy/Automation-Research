@@ -47,6 +47,7 @@ export class WorkflowRegistry {
       if (promoted) void this.processQueue();
       for (const wf of this.live.values()) {
         if (!wf.isTerminal() && (wf.state === 'ready' || wf.state === 'paused') && Date.now() - wf.lastActivityAt > this.settings.idleTimeoutMs) wf.end('idle timeout');
+        // link_ready / visited are bounded by verification.timeoutMs inside the workflow
       }
     }, 5000));
   }
@@ -129,6 +130,8 @@ export class WorkflowRegistry {
       wf = new Workflow(workflowId, bundle, this.cfg, tl, this.send);
       this.live.set(workflowId, wf);
       wf.setTerminalHandler((outcome, code) => void this.onTerminal(workflowId, outcome, code));
+      wf.setLinkStateHandler((state) => { this.store.setLinkState(workflowId, state); this.tl.child(workflowId).mark(`link state stored: ${state}`); });
+      wf.setSubmitStateHandler((state, url) => this.store.recordSubmit(workflowId, state, url ? { resultUrl: url } : {}));
       // Values that arrived before this runtime existed: previous profile's snapshot, then early updates.
       const carried = this.carry.get(workflowId);
       if (carried) { wf.seedSnapshot(carried); this.carry.delete(workflowId); }
@@ -226,7 +229,6 @@ export class WorkflowRegistry {
       const fresh = await this.browser.exportStorageState(workflowId);
       if (fresh) this.store.refreshStorageState(a.profile_id, fresh);
     }
-    if (a && outcome === 'completed') this.store.recordSubmit(workflowId, 'succeeded');
     await this.browser.closeContext(workflowId);
     this.store.release(workflowId, release, this.settings.cooldownMs, { outcomeCode: code, reason: outcome });
     const p = a ? this.store.get(a.profile_id) : undefined;

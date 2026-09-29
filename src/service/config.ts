@@ -53,6 +53,14 @@ export interface SiteBConfig {
   fields: Record<string, FieldConfig>;
   submitButton: string;
   addressSearch?: AddressSearchConfig;
+  /** After the URL is delivered: watch the automated page for a success text, then close the workflow. */
+  verification: {
+    /** Any of these (case-insensitive, apostrophes normalised) in any frame's visible text counts as verified. */
+    successTexts: string[];
+    pollMs: number;
+    /** Give up waiting for the success text after this long; the workflow ends as abandoned. */
+    timeoutMs: number;
+  };
   checkout: {
     frameUrlIncludes?: string;
     /** Optional button shown right after the submit click (e.g. aria-label="Agree and continue"). */
@@ -123,6 +131,11 @@ export function loadConfig(): SiteBConfig {
     recommendedLink: raw.recommendedLink,
     fields,
     submitButton: raw.submitButton,
+    verification: {
+      successTexts: raw.verification?.successTexts ?? ["You're good to go"],
+      pollMs: raw.verification?.pollMs ?? 1000,
+      timeoutMs: raw.verification?.timeoutMs ?? 10 * 60_000,
+    },
     addressSearch: raw.addressSearch
       ? {
           field: raw.addressSearch.field ?? 'address1',

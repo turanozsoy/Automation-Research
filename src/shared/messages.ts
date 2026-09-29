@@ -11,7 +11,9 @@ export type WorkflowState =
   | 'ready'          // live field sync active
   | 'submitting'     // final action in progress
   | 'paused'         // a submit step failed; user may retry it, skip it (done manually), or abort
-  | 'completed'      // generated URL captured
+  | 'link_ready'     // generated URL delivered; waiting for the user to open it / the success text
+  | 'visited'        // user opened the link; still watching Website B for the success text
+  | 'completed'      // success text seen on Website B (verified); workflow closed
   | 'failed'         // unrecoverable; profile released
   | 'abandoned';     // ended by the client or idle timeout
 
@@ -45,9 +47,11 @@ export interface SubmitMsg { type: 'submit'; ts: number; workflowId: string; sna
 /** After a pause: 'retry' runs the failed step again, 'skip' continues with the next step (you did it by hand), 'abort' fails the workflow. */
 export interface ResumeMsg { type: 'resume'; ts: number; workflowId: string; mode: 'retry' | 'skip' | 'abort' }
 export interface WorkflowEndMsg { type: 'workflow.end'; ts: number; workflowId: string; reason?: string }
+/** The user clicked the button that opens the generated link. */
+export interface LinkOpenedMsg { type: 'link.opened'; ts: number; workflowId: string }
 export interface PingMsg { type: 'ping'; ts: number }
 
-export type ClientMsg = WorkflowStartMsg | FieldUpdateMsg | SubmitMsg | ResumeMsg | WorkflowEndMsg | PingMsg;
+export type ClientMsg = WorkflowStartMsg | FieldUpdateMsg | SubmitMsg | ResumeMsg | WorkflowEndMsg | LinkOpenedMsg | PingMsg;
 
 // ---- service -> client ----
 

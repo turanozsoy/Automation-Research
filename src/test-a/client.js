@@ -34,6 +34,7 @@
     $('#state').textContent = s;
     $('#detail').textContent = detail ? `— ${detail}` : '';
     const terminal = ['completed', 'failed', 'abandoned'].includes(s);
+    if (s === 'completed') { const b = $('#result button'); if (b) { b.disabled = true; b.textContent = 'Verified ✓'; } }
     $('#btnStart').disabled = !(s === 'idle' || terminal);
     $('#btnSubmit').disabled = s !== 'ready';
     $('#btnEnd').disabled = !workflowId || terminal || s === 'idle';
@@ -97,11 +98,24 @@
       case 'field.error':
         log(m.ts, `field ${m.field} error: ${m.code} — ${m.message}`, 'err');
         break;
-      case 'result':
+      case 'result': {
         $('#result').innerHTML = '';
-        { const a = document.createElement('a'); a.href = m.url; a.target = '_blank'; a.textContent = m.url; $('#result').appendChild(a); }
+        const btn = document.createElement('button');
+        btn.textContent = 'Open link';
+        btn.style.marginTop = '0';
+        const wf = workflowId;
+        btn.onclick = () => {
+          window.open(m.url, '_blank');
+          btn.disabled = true;
+          btn.textContent = 'Link opened (visited)';
+          log(Date.now(), 'link opened by user', 'local');
+          send({ type: 'link.opened', ts: Date.now(), workflowId: wf });
+        };
+        const span = document.createElement('div'); span.textContent = m.url; span.style.fontSize = '12px';
+        $('#result').appendChild(btn); $('#result').appendChild(span);
         log(Date.now(), `URL received by Website A — ${Date.now() - m.submitRequestedAt} ms after submit requested (source: ${m.source})`, 'ack');
         break;
+      }
       case 'error':
         log(m.ts, `${m.fatal ? 'FATAL ' : ''}ERROR ${m.code}: ${m.message}`, 'err');
         break;

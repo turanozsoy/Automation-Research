@@ -20,6 +20,12 @@ What exists now:
   service restart → orphaned assignments marked lost and their profiles put in cooldown.
 - **Queue.** When every profile is busy or `MAX_WORKFLOWS` is reached, new workflows wait (bounded)
   and are served as profiles are released.
+- **Link delivery and verification.** When the URL is captured the test page shows an **Open link**
+  button. Clicking it marks the workflow's record as *visited* (stored next to the profile in SQLite).
+  The automated Website B page keeps being watched, in every frame, for a success text
+  (`verification.successTexts`, default "You're good to go"); when it appears the record becomes
+  *verified*, the workflow closes and its profile is released. `npm run profile -- workflows` lists
+  recent workflows with their link state and URL.
 - Everything from the earlier phase: debounced live sync, masked authentication code, keyboard-driven
   Google address autocomplete, pausable submit steps with manual retry/skip, final-URL capture.
 
@@ -77,6 +83,7 @@ into `data/master.key` (gitignored). Rotating the master key only re-wraps the s
 | `checkout.frameUrlIncludes` | Optional substring to restrict which frames are searched. |
 | `generatedUrl.prefix`, `generatedUrl.pattern` | What counts as the generated URL. |
 | `generatedUrl.watchNavigationRequests` | Also watch navigation *requests* (fires before the response). No API traffic is inspected. |
+| `verification.successTexts`, `verification.pollMs`, `verification.timeoutMs` | Texts that mark the Website B page as verified after the link was delivered (any frame, shadow DOM included, apostrophes normalised); how often to look; when to give up (workflow ends as abandoned, record stays visited/none). |
 | `generatedUrl.settleMs`, `generatedUrl.settleMaxMs` | After the first match, keep watching until no *new* matching URL appears for `settleMs` (capped by `settleMaxMs`), then report the URL a frame actually ended on. `settleMs: 0` = first match wins. |
 | `timeouts.*` | Per-step timeouts in ms. |
 | `debounceMs` | Client-side debounce per field. |

@@ -74,6 +74,11 @@ ws.on('message', async (raw) => {
   }
   if (m.type === 'result') {
     console.log(`[e2e ${tag(run.id)}] RESULT ${m.url} via ${m.source} — ${Date.now() - run.submitAt} ms after submit`);
+    run.seen.add('result');
+    setTimeout(() => { console.log(`[e2e ${tag(run.id)}] opening link`); send({ type: 'link.opened', workflowId: run.id }); }, 500);
+    return;
+  }
+  if (m.type === 'state' && m.state === 'completed') {
     const problems: string[] = [];
     for (const f of ['firstName', 'lastName', 'dateOfBirth', 'mobileNumber', 'authenticationCode']) if (!run.acks.has(f)) problems.push(`missing ack ${f}`);
     if (run.acks.get('dateOfBirth') !== '05/17/1990') problems.push('DOB not normalised');
@@ -82,6 +87,7 @@ ws.on('message', async (raw) => {
     const expected = ['session verified', 'final reconciliation started', 'ordinary fields reconciled', 'authenticationCode verified (masked, not compared)', 'address autocomplete started', 'address search typed', 'ArrowDown + Enter sent', 'final reconciliation complete',
       ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
       ...(expectAdvanced ? ['form submitted by Enter, page advanced', 'submit click skipped'] : ['address accepted', 'Website B submit clicked'])];
+    expected.push('result', 'link opened by user (visited)', 'link state stored: visited', 'verification text found', 'link state stored: verified');
     for (const ev of expected) if (!run.seen.has(ev)) problems.push(`missing event: ${ev}`);
     finishRun(run, problems.length === 0, problems.join('; '));
   }

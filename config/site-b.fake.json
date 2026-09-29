@@ -100,6 +100,14 @@
     "settleMs": 1500,
     "settleMaxMs": 10000
   },
+  "verification": {
+    "successTexts": [
+      "You’re good to go",
+      "You're good to go"
+    ],
+    "pollMs": 1000,
+    "timeoutMs": 600000
+  },
   "timeouts": {
     "pageLoad": 60000,
     "action": 10000,

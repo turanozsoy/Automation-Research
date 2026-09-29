@@ -124,7 +124,7 @@ createServer((req, res) => {
       <script>
         document.getElementById('finish').onclick = () => { setTimeout(() => {
           ${urlAsText
-            ? "document.body.innerHTML = '<h2>Done</h2><p>Scan or open: <span>http://localhost:" + port + "/test/it-worked/" + randomBytes(6).toString('hex') + "</span></p>';"
+            ? "document.body.innerHTML = '<h2>Done</h2><p>Scan or open: <span>http://localhost:" + port + "/test/it-worked/" + randomBytes(6).toString('hex') + "</span></p><p id=ok></p>'; setTimeout(() => { document.getElementById('ok').textContent = 'You’re good to go'; }, 2500);"
             : "location.href = '/test/it-worked/" + randomBytes(6).toString('hex') + "';"}
         }, 500); };
       </script>`);
@@ -134,7 +134,8 @@ createServer((req, res) => {
       // intermediate page: loads, then navigates to the final URL a moment later (like a real handoff)
       return page(`<h2>Redirecting…</h2><script>setTimeout(() => location.replace('/test/it-worked/${randomBytes(6).toString('hex')}?final=1'), 700)</script>`);
     }
-    return page(`<h2>It worked</h2><p>${url.pathname}${url.search}</p>`);
+    return page(`<h2>It worked</h2><p>${url.pathname}${url.search}</p><p id="ok"></p>
+      <script>setTimeout(() => { document.getElementById('ok').textContent = 'You’re good to go'; }, ${Number(process.env.FAKE_B_GOOD_TO_GO_MS ?? 2500)});</script>`);
   }
   if (url.pathname === '/other') return page(`<h1>Other plan</h1>`);
 

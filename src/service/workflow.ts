@@ -29,6 +29,11 @@ export class Workflow {
   private capture: UrlCapture;
   private terminal: TerminalOutcome | null = null;
   private onTerminal: (outcome: TerminalOutcome, code?: ErrorCode) => void = () => {};
+  private onLinkState: (state: 'visited' | 'verified') => void = () => {};
+  private onSubmitState: (state: 'submitting' | 'succeeded', url?: string) => void = () => {};
+  private monitorTimer: NodeJS.Timeout | null = null;
+  private monitorDeadline = 0;
+  private linkVisited = false;
 
   constructor(
     public readonly id: string,
@@ -44,6 +49,14 @@ export class Workflow {
 
   setTerminalHandler(fn: (outcome: TerminalOutcome, code?: ErrorCode) => void): void {
     this.onTerminal = fn;
+  }
+
+  setLinkStateHandler(fn: (state: 'visited' | 'verified') => void): void {
+    this.onLinkState = fn;
+  }
+
+  setSubmitStateHandler(fn: (state: 'submitting' | 'succeeded', url?: string) => void): void {
+    this.onSubmitState = fn;
   }
 
   private send: Send = (msg) => {
@@ -171,6 +184,7 @@ export class Workflow {
     if (this.drainPromise) await this.drainPromise;
     this.submitCtx = { snapshot, requestedAt, advanced: false };
     this.stepIndex = 0;
+    this.onSubmitState('submitting');
     this.capture.arm();
     await this.runSteps();
   }
@@ -290,11 +304,12 @@ export class Workflow {
       case 'capture-url': {
         const { url, source } = await this.capture.wait(this.cfg.timeouts.generatedUrl);
         const detectedAt = this.tl.mark('generated URL detected', `${source}: ${url}`);
+        this.onSubmitState('succeeded', url);
         this.send({ type: 'result', ts: detectedAt, url, source, submitRequestedAt: ctx.requestedAt });
         this.tl.mark('URL sent to Website A', `${Date.now() - ctx.requestedAt} ms after submit requested`);
-        this.setState('completed', url);
         this.submitCtx = null;
-        this.finish('completed');
+        this.setState('link_ready', 'waiting for the user to open the link and for the success text on Website B');
+        this.startVerificationMonitor();
         return;
       }
       default:
@@ -302,11 +317,74 @@ export class Workflow {
     }
   }
 
+  // ---------- after the URL: visited / verified ----------
+
+  /** The user clicked "Open link" on Website A. */
+  linkOpened(): void {
+    this.touch();
+    if (this.terminal) return;
+    if (this.state !== 'link_ready' && this.state !== 'visited') {
+      this.emitError('INVALID_STATE', `Link cannot be opened in state ${this.state}`, false);
+      return;
+    }
+    if (this.linkVisited) return;
+    this.linkVisited = true;
+    this.tl.mark('link opened by user (visited)');
+    this.onLinkState('visited');
+    this.setState('visited', 'watching Website B for the success text');
+  }
+
+  /** Poll every frame (and popup) of the automated context for one of the configured success texts. */
+  private startVerificationMonitor(): void {
+    const v = this.cfg.verification;
+    const needles = v.successTexts.map(normText).filter(Boolean);
+    this.monitorDeadline = Date.now() + v.timeoutMs;
+    this.tl.mark('verification monitor started', `looking for ${JSON.stringify(v.successTexts)} for up to ${v.timeoutMs} ms`);
+    const tick = async () => {
+      if (this.terminal) return;
+      if (Date.now() > this.monitorDeadline) {
+        this.tl.mark('verification timed out', `no success text within ${v.timeoutMs} ms`);
+        this.end('verification timeout');
+        return;
+      }
+      try {
+        for (const page of this.bundle.context.pages()) {
+          if (page.isClosed()) continue;
+          for (const frame of page.frames()) {
+            const text = await frame.evaluate(`(() => {
+              const walk = (root, out) => { for (const el of root.querySelectorAll('*')) { if (el.shadowRoot) { out.push(el.shadowRoot.textContent || ''); walk(el.shadowRoot, out); } } return out; };
+              return (document.body ? document.body.innerText : '') + ' ' + walk(document, []).join(' ');
+            })()`).catch(() => '') as string;
+            const hay = normText(text);
+            const hit = needles.find((n) => hay.includes(n));
+            if (hit) {
+              this.stopVerificationMonitor();
+              this.tl.mark('verification text found', `"${hit}" in ${frame.url() || 'about:blank'}`);
+              if (!this.linkVisited) { this.linkVisited = true; this.onLinkState('visited'); }
+              this.onLinkState('verified');
+              this.setState('completed', 'verified: success text seen on Website B');
+              this.finish('completed');
+              return;
+            }
+          }
+        }
+      } catch { /* page re-rendering; try again next tick */ }
+      if (!this.terminal) this.monitorTimer = setTimeout(() => void tick(), v.pollMs);
+    };
+    this.monitorTimer = setTimeout(() => void tick(), v.pollMs);
+  }
+
+  private stopVerificationMonitor(): void {
+    if (this.monitorTimer) clearTimeout(this.monitorTimer);
+    this.monitorTimer = null;
+  }
+
   // ---------- ending ----------
 
   /** Client closed the form, or idle timeout. */
   end(reason: string): void {
     if (this.terminal) return;
+    this.stopVerificationMonitor();
     this.capture.disarm();
     this.tl.mark('workflow ended', reason);
     this.setState('abandoned', reason);
@@ -322,6 +400,7 @@ export class Workflow {
    * must not be reported as a browser loss.
    */
   detach(): void {
+    this.stopVerificationMonitor();
     this.capture.disarm();
     this.terminal = 'failed';
   }
@@ -370,6 +449,7 @@ export class Workflow {
   }
 
   private onBrowserGone(reason: string): void {
+    this.stopVerificationMonitor();
     this.capture.disarm();
     const ae = new AutomationError('BROWSER_CLOSED', `${reason}.`);
     this.tl.mark(`FAILED: ${ae.code}`, ae.message);
@@ -382,6 +462,7 @@ export class Workflow {
   fail(e: unknown): void {
     if (this.terminal) return;
     const ae = toAutomationError(e);
+    this.stopVerificationMonitor();
     this.capture.disarm();
     this.tl.mark(`FAILED: ${ae.code}`, ae.message);
     this.emitError(ae.code, ae.message, true);
@@ -400,6 +481,11 @@ export class Workflow {
     this.tl.mark(`state → ${state}`, detail);
     this.send({ type: 'state', ts: Date.now(), state, detail });
   }
+}
+
+/** Lower-case, straight quotes, collapsed whitespace, so "You’re good to go" matches "you're good to go". */
+export function normText(s: string): string {
+  return s.replace(/[\u2018\u2019\u02BC\u2032`]/g, "'").replace(/[\u201C\u201D]/g, '"').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
 export function toAutomationError(e: unknown): AutomationError {

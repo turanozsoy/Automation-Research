@@ -9,6 +9,7 @@
  *   verify <label|id>                                     opens Website B with the profile (headless) and checks the session
  *   disable <label|id> | enable <label|id> | remove <label|id>
  *   events <label|id>                                     recent state transitions
+ *   workflows                                             recent workflows: profile, state, link state (none/visited/verified), URL
  *
  * Profiles are stored encrypted in <DATA_DIR>/automation.db. The same Website B
  * account must not be seeded twice (account key is unique).
@@ -125,13 +126,20 @@ async function main(): Promise<void> {
     case 'disable': { const p = need(positional); store.setState(p.id, 'disabled', 'operator'); console.log(`${p.label} disabled`); break; }
     case 'enable': { const p = need(positional); store.setState(p.id, 'available', 'operator'); console.log(`${p.label} available`); break; }
     case 'remove': { const p = need(positional); store.remove(p.id); console.log(`${p.label} removed`); break; }
+    case 'workflows': {
+      const rows = store.listAssignments(30);
+      if (!rows.length) { console.log('no workflows yet'); break; }
+      console.log(['workflow'.padEnd(9), 'profile'.padEnd(14), 'state'.padEnd(10), 'link'.padEnd(9), 'started'.padEnd(20), 'visited'.padEnd(20), 'verified'.padEnd(20), 'url'].join('  '));
+      for (const r of rows) console.log([r.workflow_id.slice(0, 8).padEnd(9), r.profile_label.padEnd(14), r.state.padEnd(10), r.link_state.padEnd(9), fmt(r.created_at).padEnd(20), fmt(r.visited_at).padEnd(20), fmt(r.verified_at).padEnd(20), r.result_url ?? ''].join('  '));
+      break;
+    }
     case 'events': {
       const p = need(positional);
       for (const e of store.events(p.id).reverse()) console.log(`${fmt(e.at)}  ${e.from_state ?? '-'} -> ${e.to_state}  ${e.reason ?? ''}  ${e.workflow_id ? 'wf=' + e.workflow_id.slice(0, 8) : ''}`);
       break;
     }
     default:
-      console.log('commands: seed | import | reseed | list | verify | disable | enable | remove | events');
+      console.log('commands: seed | import | reseed | list | verify | disable | enable | remove | events | workflows');
       process.exitCode = 1;
   }
 }
