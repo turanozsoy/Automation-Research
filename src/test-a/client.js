@@ -57,7 +57,9 @@
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'pool.status') { showPool(m.pool); return; }
-    if (!mine(m)) return;
+    // The acceptance is the message that tells this page its workflow id, so it must pass before the ownership filter.
+    if (m.type === 'workflow.accepted' && !workflowId) { /* handled below */ }
+    else if (!mine(m)) return;
     switch (m.type) {
       case 'hello':
         debounceMs = m.debounceMs;

@@ -135,6 +135,7 @@ npm run profile:fake -- import --label fake1 --account a1 --file dev/fake-b/prof
 npm run profile:fake -- import --label fake2 --account a2 --file dev/fake-b/profile.storage-state.json
 npm run start:fake                 # terminal 2: service using config/site-b.fake.json and data/fake
 E2E_PARALLEL=3 npm run e2e         # terminal 3 (optional): 3 simultaneous scripted workflows (2 profiles + 1 queued)
+npm run e2e:page                   # drives the real test page in a headless browser (Start, type, Submit, Open link, verified)
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 ```
 

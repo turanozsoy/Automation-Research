@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "profile": "tsx scripts/profile.ts",
     "profile:fake": "tsx dev/profile-fake.ts",
-    "test:store": "tsx dev/store-test.ts"
+    "test:store": "tsx dev/store-test.ts",
+    "e2e:page": "tsx dev/page-test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
