@@ -310,8 +310,16 @@ export class SiteB {
         this.tl.mark('pressing keys anyway (enterWithoutList=true)');
       }
 
-      if (!(await loc.evaluate((el) => document.activeElement === el))) await loc.focus();
-      const keys = a.keySequences[Math.min(attempt - 1, a.keySequences.length - 1)] ?? ['ArrowDown', 'Enter'];
+      const focused = await loc.evaluate((el) => document.activeElement === el || (el.getRootNode() instanceof ShadowRoot && (el.getRootNode() as ShadowRoot).activeElement === el), undefined, { timeout: 1000 }).catch(() => true);
+      if (!focused) await loc.focus({ timeout: 1000 }).catch(() => {});
+
+      // If the widget already highlights a row (Google's newer widget does), ArrowDown would move to the
+      // second row, so plain Enter is used instead.
+      let keys = a.keySequences[Math.min(attempt - 1, a.keySequences.length - 1)] ?? ['ArrowDown', 'Enter'];
+      if (keys[0] === 'ArrowDown' && (await this.optionAlreadyHighlighted())) {
+        keys = keys.slice(1);
+        this.tl.mark('a suggestion is already highlighted, skipping ArrowDown');
+      }
       for (let k = 0; k < keys.length; k++) {
         if (k > 0 && a.keyDelayMs > 0) await new Promise((r) => setTimeout(r, a.keyDelayMs));
         await this.page.keyboard.press(keys[k]);
@@ -320,7 +328,7 @@ export class SiteB {
 
       let outcome = await this.waitForOutcome(loc, search, a.revealFields, urlBefore, a.revealTimeoutMs);
       if (outcome === 'none') {
-        this.tl.mark('keys did not accept a suggestion', `${a.field}="${await loc.inputValue().catch(() => '?')}"`);
+        this.tl.mark('keys did not accept a suggestion', `${a.field}="${await loc.inputValue({ timeout: 1000 }).catch(() => '?')}"`);
         // Mouse fallback: first visible suggestion (Google .pac-item / ARIA option, shadow DOM pierced), else the deepest new element with the street.
         const clicked = await this.clickFirstSuggestion(needle);
         if (clicked) {
@@ -330,7 +338,7 @@ export class SiteB {
       }
       if (outcome === 'accepted') {
         for (const name of a.revealFields) await this.resolveLater(name);
-        this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue().catch(() => '?')}"`);
+        this.tl.mark('address accepted', `${a.revealFields.join(', ')} on page; ${a.field}="${await loc.inputValue({ timeout: 1000 }).catch(() => '?')}"`);
         return 'accepted';
       }
       if (outcome === 'advanced') {
@@ -352,7 +360,7 @@ export class SiteB {
       try {
         if (this.page.url() !== urlBefore) return 'advanced';
         if (agree && (await agree.count()) > 0) return 'advanced';
-        const inputGone = (await input.count()) === 0;
+        const inputGone = (await input.count().catch(() => 0)) === 0;
         if (inputGone && (await submit.count()) === 0) return 'advanced';
         if (!inputGone) {
           const value = await input.inputValue({ timeout: 1000 });
@@ -399,6 +407,17 @@ export class SiteB {
       await new Promise((r) => setTimeout(r, 50));
     }
     return null;
+  }
+
+  /** True when a suggestion row is already highlighted/selected (aria-selected, Google .pac-item-selected, or aria-activedescendant on the input). */
+  private async optionAlreadyHighlighted(): Promise<boolean> {
+    const sel = this.page.locator('[role="option"][aria-selected="true"], .pac-item-selected').filter({ visible: true });
+    if ((await sel.count().catch(() => 0)) > 0) return true;
+    return this.page.evaluate<boolean>(`(() => {
+      const deep = (root) => { const a = root.activeElement; return a && a.shadowRoot ? deep(a.shadowRoot) : a; };
+      const el = deep(document);
+      return !!(el && el.getAttribute && el.getAttribute('aria-activedescendant'));
+    })()`).catch(() => false);
   }
 
   /** Real mouse click on the first suggestion. Returns a description of what was clicked, or null. */
