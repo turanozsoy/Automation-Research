@@ -49,24 +49,27 @@ Then open <http://localhost:3000> in one tab per user you want to simulate. Each
 **Start workflow** (a profile is reserved and Website B opens in its own context, already logged in),
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 
-### Adding profiles with the browser extension (recommended)
+### Adding accounts (manual login, no extension)
 
-`extension/` is a small Chrome extension (Manifest V3) that exports the session of the tab you are
-logged in on and hands it to the service. Load it once: `chrome://extensions` → enable *Developer mode*
-→ *Load unpacked* → pick the `extension` folder. Then, on a Website B tab where you are logged in:
+Open <http://localhost:3000/admin/accounts> while the service runs.
 
-1. Click the extension icon.
-2. Enter a profile label and the account key (email/username, unique per profile).
-3. **Send to service** posts the session to `http://localhost:3000/import` while `npm start` is running.
-   The service stores it encrypted, opens Website B with it to verify, and the popup reports
-   *session valid* or *NOT authenticated* (then the profile is marked expired).
-   **Download file** saves `<label>.profile.json` instead; drop it into `data/inbox/` (created by the
-   service) and it is imported the same way, then the plaintext file is deleted.
+1. **Add Account** → enter an account name/number and the email → **Get Cookies**.
+2. The account record is created and a separate, visible Chromium opens on Website B for that account.
+   Log in there by hand (nothing is automated, nothing is pasted).
+3. Back on the page, press **Done**. The service checks Website B is not on its login page, exports the
+   browser context's storageState, encrypts it, saves it on that account, and closes the login browser.
+   If you press Done too early the page tells you and the browser stays open.
+4. **Refresh Cookies** repeats the flow, opening the browser with the account's current session, and
+   replaces the saved session on Done. **Remove** deletes the account and its session.
 
-Sending the same account key again re-seeds the existing profile (fresh cookies after a re-login).
-Set `IMPORT_TOKEN` on the service and the same token in the extension's options page if the service is
-reachable by anyone other than you. The service URL is configurable in the options page for later
-(VPS) use.
+The table shows: account, email, whether a session is saved, status (`expired` when Website B rejected
+the session, otherwise the latest workflow's link state `visited` / `verified`, else `none`), created,
+last session update, last workflow and its URL. Cookie values never reach the page; it only receives
+metadata from `/api/accounts`. The account record already carries a slot for a per-account proxy /
+egress configuration (not used yet).
+
+The login browser is not an automation browser: its only job is manual login → capture → close.
+Workflows load the saved sessions into the automation Chromium themselves.
 
 Profile commands (`npm run profile -- <cmd>`): `seed` (manual login in a visible Chromium),
 `import --file <storageState.json>`, `reseed <label>`, `list`, `verify <label>`, `disable`, `enable`,
@@ -157,9 +160,8 @@ src/service/url-capture.ts  generated-URL detectors (+ settle on the final URL)
 src/service/ws.ts           static test page + WebSocket server, routing by workflow id
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
-src/service/profiles/import.ts  storageState normalisation + insert/reseed + verify (used by /import and the inbox)
-src/service/profiles/inbox.ts   watched data/inbox folder for manually dropped session files
-extension/                  Chrome extension: export the logged-in session to the service (or a file)
+src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session
+src/test-a/admin.html, admin.js         the accounts management page (Website A side)
 src/test-a/                 the local Website A stand-in (index.html + client.js)
 dev/fake-b/                 local fake Website B (testing only)
 dev/e2e-client.ts           scripted end-to-end run

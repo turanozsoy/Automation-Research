@@ -63,6 +63,13 @@ const MIGRATIONS: string[] = [
   ALTER TABLE assignments ADD COLUMN visited_at INTEGER;
   ALTER TABLE assignments ADD COLUMN verified_at INTEGER;
   `,
+  `
+  -- An account can exist before it has a saved session. session_saved_at IS NULL = no session yet.
+  ALTER TABLE profiles ADD COLUMN session_saved_at INTEGER;
+  -- Reserved for the per-account network configuration (proxy / egress IP); not used yet.
+  ALTER TABLE profiles ADD COLUMN proxy_json TEXT;
+  UPDATE profiles SET session_saved_at = updated_at;
+  `,
 ];
 
 export function openDb(path: string): Db {

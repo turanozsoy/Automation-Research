@@ -11,6 +11,16 @@ export interface ProfileRow {
   storage_state_enc: Buffer; nonce: Buffer; data_key_enc: Buffer; key_version: number;
   needs_verify: number; cooldown_until: number | null; last_verified_at: number | null; last_used_at: number | null;
   use_count: number; consecutive_failures: number; state_reason: string | null; created_at: number; updated_at: number;
+  session_saved_at: number | null; proxy_json: string | null;
+}
+
+/** Safe, cookie-free view of an account for Website A's management page. */
+export interface AccountMeta {
+  id: string; name: string; email: string; hasSession: boolean;
+  createdAt: number; sessionSavedAt: number | null; lastUsedAt: number | null; lastVerifiedAt: number | null;
+  /** Business status: 'expired' (session dead) or the latest workflow's link state, else 'none'. */
+  status: 'expired' | 'visited' | 'verified' | 'none';
+  lastWorkflowAt: number | null; lastUrl: string | null; stateReason: string | null;
 }
 export interface AssignmentRow {
   workflow_id: string; profile_id: string; state: AssignmentState; instance_id: string; lease_expires_at: number;
@@ -38,10 +48,50 @@ export class ProfileStore {
     const id = randomUUID();
     const e = this.vault.encrypt(id, storageStateJson);
     const now = Date.now();
-    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, label, accountKey, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now);
+    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id, label, accountKey, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now);
     this.event(id, null, 'available', 'seeded');
     return this.get(id)!;
+  }
+
+  /** Create an account record with NO session yet (the manual login flow fills it in). */
+  createAccount(name: string, email: string): ProfileRow {
+    const id = randomUUID();
+    const e = this.vault.encrypt(id, JSON.stringify({ cookies: [], origins: [] }));
+    const now = Date.now();
+    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,NULL,?,?)`).run(id, name, email, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now);
+    this.event(id, null, 'available', 'account created (no session yet)');
+    return this.get(id)!;
+  }
+
+  /** Store a freshly captured session for an account: encrypted, back in rotation, counters reset. */
+  saveSession(id: string, storageStateJson: string): void {
+    const p = this.get(id);
+    if (!p) throw new Error(`account ${id} not found`);
+    const e = this.vault.encrypt(id, storageStateJson);
+    const now = Date.now();
+    this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?,
+      state=CASE WHEN state='disabled' THEN 'disabled' ELSE 'available' END, state_reason=NULL, consecutive_failures=0, needs_verify=0, cooldown_until=NULL, updated_at=? WHERE id=?`)
+      .run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id);
+    this.event(id, p.state, this.get(id)!.state, 'session saved from manual login');
+  }
+
+  /** Metadata for the accounts page: never includes cookies. */
+  listAccounts(): AccountMeta[] {
+    const rows = this.db.prepare(`
+      SELECT p.*, a.link_state AS link_state, a.created_at AS wf_at, a.result_url AS wf_url
+      FROM profiles p
+      LEFT JOIN assignments a ON a.workflow_id = (
+        SELECT workflow_id FROM assignments WHERE profile_id = p.id ORDER BY created_at DESC LIMIT 1
+      )
+      ORDER BY p.created_at`).all() as (ProfileRow & { link_state: string | null; wf_at: number | null; wf_url: string | null })[];
+    return rows.map((r) => ({
+      id: r.id, name: r.label, email: r.account_key, hasSession: r.session_saved_at !== null,
+      createdAt: r.created_at, sessionSavedAt: r.session_saved_at, lastUsedAt: r.last_used_at, lastVerifiedAt: r.last_verified_at,
+      status: r.state === 'expired' || r.state === 'invalid' ? 'expired' : r.link_state === 'verified' ? 'verified' : r.link_state === 'visited' ? 'visited' : 'none',
+      lastWorkflowAt: r.wf_at, lastUrl: r.wf_url, stateReason: r.state_reason,
+    }));
   }
 
   /** Replace the storageState of an existing profile (re-seed) and put it back into rotation. */
@@ -108,7 +158,7 @@ export class ProfileStore {
         UPDATE profiles SET state='reserved', last_used_at=?, use_count=use_count+1, updated_at=?
         WHERE id = (
           SELECT id FROM profiles
-          WHERE state='available' AND (cooldown_until IS NULL OR cooldown_until <= ?)
+          WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)
           ORDER BY last_used_at ASC NULLS FIRST, created_at ASC
           LIMIT 1
         )
@@ -248,7 +298,7 @@ export class ProfileStore {
     const rows = this.db.prepare('SELECT state, COUNT(*) n FROM profiles GROUP BY state').all() as { state: ProfileState; n: number }[];
     const c = (s: ProfileState) => rows.find((r) => r.state === s)?.n ?? 0;
     const now = Date.now();
-    const availableNow = (this.db.prepare("SELECT COUNT(*) n FROM profiles WHERE state='available' AND (cooldown_until IS NULL OR cooldown_until <= ?)").get(now) as { n: number }).n;
+    const availableNow = (this.db.prepare("SELECT COUNT(*) n FROM profiles WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)").get(now) as { n: number }).n;
     return {
       total: rows.reduce((a, r) => a + r.n, 0), available: availableNow,
       live: c('reserved') + c('starting') + c('active'), cooldown: c('cooldown'), expired: c('expired'), invalid: c('invalid'), disabled: c('disabled'),

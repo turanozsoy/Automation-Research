@@ -22,8 +22,6 @@ export interface Settings {
   queueTimeoutMs: number;
   /** Max automatic profile reassignments per workflow (expired profile discovered during prepare). */
   maxReassign: number;
-  /** Optional shared secret the browser extension must send as x-import-token to POST /import. */
-  importToken?: string;
 }
 
 const num = (name: string, def: number) => {
@@ -45,6 +43,5 @@ export function loadSettings(): Settings {
     leaseMs: num('LEASE_MS', 30_000),
     queueTimeoutMs: num('QUEUE_TIMEOUT_MS', 60_000),
     maxReassign: num('MAX_REASSIGN', 2),
-    importToken: process.env.IMPORT_TOKEN || undefined,
   };
 }

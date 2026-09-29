@@ -109,9 +109,9 @@ async function main(): Promise<void> {
     case 'list': {
       const rows = store.list();
       if (!rows.length) { console.log('no profiles. Seed one with: npm run profile -- seed --label acct1 --account <accountKey>'); break; }
-      console.log(['label'.padEnd(14), 'state'.padEnd(10), 'account'.padEnd(24), 'uses', 'last used'.padEnd(20), 'verified'.padEnd(20), 'reason'].join('  '));
+      console.log(['label'.padEnd(14), 'state'.padEnd(10), 'session'.padEnd(8), 'account'.padEnd(24), 'uses', 'last used'.padEnd(20), 'session saved'.padEnd(20), 'reason'].join('  '));
       for (const r of rows) {
-        console.log([r.label.padEnd(14), r.state.padEnd(10), r.account_key.padEnd(24), String(r.use_count).padStart(4), fmt(r.last_used_at).padEnd(20), fmt(r.last_verified_at).padEnd(20), r.state_reason ?? ''].join('  '));
+        console.log([r.label.padEnd(14), r.state.padEnd(10), (r.session_saved_at ? 'saved' : 'none').padEnd(8), r.account_key.padEnd(24), String(r.use_count).padStart(4), fmt(r.last_used_at).padEnd(20), fmt(r.session_saved_at).padEnd(20), r.state_reason ?? ''].join('  '));
       }
       console.log('\n' + JSON.stringify(store.status()));
       break;

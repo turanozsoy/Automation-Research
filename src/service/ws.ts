@@ -3,29 +3,28 @@ import { readFileSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ClientMsg, ServerMsg } from '../shared/messages.js';
-import type { BrowserManager } from './browser/manager.js';
+import type { LoginSessionManager } from './accounts/login-sessions.js';
 import type { SiteBConfig } from './config.js';
-import { importProfile, type ImportRequest } from './profiles/import.js';
 import type { ProfileStore } from './profiles/store.js';
 import type { Settings } from './settings.js';
 import type { Timeline } from './timeline.js';
 import type { WorkflowRegistry } from './workflows.js';
 
 const STATIC_DIR = resolve(process.cwd(), 'src/test-a');
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8' };
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
 
 export interface ServerDeps {
   cfg: SiteBConfig;
   registry: WorkflowRegistry;
   store: ProfileStore;
-  browser: BrowserManager;
+  logins: LoginSessionManager;
   settings: Settings;
   tl: Timeline;
 }
 
-/** Serves the test page, the import endpoint (browser extension), and the workflow WebSocket. */
+/** Serves the test page, the accounts admin page + JSON API, and the workflow WebSocket. */
 export function startServer(deps: ServerDeps): Promise<void> {
-  const { cfg, registry, store, browser, settings, tl } = deps;
+  const { cfg, registry, settings, tl } = deps;
   const server = createServer((req, res) => void handleHttp(req, res, deps));
   const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -80,50 +79,77 @@ export function startServer(deps: ServerDeps): Promise<void> {
     socket.on('close', () => { for (const id of own) registry.end(id, 'client disconnected'); });
   });
 
-  void ({ store, browser, settings }); // used by handleHttp via deps
   return new Promise((res) => server.listen(settings.port, () => res()));
 }
 
+// ---------------------------------------------------------------------------
+// HTTP: static pages + accounts API (metadata only, never cookies)
+// ---------------------------------------------------------------------------
+
 async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: ServerDeps): Promise<void> {
   const url = (req.url ?? '/').split('?')[0];
+  const method = req.method ?? 'GET';
+  const json = (code: number, body: object) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
 
-  // CORS so the browser extension (a different origin) can POST the session.
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'content-type, x-import-token');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
+  try {
+    if (url === '/admin/accounts' && method === 'GET') return serveStatic('/admin.html', res);
 
-  if (url === '/import' && req.method === 'POST') return handleImport(req, res, deps);
-  if (url === '/import' && req.method === 'GET') { // extension health check + target info
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, targetUrl: deps.cfg.targetUrl, baseUrl: deps.cfg.baseUrl, tokenRequired: !!deps.settings.importToken }));
-    return;
+    if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
+
+    if (url === '/api/accounts' && method === 'POST') {
+      const body = await readJson(req);
+      const name = String(body.name ?? '').trim();
+      const email = String(body.email ?? '').trim();
+      if (!name || !email) return json(400, { error: 'name and email are required' });
+      if (deps.store.byLabelOrId(email)) return json(409, { error: 'an account with this email already exists' });
+      const row = deps.store.createAccount(name, email);
+      deps.tl.mark('account created', `${name} (${email})`);
+      return json(201, { id: row.id });
+    }
+
+    const m = /^\/api\/accounts\/([^/]+)(?:\/(login\/start|login\/done|login\/cancel|login\/status))?$/.exec(url);
+    if (m) {
+      const id = decodeURIComponent(m[1]);
+      const action = m[2];
+      const account = deps.store.get(id);
+      if (!account) return json(404, { error: 'account not found' });
+
+      if (!action && method === 'DELETE') {
+        await deps.logins.cancel(id);
+        deps.store.remove(id);
+        deps.tl.mark('account removed', account.label);
+        return json(200, { ok: true });
+      }
+      if (action === 'login/start' && method === 'POST') return json(200, await deps.logins.start(id));
+      if (action === 'login/status' && method === 'GET') return json(200, deps.logins.status(id));
+      if (action === 'login/done' && method === 'POST') {
+        const r = await deps.logins.done(id);
+        return json(r.saved ? 200 : 409, r);
+      }
+      if (action === 'login/cancel' && method === 'POST') { await deps.logins.cancel(id); return json(200, { ok: true }); }
+    }
+
+    return serveStatic(url, res);
+  } catch (e) {
+    return json(500, { error: e instanceof Error ? e.message : String(e) });
   }
-  serveStatic(url, res);
 }
 
-async function handleImport(req: IncomingMessage, res: ServerResponse, deps: ServerDeps): Promise<void> {
-  const { store, browser, cfg, settings, tl } = deps;
-  const send = (code: number, body: object) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
-
-  if (settings.importToken && req.headers['x-import-token'] !== settings.importToken) {
-    return send(401, { ok: false, error: 'invalid or missing x-import-token' });
+function activeLogins(deps: ServerDeps): Record<string, ReturnType<LoginSessionManager['status']>> {
+  const out: Record<string, ReturnType<LoginSessionManager['status']>> = {};
+  for (const a of deps.store.list()) {
+    const s = deps.logins.status(a.id);
+    if (s.open) out[a.id] = s;
   }
-  let body = '';
-  let tooBig = false;
-  req.on('data', (c) => { body += c; if (body.length > 8 * 1024 * 1024) { tooBig = true; req.destroy(); } });
-  req.on('end', async () => {
-    if (tooBig) return send(413, { ok: false, error: 'payload too large' });
-    try {
-      const parsed = JSON.parse(body) as ImportRequest;
-      const result = await importProfile(parsed, store, browser, cfg);
-      tl.mark('profile imported via extension', `${result.label}: ${result.action}, ${result.detail}`);
-      send(200, { ok: true, ...result });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      tl.mark('profile import failed', msg);
-      send(400, { ok: false, error: msg });
-    }
+  return out;
+}
+
+function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 1_000_000) req.destroy(); });
+    req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); } });
+    req.on('error', reject);
   });
 }
 
