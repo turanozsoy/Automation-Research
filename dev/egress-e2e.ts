@@ -23,7 +23,9 @@ const dataDir = resolve(process.cwd(), process.env.DATA_DIR ?? 'data/fake');
 const SERVICE_LOG = process.env.SERVICE_LOG;
 const P1 = { line: '127.0.0.1:3100:user1:pass1', control: 'http://127.0.0.1:3900', user: 'user1', pass: 'pass1' };
 const P2 = { line: '127.0.0.1:3101:user2:pass2', control: 'http://127.0.0.1:3901', user: 'user2', pass: 'pass2' };
-const SECRETS = [P1.pass, P2.pass, P1.user, P2.user];
+const P3 = { line: '127.0.0.1:3102:user3:pass3', control: 'http://127.0.0.1:3902', user: 'user3', pass: 'pass3' }; // started with --delay 11000: slower than the unscaled 10 s action timeout
+const SECRETS = [P1.pass, P2.pass, P3.pass, P1.user, P2.user, P3.user];
+const PASSWORDS = [P1.pass, P2.pass, P3.pass];
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
 const check = (cond: unknown, what: string) => { if (!cond) failures++; console.log(`  ${cond ? 'ok  ' : 'FAIL'} ${what}`); };
@@ -79,7 +81,7 @@ async function cleanup(): Promise<void> {
   const l = await egressList();
   for (const e of l.egress) {
     if (e.kind === 'direct') { if (e.state !== 'available') await api(`/api/admin/egress/${e.id}/release`, { method: 'POST' }); continue; }
-    if (/^127\.0\.0\.1:310[01]$/.test(e.label)) { if (e.state === 'in_use') continue; await api(`/api/admin/egress/${e.id}`, { method: 'DELETE' }); }
+    if (/^127\.0\.0\.1:310[012]$/.test(e.label)) { if (e.state === 'in_use') continue; await api(`/api/admin/egress/${e.id}`, { method: 'DELETE' }); }
   }
   await setDown(P1.control, false); await setDown(P2.control, false);
 }
@@ -191,14 +193,39 @@ console.log('[e2e:egress] 3. health takes a proxy down; a failing proxy fails on
   for (const a of [A, B, C, D, E]) a.close();
 }
 
+console.log('[e2e:egress] 3b. slow proxy: waits are scaled, the workflow completes instead of timing out');
+{
+  const slowUp = await fetch(`${P3.control}/stats`).then(() => true).catch(() => false);
+  if (!slowUp) console.log('  (skipped: no fake proxy with --delay on 3102)');
+  else {
+    for (const e of (await egressList()).egress.filter((x) => x.kind !== 'direct' && x.state === 'available')) await api(`/api/admin/egress/${e.id}/retire`, { method: 'POST' });
+    const imp = await api('/api/admin/egress', { method: 'POST', body: JSON.stringify({ line: P3.line }) });
+    check(imp.body.added === 1, 'slow proxy imported');
+    const devEvents: { name: string; workflowId?: string; ts: number }[] = [];
+    const devWs = new WebSocket(`ws://localhost:${port}/ws`);
+    devWs.on('message', (d) => { const m = JSON.parse(d.toString()); if (m.type === 'event') devEvents.push({ name: m.name, workflowId: m.workflowId, ts: m.ts }); });
+    const F = new Applicant('Fiona', '555666777');
+    await F.start();
+    const rf = await F.finish();
+    check(rf.state === 'completed' && F.egressUsed() === (await byLabel('127.0.0.1:3102')).id, `Fiona completed through the 11 s/request proxy (${rf.state})`);
+    const wf = F.workflowId()!;
+    const mine = devEvents.filter((e) => e.workflowId === wf);
+    check(mine.some((e) => /timeouts scaled for proxy egress/.test(e.name)), 'waits were scaled for the proxied run');
+    const opened = mine.find((e) => /Website B opened/.test(e.name)), clicked = mine.find((e) => /Recommended clicked/.test(e.name));
+    check(!!opened && !!clicked && clicked.ts - opened.ts > 10_000, `Recommended step took ${opened && clicked ? clicked.ts - opened.ts : '?'} ms, beyond the unscaled 10 s action timeout, and still succeeded`);
+    devWs.close(); F.close();
+    for (const e of (await egressList()).egress.filter((x) => x.kind !== 'direct' && x.state !== 'in_use' && x.label !== '127.0.0.1:3102')) await api(`/api/admin/egress/${e.id}/release`, { method: 'POST' });
+  }
+}
+
 console.log('[e2e:egress] 4. no credential anywhere');
 {
   let leaks: string[] = [];
   for (const t of (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((x) => x.name)) {
-    for (const row of db.prepare(`SELECT * FROM "${t}"`).all() as Record<string, unknown>[]) for (const [c, v] of Object.entries(row)) if (typeof v === 'string' && [P1.pass, P2.pass].some((s) => v.includes(s))) leaks.push(`${t}.${c}`);
+    for (const row of db.prepare(`SELECT * FROM "${t}"`).all() as Record<string, unknown>[]) for (const [c, v] of Object.entries(row)) if (typeof v === 'string' && PASSWORDS.some((s) => v.includes(s))) leaks.push(`${t}.${c}`);
   }
   check(leaks.length === 0, leaks.length ? `password in ${leaks.join(', ')}` : 'no password in any table');
-  if (SERVICE_LOG && existsSync(SERVICE_LOG)) check(![P1.pass, P2.pass].some((s) => readFileSync(SERVICE_LOG, 'utf8').includes(s)), 'no password in the service log');
+  if (SERVICE_LOG && existsSync(SERVICE_LOG)) check(!PASSWORDS.some((s) => readFileSync(SERVICE_LOG, 'utf8').includes(s)), 'no password in the service log');
   const html = await (await fetch(`${base}/admin/accounts`)).text();
   const b = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
   const p = await b.newPage();
@@ -207,7 +234,7 @@ console.log('[e2e:egress] 4. no credential anywhere');
   const dom = await p.content();
   const rowsText = await p.locator('#egressRows').innerText();
   await b.close();
-  check(![P1.pass, P2.pass, P1.user, P2.user].some((s) => html.includes(s) || dom.includes(s)), 'no credential in the operations page DOM');
+  check(!SECRETS.some((s) => html.includes(s) || dom.includes(s)), 'no credential in the operations page DOM');
   check(/127\.0\.0\.1:3100/.test(rowsText) && /Held|Available|In use/.test(rowsText) && /Healthy|Degraded|Down/.test(rowsText), 'operations page lists proxies with status and health');
 }
 

@@ -13,6 +13,7 @@ const arg = (name: string, def: string) => { const i = process.argv.indexOf(`--$
 const port = Number(arg('port', '3100'));
 const control = Number(arg('control', String(port + 800)));
 const auth = arg('auth', '');
+const delay = Number(arg('delay', '0')); // ms added before every forwarded request / tunnel: simulates a slow proxy
 const expected = auth ? 'Basic ' + Buffer.from(auth).toString('base64') : null;
 const stats = { tunnels: 0, requests: 0, active: 0, maxActive: 0, authFailures: 0, down: false };
 
@@ -32,24 +33,28 @@ const proxy = createHttp((req, res) => {
   let u: URL;
   try { u = new URL(req.url ?? ''); } catch { res.writeHead(400); res.end(); return; }
   const headers = { ...req.headers }; delete headers['proxy-authorization']; delete headers['proxy-connection'];
-  const out = httpRequest({ host: u.hostname, port: u.port || 80, method: req.method, path: u.pathname + u.search, headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
-  out.on('error', () => { res.writeHead(502); res.end(); });
-  req.pipe(out);
+  const forward = () => {
+    const out = httpRequest({ host: u.hostname, port: u.port || 80, method: req.method, path: u.pathname + u.search, headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
+    out.on('error', () => { res.writeHead(502); res.end(); });
+    req.pipe(out);
+  };
+  if (delay > 0) setTimeout(forward, delay); else forward();
 });
 proxy.on('connect', (req, socket, head) => {
   if (stats.down) { socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'); return; }
   if (!authorized(req)) { socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="fake-proxy"\r\n\r\n'); return; }
   const [host, p] = (req.url ?? '').split(':');
-  const target = connect(Number(p || 443), host, () => {
+  const target = connect(Number(p || 443), host, () => { setTimeout(established, delay); });
+  const established = () => {
     stats.tunnels++; track(socket);
     socket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
     if (head.length) target.write(head);
     socket.pipe(target); target.pipe(socket);
-  });
+  };
   target.on('error', () => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
   socket.on('error', () => target.destroy());
 });
-proxy.listen(port, () => console.log(`[fake-proxy] proxy on ${port}${auth ? ' (auth)' : ''}, control on ${control}`));
+proxy.listen(port, () => console.log(`[fake-proxy] proxy on ${port}${auth ? ' (auth)' : ''}${delay ? `, ${delay} ms delay` : ''}, control on ${control}`));
 
 createHttp((req: IncomingMessage, res: ServerResponse) => {
   if (req.url === '/stats') { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(stats)); return; }

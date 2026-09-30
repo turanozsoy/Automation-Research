@@ -155,8 +155,23 @@ export interface SiteBConfig {
     iframe: number;
     checkoutStep: number;
     generatedUrl: number;
+    /** Multiplier applied to every wait (timeouts, address settle, post-submit watch) when a workflow runs through a proxy egress. */
+    proxyMultiplier: number;
   };
   debounceMs: number;
+}
+
+/** A copy of the config with every wait scaled for a slower network path (a proxied workflow). Selectors and logic untouched. */
+export function scaleTimeouts(cfg: SiteBConfig, factor: number): SiteBConfig {
+  if (!(factor > 1)) return cfg;
+  const m = (n: number) => Math.round(n * factor);
+  return {
+    ...cfg,
+    timeouts: { ...cfg.timeouts, pageLoad: m(cfg.timeouts.pageLoad), action: m(cfg.timeouts.action), iframe: m(cfg.timeouts.iframe), checkoutStep: m(cfg.timeouts.checkoutStep), generatedUrl: m(cfg.timeouts.generatedUrl) },
+    addressFinalize: cfg.addressFinalize ? { ...cfg.addressFinalize, suggestionsWaitMs: m(cfg.addressFinalize.suggestionsWaitMs), settleMaxMs: m(cfg.addressFinalize.settleMaxMs) } : cfg.addressFinalize,
+    fieldErrors: { ...cfg.fieldErrors, postSubmitWaitMs: m(cfg.fieldErrors.postSubmitWaitMs) },
+    generatedUrl: { ...cfg.generatedUrl, settleMaxMs: m(cfg.generatedUrl.settleMaxMs) },
+  };
 }
 
 interface RawFieldConfig {
@@ -247,6 +262,7 @@ export function loadConfig(): SiteBConfig {
       iframe: raw.timeouts.iframe ?? 30000,
       checkoutStep: raw.timeouts.checkoutStep ?? 30000,
       generatedUrl: raw.timeouts.generatedUrl ?? 30000,
+      proxyMultiplier: raw.timeouts.proxyMultiplier ?? 2,
     },
     debounceMs: raw.debounceMs ?? 150,
   };

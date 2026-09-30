@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ErrorCode, FieldUpdateMsg, PoolStatus, ServerMsg } from '../shared/messages.js';
 import type { BrowserManager } from './browser/manager.js';
-import type { SiteBConfig } from './config.js';
+import { scaleTimeouts, type SiteBConfig } from './config.js';
 import type { ProfileStore, ReleaseOutcome } from './profiles/store.js';
 import type { Settings } from './settings.js';
 import { AutomationError, type Timeline } from './timeline.js';
@@ -151,7 +151,13 @@ export class WorkflowRegistry {
       const proxy = asg?.egress_id ? this.store.egress.proxyOptions(asg.egress_id) : null;
       if (asg?.egress_id && asg.egress_id !== 'direct') tl.mark('egress', this.store.egress.get(asg.egress_id)?.label ?? asg.egress_id);
       const bundle = await this.browser.createContext(workflowId, storageState, proxy);
-      wf = new Workflow(workflowId, bundle, this.cfg, tl, this.send);
+      // A proxied path is slower and more variable: every wait in this run is scaled, nothing else changes.
+      let runCfg = this.cfg;
+      if (proxy && this.cfg.timeouts.proxyMultiplier > 1) {
+        runCfg = scaleTimeouts(this.cfg, this.cfg.timeouts.proxyMultiplier);
+        tl.mark('timeouts scaled for proxy egress', `x${this.cfg.timeouts.proxyMultiplier}: action ${runCfg.timeouts.action} ms, page load ${runCfg.timeouts.pageLoad} ms, checkout step ${runCfg.timeouts.checkoutStep} ms`);
+      }
+      wf = new Workflow(workflowId, bundle, runCfg, tl, this.send);
       this.live.set(workflowId, wf);
       wf.setTerminalHandler((outcome, code) => {
         const p = this.onTerminal(workflowId, outcome, code).finally(() => { if (this.terminals.get(workflowId) === p) this.terminals.delete(workflowId); });

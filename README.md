@@ -289,6 +289,7 @@ plain language, and sends `app.validation_failed` with field names only.
 | `verification.successTexts`, `verification.pollMs`, `verification.timeoutMs` | Texts that mark the Website B page as verified after the link was delivered (any frame, shadow DOM included, apostrophes normalised); how often to look; when to give up (workflow ends as abandoned, record stays visited/none). |
 | `generatedUrl.settleMs`, `generatedUrl.settleMaxMs` | After the first match, keep watching until no *new* matching URL appears for `settleMs` (capped by `settleMaxMs`), then report the URL a frame actually ended on. `settleMs: 0` = first match wins. |
 | `timeouts.*` | Per-step timeouts in ms. |
+| `timeouts.proxyMultiplier` | Default `2`. When a workflow runs through a proxy egress every wait is multiplied by this: step timeouts, page load, address suggestion / settle waits, the post-submit watch and the URL settle cap. Direct runs are unchanged. Set `1` to disable. |
 | `debounceMs` | Client-side debounce per field. |
 
 **Local override:** put your real URLs and selectors in `config/site-b.local.json` (gitignored). It is
