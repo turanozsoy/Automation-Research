@@ -14,7 +14,7 @@
     c.width = Math.round(width * scale); c.height = Math.round(height * scale);
     const ctx = c.getContext('2d');
     ctx.drawImage(source, 0, 0, c.width, c.height);
-    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.92));
+    const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
     ctx.clearRect(0, 0, c.width, c.height); c.width = 0; c.height = 0;
     return blob;
   }
@@ -71,7 +71,8 @@
     status('Decoding…');
     const bitmap = await createImageBitmap(file);
     try {
-      return await decodeOnService(await downsize(bitmap, bitmap.width, bitmap.height, 1600));
+      // Keep the photo large: a whole-card photo shrunk to 1600 px leaves the barcode too small to read.
+      return await decodeOnService(await downsize(bitmap, bitmap.width, bitmap.height, 3200));
     } finally {
       bitmap.close();
     }
@@ -93,7 +94,7 @@
       if (!stream) return;
       if (!busy && video.readyState >= 2) {
         busy = true;
-        const r = await decodeOnService(await downsize(video, video.videoWidth, video.videoHeight, 1600)).catch(() => null);
+        const r = await decodeOnService(await downsize(video, video.videoWidth, video.videoHeight, 2400)).catch(() => null);
         busy = false;
         if (!stream) return;
         if (r && r.ok) { stopCamera(); handleResult(r); return; }

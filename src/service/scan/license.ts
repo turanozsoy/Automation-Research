@@ -19,12 +19,20 @@ function prepare(): void {
   prepared = true;
 }
 
-/** Decode the barcode text from an image (PNG/JPEG bytes). Returns null when no PDF417 is found. */
+/**
+ * Decode the barcode text from an image (PNG/JPEG bytes). Returns null when no PDF417 is
+ * found. Whole-card phone photos leave the barcode small and unevenly lit, so several
+ * binarizers are tried in turn; each attempt takes tens to a few hundred milliseconds.
+ */
 export async function decodePdf417(image: Buffer): Promise<string | null> {
   prepare();
-  const results = await readBarcodes(new Blob([new Uint8Array(image)]), { formats: ['PDF417'], tryHarder: true, tryRotate: true, tryDownscale: true, maxNumberOfSymbols: 1, textMode: 'Plain' });
-  const hit = results.find((r) => r.isValid && r.text);
-  return hit ? hit.text : null;
+  const blob = new Blob([new Uint8Array(image)]);
+  for (const binarizer of ['LocalAverage', 'GlobalHistogram', 'FixedThreshold', 'BoolCast'] as const) {
+    const results = await readBarcodes(blob, { formats: ['PDF417'], tryHarder: true, tryRotate: true, tryDownscale: true, maxNumberOfSymbols: 1, textMode: 'Plain', binarizer });
+    const hit = results.find((r) => r.isValid && r.text);
+    if (hit) return hit.text;
+  }
+  return null;
 }
 
 const title = (s: string) => s.toLowerCase().replace(/(^|[\s\-'])([a-z])/g, (_m, p, c) => p + c.toUpperCase());
