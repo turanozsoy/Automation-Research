@@ -393,6 +393,109 @@
   $('#btnMore').onclick = () => loadVerified(false, true);
 
   // =====================================================================
+  // applicant page content (copy only): GET/PUT /api/admin/content
+  // =====================================================================
+  let content = { groups: [], fields: [] };
+  let contentGroup = null;
+  const contentEdits = new Map(); // key -> draft text (differs from the saved value)
+
+  async function loadContent() {
+    content = await api('/api/admin/content');
+    if (!contentGroup || !content.groups.includes(contentGroup)) contentGroup = content.groups[0] || null;
+    renderContent();
+  }
+  const fieldsIn = (g) => content.fields.filter((f) => f.group === g);
+  const draftOf = (f) => (contentEdits.has(f.key) ? contentEdits.get(f.key) : f.value);
+  const problemOf = (f) => {
+    const v = draftOf(f);
+    if (!v.trim()) return 'cannot be empty';
+    if (v.length > f.max) return `${v.length - f.max} over the limit`;
+    return '';
+  };
+
+  function renderContent() {
+    const tabs = $('#contentTabs');
+    tabs.replaceChildren(...content.groups.map((g) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = `content-tab${g === contentGroup ? ' active' : ''}${fieldsIn(g).some((f) => contentEdits.has(f.key)) ? ' edited' : ''}`;
+      const custom = fieldsIn(g).filter((f) => f.custom).length;
+      b.innerHTML = `<span>${esc(g)}</span><span class="n" title="Fields edited from the default">${custom ? `${custom} edited` : ''}</span>`;
+      b.onclick = () => { contentGroup = g; renderContent(); };
+      return b;
+    }));
+    const wrap = $('#contentFields');
+    const fields = fieldsIn(contentGroup);
+    wrap.replaceChildren(...fields.map((f) => {
+      const row = document.createElement('div');
+      const err = problemOf(f);
+      row.className = `cfield${f.custom ? ' custom' : ''}${contentEdits.has(f.key) ? ' dirty' : ''}${err ? ' invalid' : ''}`;
+      row.dataset.key = f.key;
+      const vars = f.vars && f.vars.length ? `<span class="cvars">Placeholders: ${esc(f.vars.join(', '))}</span>` : '';
+      row.innerHTML = `<label class="clabel" for="c-${esc(f.key)}">${esc(f.label)}<span class="ckey">${esc(f.key)}</span>${vars}</label>
+        <div>${f.multiline ? `<textarea id="c-${esc(f.key)}" rows="2" maxlength="${f.max + 200}"></textarea>` : `<input id="c-${esc(f.key)}" type="text" maxlength="${f.max + 200}">`}
+          <div class="cmeta"><span class="ccount"></span>${err ? `<span class="cerr">${esc(err)}</span>` : ''}<span class="cstate">${f.custom ? `edited${f.updatedAt ? ' ' + esc(ago(f.updatedAt)) : ''}` : 'default'}</span><button type="button" class="creset" ${f.custom || contentEdits.has(f.key) ? '' : 'disabled'}>Reset to default</button></div>
+        </div>`;
+      const input = row.querySelector('input, textarea');
+      input.value = draftOf(f);
+      const count = row.querySelector('.ccount');
+      const updateCount = () => { count.textContent = `${input.value.length} / ${f.max}`; count.className = `ccount${input.value.length > f.max ? ' over' : ''}`; };
+      updateCount();
+      input.addEventListener('input', () => {
+        if (input.value === f.value) contentEdits.delete(f.key); else contentEdits.set(f.key, input.value);
+        updateCount();
+        row.classList.toggle('dirty', contentEdits.has(f.key));
+        row.querySelector('.creset').disabled = !(f.custom || contentEdits.has(f.key));
+        updateContentActions();
+      });
+      row.querySelector('.creset').onclick = () => {
+        if (f.custom) contentEdits.set(f.key, null); else contentEdits.delete(f.key);
+        input.value = f.def; updateCount(); row.classList.toggle('dirty', contentEdits.has(f.key)); updateContentActions();
+      };
+      return row;
+    }));
+    if (!fields.length) wrap.innerHTML = '<p class="empty">No fields in this group.</p>';
+    updateContentActions();
+  }
+
+  function updateContentActions() {
+    const n = contentEdits.size;
+    const bad = content.fields.some((f) => contentEdits.has(f.key) && contentEdits.get(f.key) !== null && problemOf(f));
+    $('#contentDirty').textContent = n ? `${n} unsaved change${n === 1 ? '' : 's'}${bad ? ' · fix the highlighted field' : ''}` : '';
+    $('#btnContentSave').disabled = !n || bad;
+    for (const b of document.querySelectorAll('.content-tab')) {
+      const g = b.querySelector('span').textContent;
+      b.classList.toggle('edited', fieldsIn(g).some((f) => contentEdits.has(f.key)));
+    }
+  }
+
+  async function saveContent() {
+    const values = Object.fromEntries(contentEdits);
+    if (!Object.keys(values).length) return;
+    $('#btnContentSave').disabled = true;
+    try {
+      const r = await api('/api/admin/content', { method: 'PUT', body: JSON.stringify({ values }) });
+      for (const k of r.saved) contentEdits.delete(k);
+      const errs = Object.entries(r.errors || {});
+      msg(errs.length ? `Saved ${r.saved.length}; ${errs.map(([k, e]) => `${k}: ${e}`).join('; ')}` : `Saved ${r.saved.length} change${r.saved.length === 1 ? '' : 's'}. Live on the next applicant page load.`, errs.length > 0);
+    } catch (e) { msg(e.message, true); }
+    await loadContent();
+  }
+  async function resetContentGroup() {
+    const fields = fieldsIn(contentGroup);
+    const custom = fields.filter((f) => f.custom);
+    for (const f of fields) contentEdits.delete(f.key);
+    if (!custom.length) { renderContent(); return; }
+    if (!confirm(`Reset ${custom.length} edited field${custom.length === 1 ? '' : 's'} in “${contentGroup}” to the defaults?`)) { renderContent(); return; }
+    try {
+      await api('/api/admin/content', { method: 'PUT', body: JSON.stringify({ values: Object.fromEntries(custom.map((f) => [f.key, null])) }) });
+      msg(`“${contentGroup}” reset to defaults.`);
+    } catch (e) { msg(e.message, true); }
+    await loadContent();
+  }
+  $('#btnContentSave').onclick = saveContent;
+  $('#btnContentResetGroup').onclick = resetContentGroup;
+
+  // =====================================================================
   // live updates + boot
   // =====================================================================
   function connectAdmin() {
@@ -422,6 +525,7 @@
   load().catch((e) => msg(e.message, true));
   loadVerified(true);
   loadEgress();
+  loadContent().catch((e) => msg(`Applicant content: ${e.message}`, true));
   connectAdmin();
   pollMode();
   setInterval(pollMode, 15000);

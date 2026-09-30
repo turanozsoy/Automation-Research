@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { ApplicantContent } from './applications/content.js';
 import type { Duplex } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
@@ -18,7 +19,8 @@ import type { WorkflowRegistry } from './workflows.js';
 
 const INTERNAL_DIR = resolve(process.cwd(), 'src/test-a');   // /debug harness + /admin/accounts (internal pages)
 const APPLY_DIR = resolve(process.cwd(), 'src/apply');       // the public Shipzora application
-const APPLY_CONFIG = resolve(process.cwd(), process.env.APPLY_CONFIG ?? 'config/apply-questions.json');
+export const APPLY_CONFIG_PATH = resolve(process.cwd(), process.env.APPLY_CONFIG ?? 'config/apply-questions.json');
+const APPLY_CONFIG = APPLY_CONFIG_PATH;
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
 
 /** Explicit routes only: nothing under src/ is reachable by guessing a file name. */
@@ -43,6 +45,8 @@ export interface ServerDeps {
   egressHealth: EgressHealth;
   settings: Settings;
   tl: Timeline;
+  /** Applicant-facing copy (defaults in code, overrides edited on the operations page). */
+  content: ApplicantContent;
   /** Set by startServer: nudge the operations page. */
   notifyAdmin?: (what: 'verified' | 'accounts' | 'egress') => void;
 }
@@ -243,7 +247,21 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       const body = await readJson(req);
       try { return json(200, await deps.browserMode.request(body.mode as never)); } catch (e) { return json(400, { error: e instanceof Error ? e.message : String(e) }); }
     }
-    if (method === 'GET' && url === '/api/apply/config') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(readFileSync(APPLY_CONFIG)); return; }
+    if (method === 'GET' && url === '/api/apply/config') {
+      // questions (keys/values fixed in config) + the current applicant copy (defaults merged with saved overrides)
+      const questions = JSON.parse(readFileSync(APPLY_CONFIG, 'utf8')) as Record<string, unknown>;
+      return json(200, { ...questions, content: deps.content.values() });
+    }
+
+    // ---- applicant page content (operations page): copy only, plain text ----
+    if (url === '/api/admin/content' && method === 'GET') return json(200, deps.content.list());
+    if (url === '/api/admin/content' && method === 'PUT') {
+      const body = await readJson(req);
+      const values = body.values;
+      if (!values || typeof values !== 'object' || Array.isArray(values)) return json(400, { error: 'values object required' });
+      const r = deps.content.save(values as Record<string, string | null>);
+      return json(Object.keys(r.errors).length && !r.saved.length ? 400 : 200, r);
+    }
 
     // ---- applicant session ----
     if (url === '/api/applications' && method === 'POST') {

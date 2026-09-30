@@ -173,6 +173,14 @@ const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX assignments_live_application ON assignments(application_id)
     WHERE application_id IS NOT NULL AND state IN ('allocating','preparing','ready','submitting','paused');
   `,
+  // 7: applicant-facing copy overrides edited from the operations page (copy only; defaults live in code)
+  `
+  CREATE TABLE site_content (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 export function openDb(path: string): Db {

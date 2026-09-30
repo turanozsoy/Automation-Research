@@ -90,8 +90,21 @@ try {
   dbEarly.close();
   check(started === 1, 'background workflow started for the application while the applicant is on the code screen');
 
-  console.log('[e2e:apply] 5. verification code');
+  console.log('[e2e:apply] 5. verification code (+ editable copy from the operations page)');
   check(await p.locator('#f-code').getAttribute('autocomplete') === 'one-time-code' && await p.locator('#f-code').getAttribute('inputmode') === 'numeric', 'OTP input attributes');
+  const put = (values: Record<string, string | null>) => fetch(`${base}/api/admin/content`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values }) }).then((r) => r.json() as Promise<{ saved: string[]; errors: Record<string, string> }>);
+  const edit = await put({ 'code.title': 'Enter your code', 'code.cta': 'Verify and continue', 'code.intro': 'Type the <b>{n}</b>-digit code from your welcome email.', 'code.label': '', 'nope.key': 'x' });
+  check(edit.saved.length === 3 && /empty/.test(edit.errors['code.label'] ?? '') && /unknown/.test(edit.errors['nope.key'] ?? ''), 'content API saves valid keys, rejects empty text and unknown keys');
+  await p.reload();
+  await h1(/Enter your code/, 10000);
+  atPath('/step-5', 'reload on the code step with edited copy');
+  check((await p.locator('#help-code').innerText()) === 'Type the <b>9</b>-digit code from your welcome email.' && (await p.locator('#help-code b').count()) === 0, 'edited copy is rendered as plain text ({n} substituted, no HTML)');
+  check(/Verify and continue/.test(await p.locator('button.btn-primary').innerText()), 'edited Continue button text');
+  check(await p.locator('#f-code').getAttribute('name') === 'code' && await p.locator('#f-code').getAttribute('id') === 'f-code', 'field hooks unchanged by copy edits');
+  const reset = await put({ 'code.title': null, 'code.cta': null, 'code.intro': null });
+  check(reset.saved.length === 3, 'reset to default');
+  await p.reload();
+  await h1(/Verification code/, 10000);
   await p.fill('#f-code', CODE);
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your experience/);
@@ -200,7 +213,9 @@ try {
   db.close();
   const dbg = await (await fetch(`${base}/debug`)).text();
   const adm = await (await fetch(`${base}/admin/accounts`)).text();
-  check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications') && (await fetch(`${base}/admin.css`)).status === 200, '/debug and /admin/accounts still served');
+  check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications') && adm.includes('Applicant page content') && (await fetch(`${base}/admin.css`)).status === 200, '/debug and /admin/accounts still served (with the Applicant page content section)');
+  const contentList = await (await fetch(`${base}/api/admin/content`)).json() as { groups: string[]; fields: { key: string; custom: boolean; value: string }[] };
+  check(contentList.groups.length === 8 && contentList.fields.some((f) => f.key === 'opt.scheduleType.part_time.label') && contentList.fields.some((f) => f.key === 'landing.pill') && contentList.fields.every((f) => !f.custom), 'content schema covers landing, steps, questions and role-ready; nothing left edited');
   check((await fetch(`${base}/debug.html`)).status === 404 && (await fetch(`${base}/index.html`)).status === 404, 'files are not reachable by guessing names');
   check((await fetch(`${base}/privacy`)).status === 200, 'footer placeholder pages respond');
   const direct = await fetch(`${base}/step-3`);

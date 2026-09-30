@@ -34,7 +34,16 @@
   // ---------------------------------------------------------------------------
   // state
   // ---------------------------------------------------------------------------
-  let config = { verificationCode: { length: 6, help: '' }, screens: [] };
+  let config = { verificationCode: { length: 6, help: '' }, screens: [], content: {} };
+  /** Applicant copy by key (config.content, defaults merged with edits made on the operations page); always rendered as text. */
+  const t = (key, vars = {}) => {
+    let s = (config.content && typeof config.content[key] === 'string') ? config.content[key] : '';
+    s = s.replace(/\{n\}/g, String(config.verificationCode.length));
+    s = s.replace(/\{name\}/g, vars.name !== undefined ? vars.name : '');
+    return s;
+  };
+  /** Text with line breaks (multiline copy such as the hero headline), built from text nodes. */
+  const lines = (text) => text.split('\n').flatMap((l, i) => (i ? [el('br'), l] : [l]));
   let app = null;          // latest ApplicationView from the server
   let step = 'landing';    // current screen id
   let ws = null;
@@ -87,7 +96,7 @@
     ws.onclose = (ev) => {
       ws = null;
       if (ev.code === 1008 || ev.code === 4401) return;
-      if (step !== 'landing') setNotice('Reconnecting… your progress is saved.', 'warn');
+      if (step !== 'landing') setNotice(t('notice.reconnecting'), 'warn');
       const delay = Math.min(15000, 800 * 2 ** wsRetry++);
       setTimeout(connect, delay);
     };
@@ -113,12 +122,12 @@
       const missing = m.missingFields || [];
       const target = missing.some((f) => ['firstName', 'lastName', 'mobileNumber', 'email'].includes(f)) ? 'contact' : missing.includes('dateOfBirth') ? 'dob' : 'address';
       go(target);
-      setNotice('Please complete the highlighted information to continue.', 'warn');
+      setNotice(t('notice.missing'), 'warn');
       return;
     }
     if (m.code === 'INVALID_STATE' && step === 'code' && /already/i.test(m.message)) { render(); return; }
     if (m.code === 'UNAUTHENTICATED') { app = null; go('landing'); return; }
-    if (m.code === 'BAD_REQUEST' || m.code === 'INVALID_FIELD') setNotice('Something in this step could not be saved. Please check your entries and try again.', 'error');
+    if (m.code === 'BAD_REQUEST' || m.code === 'INVALID_FIELD') setNotice(t('notice.saveFailed'), 'error');
   }
 
   // ---------------------------------------------------------------------------
@@ -260,7 +269,7 @@
   }
   function validateCode() {
     const n = config.verificationCode.length;
-    return digits(local.code).length === n ? [] : [['code', `Enter the ${n}-digit verification code.`]];
+    return digits(local.code).length === n ? [] : [['code', t('code.invalid')]];
   }
   function validateScreen(screen) {
     return screen.questions.filter((q) => local.answers[q.key] === undefined || local.answers[q.key] === '').map((q) => [q.key, 'Choose one option to continue.']);
@@ -309,9 +318,9 @@
   }
 
   // Bottom action area. Back navigation lives in the header arrow (#headerBack), not next to the primary button.
-  function actions({ primary = 'Continue', onPrimary, disabled = false }) {
+  function actions({ primary, onPrimary, disabled = false }) {
     return el('div', { class: 'actions' },
-      el('button', { type: 'submit', class: 'btn btn-primary', text: primary, disabled, onclick: onPrimary ? (ev) => { ev.preventDefault(); onPrimary(); } : undefined }));
+      el('button', { type: 'submit', class: 'btn btn-primary', text: primary || t('common.continue'), disabled, onclick: onPrimary ? (ev) => { ev.preventDefault(); onPrimary(); } : undefined }));
   }
   const badge = (text) => el('p', { class: 'step-badge', text });
 
@@ -325,29 +334,32 @@
   function renderLanding(existing) {
     const s = el('section', { class: 'landing' });
     const hero = document.importNode($('#tpl-hero').content, true);
+    hero.querySelector('.hero-pill').textContent = t('landing.pill');
+    hero.querySelector('.hero-title').replaceChildren(...lines(t('landing.title')));
+    hero.querySelector('.hero-sub').textContent = t('landing.subtitle');
     s.append(hero,
       el('ul', { class: 'facts', 'aria-label': 'What you will need' },
-        fact(ICON.user, 'Your contact details and home address.'),
-        fact(ICON.key, `Your ${config.verificationCode.length}-digit verification code.`),
-        fact(ICON.list, 'A few short questions about your experience and schedule.')));
+        fact(ICON.user, t('landing.fact1')),
+        fact(ICON.key, t('landing.fact2')),
+        fact(ICON.list, t('landing.fact3'))));
     const resumable = existing && existing.state !== 'completed';
     if (resumable) {
       const name = existing.fields && existing.fields.firstName;
       s.append(el('div', { class: 'landing-panel' },
-        el('p', { class: 'eyebrow', text: 'Saved application' }),
-        el('h2', { text: name ? `Welcome back, ${name}` : 'Welcome back' }),
-        el('p', { text: existing.state === 'link_ready' ? 'Your role details are ready to view.' : 'You have an application in progress. Pick up where you left off.' }),
-        el('button', { type: 'button', class: 'btn-link', text: 'Start a new application instead', onclick: () => startNew().catch(startFailed) })));
+        el('p', { class: 'eyebrow', text: t('landing.welcome.eyebrow') }),
+        el('h2', { text: name ? `${t('landing.welcome.title')}, ${name}` : t('landing.welcome.title') }),
+        el('p', { text: existing.state === 'link_ready' ? t('landing.welcome.ready') : t('landing.welcome.inProgress') }),
+        el('button', { type: 'button', class: 'btn-link', text: t('landing.welcome.new'), onclick: () => startNew().catch(startFailed) })));
       s.append(el('div', { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? 'View role details' : 'Continue application', onclick: () => resumeFrom(existing) })));
+        el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? t('landing.welcome.view') : t('landing.welcome.resume'), onclick: () => resumeFrom(existing) })));
     } else {
       s.append(el('div', { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: 'Start Driving With Us', onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } })));
+        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: t('landing.cta'), onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } })));
     }
     return s;
   }
   const fact = (icon, text) => el('li', {}, el('span', { class: 'fact-icon', html: icon, 'aria-hidden': 'true' }), el('span', { text }));
-  const startFailed = () => setNotice('We couldn’t start your application just now. Please try again in a moment.', 'error');
+  const startFailed = () => setNotice(t('notice.startFailed'), 'error');
 
   function renderContact() {
     const submit = () => {
@@ -357,12 +369,12 @@
       go('dob');
     };
     return form(submit,
-      el('h1', { text: 'Tell us about yourself' }),
-      el('p', { class: 'lede', text: 'We’ll use these details to contact you about your application.' }),
-      textField({ key: 'firstName', label: 'First name', help: 'Use your full first name.', autocomplete: 'given-name' }),
-      textField({ key: 'lastName', label: 'Last name', help: 'As it appears on your ID.', autocomplete: 'family-name' }),
-      textField({ key: 'mobileNumber', label: 'Mobile phone', help: 'A number we can text or call.', type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: '(555) 555-0123' }),
-      textField({ key: 'email', label: 'Email', type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: 'name@example.com' }),
+      el('h1', { text: t('contact.title') }),
+      el('p', { class: 'lede', text: t('contact.intro') }),
+      textField({ key: 'firstName', label: t('contact.firstName.label'), help: t('contact.firstName.help'), autocomplete: 'given-name' }),
+      textField({ key: 'lastName', label: t('contact.lastName.label'), help: t('contact.lastName.help'), autocomplete: 'family-name' }),
+      textField({ key: 'mobileNumber', label: t('contact.phone.label'), help: t('contact.phone.help'), type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: '(555) 555-0123' }),
+      textField({ key: 'email', label: t('contact.email.label'), type: 'email', inputmode: 'email', autocomplete: 'email', placeholder: 'name@example.com' }),
       actions({}));
   }
 
@@ -382,10 +394,10 @@
       go('address');
     };
     return form(submit,
-      el('h1', { text: 'Your date of birth' }),
-      el('p', { class: 'lede', id: 'help-dateOfBirth', text: 'We need this to set up your onboarding record. It isn’t used to evaluate your application.' }),
+      el('h1', { text: t('dob.title') }),
+      el('p', { class: 'lede', id: 'help-dateOfBirth', text: t('dob.intro') }),
       el('fieldset', { class: 'field dob', 'data-field-wrap': 'dateOfBirth' },
-        el('legend', { text: 'Date of birth' }),
+        el('legend', { text: t('dob.legend') }),
         el('div', { class: 'row-3' }, part('m', 'Month', 'm', 2, 'bday-month', 'MM'), part('d', 'Day', 'd', 2, 'bday-day', 'DD'), part('y', 'Year', 'y', 4, 'bday-year', 'YYYY')),
         el('span', { class: 'error-text', id: 'err-dateOfBirth', role: 'alert', hidden: true })),
       actions({}));
@@ -404,13 +416,13 @@
       go('code');
     };
     return form(submit,
-      el('h1', { text: 'Your home address' }),
-      el('p', { class: 'lede', text: 'Enter the address where you currently live.' }),
-      textField({ key: 'address1', label: 'Street address', help: 'Enter the street address shown on your driver’s license.', autocomplete: 'address-line1' }),
-      textField({ key: 'city', label: 'City', autocomplete: 'address-level2' }),
+      el('h1', { text: t('address.title') }),
+      el('p', { class: 'lede', text: t('address.intro') }),
+      textField({ key: 'address1', label: t('address.street.label'), help: t('address.street.help'), autocomplete: 'address-line1' }),
+      textField({ key: 'city', label: t('address.city.label'), autocomplete: 'address-level2' }),
       el('div', { class: 'row' },
-        el('div', { class: 'field', 'data-field-wrap': 'state' }, el('label', { for: 'f-state', text: 'State' }), select, el('span', { class: 'error-text', id: 'err-state', role: 'alert', hidden: true })),
-        textField({ key: 'zip', label: 'ZIP code', inputmode: 'numeric', autocomplete: 'postal-code', maxlength: 5, onInput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, 5); v.zip = ev.target.value; } })),
+        el('div', { class: 'field', 'data-field-wrap': 'state' }, el('label', { for: 'f-state', text: t('address.state.label') }), select, el('span', { class: 'error-text', id: 'err-state', role: 'alert', hidden: true })),
+        textField({ key: 'zip', label: t('address.zip.label'), inputmode: 'numeric', autocomplete: 'postal-code', maxlength: 5, onInput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, 5); v.zip = ev.target.value; } })),
       actions({}));
   }
 
@@ -418,9 +430,9 @@
     const n = config.verificationCode.length;
     if (codeReceived() && !codeNeededAgain()) {
       return form(() => go(nextStep('code')),
-        el('h1', { text: 'Verification code' }),
-        el('div', { class: 'code-received' }, el('span', { class: 'tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text: 'Your verification code has been received. You can continue with your application.' })),
-        actions({}));
+        el('h1', { text: t('code.title') }),
+        el('div', { class: 'code-received' }, el('span', { class: 'tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text: t('code.received') })),
+        actions({ primary: t('code.cta') }));
     }
     const submit = () => {
       const errors = validateCode();
@@ -437,15 +449,15 @@
       oninput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, n); local.code = ev.target.value; clearError('code'); },
     });
     return form(submit,
-      el('h1', { text: 'Verification code' }),
-      el('p', { class: 'lede', id: 'help-code', text: config.verificationCode.help || 'Enter the verification code provided for your Shipzora application.' }),
-      codeNeededAgain() ? el('div', { class: 'notice warn', role: 'status', text: 'We couldn’t finish the previous step. Your details are saved. Enter your verification code again to try again.' }) : null,
+      el('h1', { text: t('code.title') }),
+      el('p', { class: 'lede', id: 'help-code', text: t('code.intro') }),
+      codeNeededAgain() ? el('div', { class: 'notice warn', role: 'status', text: t('code.retry') }) : null,
       el('div', { class: 'field code-field', 'data-field-wrap': 'code' },
-        el('label', { for: 'f-code', text: `${n}-digit code` }),
+        el('label', { for: 'f-code', text: t('code.label') }),
         input,
         el('span', { class: 'error-text', id: 'err-code', role: 'alert', hidden: true })),
-      el('p', { class: 'code-note' }, el('span', { html: ICON.lock, 'aria-hidden': 'true' }), el('span', { text: 'Your code is used once to prepare your application and is never stored.' })),
-      actions({}));
+      el('p', { class: 'code-note' }, el('span', { html: ICON.lock, 'aria-hidden': 'true' }), el('span', { text: t('code.note') })),
+      actions({ primary: t('code.cta') }));
   }
 
   function renderScreen(screen) {
@@ -455,14 +467,14 @@
       go(nextStep(screen.id));
     };
     return form(submit,
-      el('h1', { text: screen.title }),
+      el('h1', { text: t(`screen.${screen.id}.title`) || screen.title }),
       ...screen.questions.map((q) => el('fieldset', { class: 'question', 'data-field-wrap': q.key },
-        el('legend', { text: q.label }),
+        el('legend', { text: t(`q.${q.key}.label`) || q.label }),
         el('div', { class: `choices${q.options.length === 4 && q.options.every((o) => !o.hint) ? ' choices-grid' : ''}`, role: 'presentation' }, ...q.options.map((o) => {
           const id = `q-${q.key}-${o.value}`;
           return el('div', { class: 'choice' },
             el('input', { type: 'radio', id, name: q.key, value: o.value, checked: local.answers[q.key] === o.value, onchange: () => { local.answers[q.key] = o.value; clearError(q.key); $(`[data-field-wrap="${q.key}"] .choices`).classList.remove('invalid'); send({ type: 'app.answers', answers: { [q.key]: o.value } }); } }),
-            el('label', { for: id }, el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', { class: 'txt' }, el('span', { text: o.label }), o.hint ? el('span', { class: 'hint', text: o.hint }) : null)));
+            el('label', { for: id }, el('span', { class: 'dot', 'aria-hidden': 'true' }), el('span', { class: 'txt' }, el('span', { text: t(`opt.${q.key}.${o.value}.label`) || o.label }), o.hint !== undefined ? el('span', { class: 'hint', text: t(`opt.${q.key}.${o.value}.hint`) || o.hint }) : null)));
         })),
         el('span', { class: 'error-text', id: `err-${q.key}`, role: 'alert', hidden: true }))),
       actions({}));
@@ -478,47 +490,47 @@
       const done = (text) => el('li', {}, el('span', { class: 'done-tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text }));
       card.classList.add('success');
       card.append(
-        badge(app.state === 'completed' ? 'Confirmed' : 'Application complete'),
+        badge(app.state === 'completed' ? t('ready.badgeConfirmed') : t('ready.badge')),
         el('div', { class: 'success-mark', 'aria-hidden': 'true' }, el('span', { class: 'success-mark-ring' }), el('span', { class: 'success-mark-icon', html: ICON.checkBig })),
-        el('h1', { text: first ? `${first}, your role details are ready` : 'Your role details are ready' }),
-        el('p', { class: 'lede', text: 'Thanks for completing your Shipzora application. You can now review the role information prepared for you.' }),
+        el('h1', { text: first ? t('ready.title', { name: first }) : t('ready.titleNoName') }),
+        el('p', { class: 'lede', text: t('ready.intro') }),
         el('ul', { class: 'done-list', 'aria-label': 'Completed' },
-          done('Contact details received'),
-          done('Home address received'),
-          done('Verification completed')),
-        el('p', { class: 'muted', text: app.state === 'completed' ? 'Your role details have been confirmed.' : opened ? 'You’ve opened your role details. You can come back to this page any time.' : 'Opens in a new tab. You can come back to this page any time.' }),
+          done(t('ready.check1')),
+          done(t('ready.check2')),
+          done(t('ready.check3'))),
+        el('p', { class: 'muted', text: app.state === 'completed' ? t('ready.noteConfirmed') : opened ? t('ready.noteOpened') : t('ready.noteNew') }),
         el('div', { class: 'actions' },
-          el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? 'Open Role Details again' : 'View Role Details',
+          el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? t('ready.ctaAgain') : t('ready.cta'),
             onclick: () => { send({ type: 'app.link_opened' }); } })));
       return card;
     }
     if (app.state === 'problem') {
       card.append(
-        badge('Action needed'),
+        badge(t('problem.badge')),
         el('div', { class: 'status-icon warn', html: ICON.warn }),
-        el('h1', { text: 'We couldn’t finish preparing your role details' }),
-        el('p', { class: 'lede', text: (app.problem && app.problem.message) || 'We couldn’t finish this step. Please try again.' }),
-        reassure('Your answers are saved. To try again, enter your verification code once more.'),
-        el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: 'Try again', onclick: () => go('code', { completed: null }) })));
+        el('h1', { text: t('problem.title') }),
+        el('p', { class: 'lede', text: (app.problem && app.problem.message) || t('problem.fallback') }),
+        reassure(t('problem.note')),
+        el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: t('problem.cta'), onclick: () => go('code', { completed: null }) })));
       return card;
     }
     if (app.state === 'processing') {
       const sp = document.importNode($('#tpl-spinner').content, true);
       card.append(
-        badge('Preparing'),
+        badge(t('preparing.badge')),
         el('div', { class: 'status-icon wait' }, sp),
-        el('h1', { text: 'Preparing your role details…' }),
-        el('p', { class: 'lede', text: `Thanks${first ? ', ' + first : ''}. We’re getting your role information ready. This page will update on its own when it’s available.` }),
-        reassure('You can keep this page open. If you leave, you can return and pick up where you left off.'));
+        el('h1', { text: t('preparing.title') }),
+        el('p', { class: 'lede', text: t('preparing.intro', { name: first ? ', ' + first : '' }) }),
+        reassure(t('preparing.note')));
       return card;
     }
     // started: the applicant reached the end without the automation ever starting (missing information)
     card.append(
-      badge('Almost there'),
+      badge(t('incomplete.badge')),
       el('div', { class: 'status-icon warn', html: ICON.warn }),
-      el('h1', { text: 'Almost there' }),
-      el('p', { class: 'lede', text: 'Some information is still missing before we can prepare your role details.' }),
-      el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: 'Review my application', onclick: () => go(firstIncompleteStep(), { completed: null }) })));
+      el('h1', { text: t('incomplete.title') }),
+      el('p', { class: 'lede', text: t('incomplete.intro') }),
+      el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: t('incomplete.cta'), onclick: () => go(firstIncompleteStep(), { completed: null }) })));
     return card;
   }
 

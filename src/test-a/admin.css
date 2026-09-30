@@ -155,8 +155,39 @@ time { white-space: nowrap; }
 .dev-link:hover { text-decoration: underline; }
 
 /* ---------- responsive ---------- */
+/* ---------- applicant content ---------- */
+.content-layout { display: grid; grid-template-columns: 200px 1fr; gap: 14px; align-items: start; }
+.content-tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 72px; }
+.content-tab { display: flex; align-items: center; justify-content: space-between; gap: 8px; font: inherit; font-size: 13.5px; text-align: left; padding: 8px 10px; border: 1px solid transparent; background: none; border-radius: var(--radius); cursor: pointer; color: var(--ink-2); }
+.content-tab:hover { background: var(--surface-2); }
+.content-tab.active { background: var(--surface); border-color: var(--line); color: var(--ink); font-weight: 600; }
+.content-tab .n { font-size: 11.5px; color: var(--ink-3); font-weight: 600; }
+.content-tab.edited::after { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--brand); }
+.content-panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; }
+.content-fields { padding: 6px 18px; }
+.cfield { display: grid; grid-template-columns: 260px 1fr; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line-soft); align-items: start; }
+.cfield:last-child { border-bottom: 0; }
+.cfield .clabel { font-size: 13px; font-weight: 600; padding-top: 8px; }
+.cfield .ckey { display: block; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; color: var(--ink-3); font-weight: 400; margin-top: 2px; word-break: break-all; }
+.cfield .cvars { display: block; font-size: 11.5px; color: var(--ink-3); font-weight: 400; margin-top: 2px; }
+.cfield input, .cfield textarea { width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); font: inherit; font-size: 13.5px; line-height: 1.45; background: #fff; }
+.cfield input { height: 36px; }
+.cfield textarea { resize: vertical; min-height: 60px; }
+.cfield input:focus, .cfield textarea:focus { border-color: var(--brand); outline: 3px solid rgba(11,93,87,.2); outline-offset: 0; }
+.cfield.custom input, .cfield.custom textarea { border-left: 3px solid var(--brand); }
+.cfield.dirty input, .cfield.dirty textarea { background: var(--warn-soft); }
+.cfield.invalid input, .cfield.invalid textarea { border-color: var(--danger); }
+.cfield .cmeta { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 11.5px; color: var(--ink-3); }
+.cfield .cmeta .over { color: var(--danger); font-weight: 600; }
+.cfield .cmeta .cerr { color: var(--danger); font-weight: 600; }
+.cfield .creset { background: none; border: 0; padding: 0; font: inherit; font-size: 11.5px; color: var(--brand-ink); text-decoration: underline; cursor: pointer; }
+.cfield .creset:disabled { color: var(--ink-3); text-decoration: none; cursor: default; }
+.content-actions { display: flex; align-items: center; gap: 12px; padding: 12px 18px; border-top: 1px solid var(--line); background: var(--surface-2); border-radius: 0 0 8px 8px; }
+.content-dirty { margin-left: auto; font-size: 12.5px; color: var(--ink-3); }
+
 @media (max-width: 1024px) { .cards { grid-template-columns: repeat(3, 1fr); } .vrow { grid-template-columns: 1.4fr 1fr 1fr; } .vrow .actions { grid-column: 1 / -1; justify-content: flex-start; } }
 @media (max-width: 760px) {
+  .content-layout { grid-template-columns: 1fr; } .content-tabs { position: static; flex-direction: row; flex-wrap: wrap; } .cfield { grid-template-columns: 1fr; gap: 6px; } .cfield .clabel { padding-top: 0; }
   .topbar-inner { gap: 12px; padding: 0 16px; } .topnav { display: none; } .page { padding: 16px 16px 32px; }
   .section-head { flex-direction: column; align-items: stretch; }
   .cards { grid-template-columns: repeat(2, 1fr); }

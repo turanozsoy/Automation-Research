@@ -69,7 +69,22 @@ Then open <http://localhost:3000/debug> in one tab per workflow you want to driv
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 The debug harness is an internal developer tool; applicants use the application API below.
 
-### Operations page: `/admin/accounts`
+### Applicant page content (editable copy)
+
+The operations page has an **Applicant page content** section: every applicant-facing string (landing
+hero, step headings and helper text, verification screen, question wording and option labels, preparing /
+problem copy, role-ready screen) grouped by screen, with the current text, a character limit, "Reset to
+default" per field and per group, and Save. Copy only: option values, routes, field names, states and the
+automation are untouched (an option's stored value stays `part_time` whatever its label says).
+
+Defaults live in `src/service/applications/content.ts`; edits are stored in the `site_content` table
+(migration 7) and merged into `GET /api/apply/config` (`content`), so a change is live on the next
+applicant page load with no deploy. Values are plain text: control characters are stripped, HTML is never
+interpreted (the applicant page renders them with `textContent`), `{n}` = code length and `{name}` = first
+name are the only placeholders. API: `GET /api/admin/content`, `PUT /api/admin/content`
+`{ values: { key: text | null } }` (`null` resets).
+
+## Operations page: `/admin/accounts`
 
 Internal page for HR / operations staff (`src/test-a/admin.html`, `admin.css`, `admin.js`; the `/debug`
 harness keeps its plain developer look). Top bar with section links and a small "Automation: Visible |

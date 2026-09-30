@@ -21,6 +21,7 @@
       <a href="#accounts">Accounts &amp; Sessions</a>
       <a href="#egress">Proxies</a>
       <a href="#verified">Verified Applications</a>
+      <a href="#content">Applicant Content</a>
     </nav>
     <div class="topbar-right">
       <span class="meta-pill" id="automationMode" title="Automation browser launch mode (developer setting)">Automation: …</span>
@@ -101,6 +102,25 @@
     </div>
     <div class="vlist" id="verifiedList"></div>
     <div class="load-more"><button class="btn btn-secondary" id="btnMore" type="button" hidden>Load more</button></div>
+  </section>
+
+  <!-- ===== Applicant page content (copy only) ===== -->
+  <section id="content" class="section">
+    <div class="section-head">
+      <div><h2>Applicant page content</h2><p class="section-sub">Wording shown on the applicant site. Copy only: option values, step routes, field names and the automation are not affected. Plain text; changes are live on the next page load.</p></div>
+      <div class="section-actions"><span class="toolbar-note" id="contentNote"></span></div>
+    </div>
+    <div class="content-layout">
+      <nav class="content-tabs" id="contentTabs" aria-label="Content groups"></nav>
+      <div class="content-panel">
+        <div class="content-fields" id="contentFields"><p class="empty">Loading…</p></div>
+        <div class="content-actions">
+          <button class="btn btn-secondary btn-sm" id="btnContentResetGroup" type="button">Reset this group to defaults</button>
+          <span class="content-dirty" id="contentDirty"></span>
+          <button class="btn btn-primary" id="btnContentSave" type="button" disabled>Save changes</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <footer class="page-foot">
