@@ -18,24 +18,13 @@
 
 <header class="site-header">
   <div class="shell header-row">
-    <!-- Landing: the brand. Application steps: back arrow + centred title (CSS switches on body[data-screen]). -->
-    <a class="brand" href="/" aria-label="Shipzora Careers home">
-      <span class="brand-mark" aria-hidden="true">
-        <svg viewBox="0 0 32 32" focusable="false">
-          <rect x="3" y="9" width="18" height="14" rx="2" fill="currentColor"/>
-          <path d="M21 13h5l3 4v6h-8z" fill="currentColor" opacity=".72"/>
-          <circle cx="9" cy="24.5" r="2.6" fill="#ffcc00"/>
-          <circle cx="24" cy="24.5" r="2.6" fill="#ffcc00"/>
-          <path d="M6 13h9" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9"/>
-        </svg>
-      </span>
-      <span class="brand-name">Shipzora</span><span class="brand-sub">Careers</span>
-    </a>
+    <!-- Landing: centred "Shipzora Careers". Application steps: back arrow + centred "Shipzora Application". -->
     <button type="button" class="header-back" id="headerBack" aria-label="Back" hidden>
       <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
-    <p class="app-title" id="headerContext">Shipzora Application</p>
+    <p class="app-title" id="headerContext">Shipzora Careers</p>
   </div>
+  <div class="accent-line" aria-hidden="true"><span></span></div>
 </header>
 
 <div id="progressWrap" hidden>
@@ -56,7 +45,7 @@
 
 <footer class="site-footer">
   <div class="shell footer-row">
-    <span class="footer-copy">Shipzora Careers</span>
+    <span class="footer-copy">© <span id="footerYear"></span> Shipzora. All rights reserved.</span>
     <nav aria-label="Footer">
       <a href="/privacy">Privacy</a>
       <a href="/terms">Terms</a>
@@ -69,31 +58,21 @@
   <span class="spinner" aria-hidden="true"></span>
 </template>
 
-<!-- Landing hero: a branded route illustration until approved photography exists (see .hero-visual). -->
+<!--
+  Landing hero. HERO IMAGE PLACEHOLDER: no photography is bundled. To add the approved image, save it as
+  src/apply/hero.jpg (portrait, about 1080 x 1350) and set `--hero-image: url("/apply/hero.jpg")` on .hero-media
+  in apply.css. The dark gradient overlay and the text sit on top of whatever image is set.
+-->
 <template id="tpl-hero">
-  <div class="hero-visual" aria-hidden="true">
-    <svg viewBox="0 0 400 250" preserveAspectRatio="xMidYMid slice" focusable="false">
-      <defs>
-        <pattern id="grid" width="25" height="25" patternUnits="userSpaceOnUse"><path d="M25 0H0v25" fill="none" stroke="#ffffff" stroke-opacity=".07" stroke-width="1"/></pattern>
-      </defs>
-      <rect width="400" height="250" fill="#111111"/>
-      <rect width="400" height="250" fill="url(#grid)"/>
-      <path d="M-10 196 C 70 150, 120 236, 190 172 S 300 92, 330 118 S 380 88, 420 52" fill="none" stroke="#ffcc00" stroke-opacity=".35" stroke-width="2" stroke-dasharray="6 8"/>
-      <path d="M-10 196 C 70 150, 120 236, 190 172 S 300 92, 330 118" fill="none" stroke="#ffcc00" stroke-width="3" stroke-linecap="round"/>
-      <circle cx="84" cy="176" r="6" fill="#111111" stroke="#ffcc00" stroke-width="3"/>
-      <circle cx="190" cy="172" r="6" fill="#111111" stroke="#ffcc00" stroke-width="3"/>
-      <circle cx="330" cy="118" r="9" fill="#d90812"/>
-      <circle cx="330" cy="118" r="16" fill="none" stroke="#d90812" stroke-opacity=".45" stroke-width="2"/>
-      <g transform="translate(232 40)">
-        <rect x="0" y="12" width="74" height="46" rx="6" fill="#ffffff" fill-opacity=".92"/>
-        <path d="M74 26h22l16 16v16H74z" fill="#ffffff" fill-opacity=".72"/>
-        <circle cx="22" cy="62" r="8" fill="#111111" stroke="#ffcc00" stroke-width="3"/>
-        <circle cx="92" cy="62" r="8" fill="#111111" stroke="#ffcc00" stroke-width="3"/>
-        <path d="M10 30h34M10 40h22" stroke="#111111" stroke-width="3" stroke-linecap="round" stroke-opacity=".8"/>
-      </g>
-    </svg>
-    <span class="hero-tag">Logistics &amp; delivery</span>
-  </div>
+  <section class="hero" aria-label="Drive with Shipzora">
+    <div class="hero-media" id="heroImage" role="img" aria-label=""></div>
+    <div class="hero-overlay" aria-hidden="true"></div>
+    <div class="hero-content">
+      <span class="hero-pill">Earn up to $1,800 / week</span>
+      <h1 class="hero-title">Drive with Shipzora.<br>Deliver Success.</h1>
+      <p class="hero-sub">Flexible schedules: Full-time, Part-time, or Students.</p>
+    </div>
+  </section>
 </template>
 
 <script src="/apply/apply.js" defer></script>

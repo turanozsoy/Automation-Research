@@ -76,14 +76,11 @@ svg { display: block; }
 .header-back:hover { background: var(--color-surface); }
 .header-back:active { background: var(--color-border); }
 .app-title { grid-column: 2; margin: 0; text-align: center; font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--color-text); }
-.brand { grid-column: 1 / span 2; display: inline-flex; align-items: baseline; gap: 8px; color: var(--color-text); text-decoration: none; }
-.brand-name { font-weight: 800; font-size: 22px; letter-spacing: -0.03em; }
-.brand-sub { font-size: 12px; font-weight: 700; color: var(--color-text-secondary); letter-spacing: .14em; text-transform: uppercase; }
-.brand-mark { display: inline-flex; align-items: center; margin-right: 2px; }
-.brand-mark svg { width: 24px; height: 24px; }
-/* landing shows the brand; application steps show the centred title and the back arrow */
-body[data-screen="landing"] .app-title, body[data-screen="landing"] .header-back { display: none; }
-body:not([data-screen="landing"]) .brand { display: none; }
+body[data-screen="landing"] .header-back { display: none; }
+/* landing: a thin red/yellow accent line under the header (the steps show the progress line instead) */
+.accent-line { display: none; height: 4px; background: var(--color-primary-red); }
+.accent-line span { display: block; width: 28%; height: 100%; margin-left: auto; background: var(--color-yellow); }
+body[data-screen="landing"] .accent-line { display: block; }
 
 /* ---------- progress line ---------- */
 .progress-line { height: 4px; background: var(--color-track); }
@@ -233,28 +230,42 @@ fieldset .error-text { margin-top: 10px; }
 .btn-link:hover { color: var(--color-text); }
 
 /* ---------- landing ---------- */
-.landing { padding-top: 22px; }
-.hero-visual {
-  position: relative; aspect-ratio: 16 / 10; border-radius: 20px; overflow: hidden; margin: 0 0 26px;
-  background: var(--color-text); color: var(--color-yellow);
+.landing { padding-top: 0; }
+.hero {
+  position: relative; margin: 0 calc(-1 * var(--gutter)) 0; min-height: 470px; aspect-ratio: 4 / 4.7; max-height: 600px;
+  background: #1a1b1e; color: #fff; overflow: hidden; display: flex; align-items: flex-end;
 }
-/* Placeholder brand visual: replace the SVG with approved hero photography (object-fit: cover) when available. */
-.hero-visual svg { width: 100%; height: 100%; }
-.hero-visual .hero-tag { position: absolute; left: 18px; bottom: 16px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px; height: 30px; border-radius: 999px; background: rgba(255, 255, 255, .12); color: #fff; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; backdrop-filter: none; }
-.hero-visual .hero-tag::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--color-yellow); }
-.landing h1 { font-size: 38px; }
-.landing .lede { font-size: 18px; margin-bottom: 26px; }
-.facts { list-style: none; padding: 0; margin: 0 0 30px; display: grid; gap: 0; border-top: 1px solid var(--color-border); }
+/* Placeholder surface until the approved image is set: --hero-image: url("/apply/hero.jpg") */
+.hero-media {
+  position: absolute; inset: 0;
+  background-color: #2b2d31;
+  background-image: var(--hero-image, linear-gradient(160deg, #3a3c41 0%, #26282c 55%, #1a1b1e 100%));
+  background-size: cover; background-position: center;
+}
+.hero-overlay { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 30%, rgba(0, 0, 0, .55) 62%, rgba(0, 0, 0, .9) 100%); }
+.hero-content { position: relative; z-index: 1; padding: 0 var(--gutter) 30px; width: 100%; }
+.hero-pill {
+  display: inline-flex; align-items: center; height: 32px; padding: 0 14px; margin: 0 0 16px; border-radius: 999px;
+  background: var(--color-yellow); color: var(--color-text); font-size: 12px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase;
+}
+.screen .hero-title { margin: 0 0 12px; font-size: 40px; line-height: 1.05; letter-spacing: -0.03em; font-weight: 800; color: #fff; text-wrap: balance; }
+.hero-sub { margin: 0; font-size: 17px; line-height: 1.4; color: rgba(255, 255, 255, .88); font-weight: 500; }
+.landing .facts { margin: 0; padding: 22px 0 8px; border-top: 0; }
+.facts { list-style: none; padding: 0; margin: 0 0 30px; display: grid; gap: 0; }
 .facts li { display: flex; gap: 14px; align-items: center; padding: 14px 0; border-bottom: 1px solid var(--color-border); color: var(--color-text); font-size: 16px; font-weight: 500; line-height: 1.4; }
-.facts .fact-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--color-surface); color: var(--color-text); display: inline-flex; align-items: center; justify-content: center; }
+.facts li:last-child { border-bottom: 0; }
+.facts .fact-icon { flex: none; width: 40px; height: 40px; border-radius: 12px; background: var(--color-surface); color: var(--color-text); display: inline-flex; align-items: center; justify-content: center; }
 .facts .fact-icon svg { width: 20px; height: 20px; }
-.landing .actions { position: static; margin: 0; padding: 0; border: 0; }
-.landing-panel { margin: 30px 0 8px; padding: 22px 20px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
+.landing-panel { margin: 12px 0 8px; padding: 20px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); }
 .landing-panel .eyebrow { margin-bottom: 6px; }
 .landing-panel h2 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 6px; font-weight: 800; line-height: 1.15; }
-.landing-panel p { margin: 0 0 18px; color: var(--color-text-secondary); font-size: 16px; line-height: 1.45; }
-.landing-panel .btn-link { display: block; margin: 6px auto 0; }
-.landing-alt { text-align: center; margin: 18px 0 0; }
+.landing-panel p { margin: 0 0 10px; color: var(--color-text-secondary); font-size: 16px; line-height: 1.45; }
+.landing-panel .btn-link { padding: 6px 0; }
+@media (min-width: 640px) {
+  .hero { margin: 26px 0 0; border-radius: 20px; min-height: 520px; }
+  .screen .hero-title { font-size: 46px; }
+}
+@media (max-width: 360px) { .screen .hero-title { font-size: 34px; } }
 
 /* ---------- status screens (preparing / ready / problem) ---------- */
 .status { padding-top: 26px; }
@@ -270,9 +281,21 @@ fieldset .error-text { margin-top: 10px; }
 .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(217, 8, 18, .18); border-top-color: var(--color-primary-red); border-radius: 50%; animation: spin 900ms linear infinite; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- completed: conversion state ---------- */
+.status.success .step-badge { border-color: #f2d98a; background: var(--color-yellow-soft); color: #6b4a00; }
+.success-mark { position: relative; width: 84px; height: 84px; margin: 0 0 24px; align-self: flex-start; }
+.success-mark-ring { position: absolute; inset: 0; border-radius: 50%; background: var(--color-yellow); }
+.success-mark-icon { position: absolute; inset: 10px; border-radius: 50%; background: var(--color-text); color: var(--color-yellow); display: inline-flex; align-items: center; justify-content: center; }
+.success-mark-icon svg { width: 34px; height: 34px; }
+.status.success h1 { font-size: 34px; }
+.done-list { list-style: none; padding: 0; margin: 0 0 22px; border-top: 1px solid var(--color-border); }
+.done-list li { display: flex; align-items: center; gap: 12px; padding: 13px 0; border-bottom: 1px solid var(--color-border); font-size: 16px; font-weight: 500; }
+.done-tick { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--color-yellow); color: var(--color-text); display: inline-flex; align-items: center; justify-content: center; }
+.done-tick svg { width: 16px; height: 16px; }
+
 /* ---------- footer ---------- */
 .site-footer { border-top: 1px solid var(--color-border); background: var(--color-white); padding-bottom: env(safe-area-inset-bottom); }
-.footer-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 52px; font-size: 13px; color: var(--color-text-tertiary); }
+.footer-row { display: flex; align-items: center; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; min-height: 52px; padding-top: 8px; padding-bottom: 8px; font-size: 13px; color: var(--color-text-tertiary); }
 .footer-row nav { display: flex; gap: 18px; }
 .footer-row a { color: var(--color-text-secondary); text-decoration: none; padding: 8px 0; font-weight: 500; }
 .footer-row a:hover { color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }

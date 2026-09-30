@@ -33,11 +33,17 @@ const h1 = async (expected: RegExp, timeout = 15000) => { await p.locator('main 
 try {
   console.log('[e2e:apply] 1. landing + start');
   await p.goto(base);
-  await h1(/Start your Shipzora application/);
+  await h1(/Drive with Shipzora/);
   check(!(await p.evaluate(() => document.cookie)).includes('shipzora_session'), 'session cookie is not readable by page script before start');
   await noTech('landing');
-  await p.getByRole('button', { name: 'Start Application' }).click();
+  const atPath = (path: string, what: string) => check(new URL(p.url()).pathname === path, `${what} at ${path} (got ${new URL(p.url()).pathname})`);
+  await p.goto(`${base}/step-3`);
+  await h1(/Drive with Shipzora/);
+  atPath('/', 'a step URL without an application shows the landing page');
+  check((await ctx.cookies(base)).every((c) => c.name !== 'shipzora_session'), 'no application was created by opening a step URL');
+  await p.getByRole('button', { name: 'Start Driving With Us' }).click();
   await h1(/Tell us about yourself/);
+  atPath('/step-2', 'first step');
   check((await ctx.cookies(base)).some((c) => c.name === 'shipzora_session' && c.httpOnly), 'HttpOnly session cookie set on start');
   check(/^step 1 of 7$/i.test(await p.locator('#progressLabel').innerText()), 'step badge reads Step 1 of 7');
 
@@ -52,11 +58,14 @@ try {
   check(await p.locator('#f-firstName').getAttribute('autocomplete') === 'given-name' && await p.locator('#f-mobileNumber').getAttribute('type') === 'tel', 'autocomplete/type attributes');
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/date of birth/i);
+  atPath('/step-3', 'date of birth');
 
   console.log('[e2e:apply] 3. date of birth');
   await p.fill('#f-dob-m', '05'); await p.fill('#f-dob-d', '17'); await p.fill('#f-dob-y', '1990');
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/home address/i);
+  atPath('/step-4', 'address');
+  check((await p.locator('label[for="f-address1"]').innerText()).trim().toLowerCase() === 'street address' && /driver’s license/.test(await p.locator('#help-address1').innerText()), 'address field reads "Street address" with the license helper text');
 
   console.log('[e2e:apply] 4. address -> verification screen appears immediately');
   // The operations page is opened BEFORE any workflow exists for this applicant; it must pick up the verified row live.
@@ -72,6 +81,7 @@ try {
   const tContinue = Date.now();
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Verification code/, 3000);
+  atPath('/step-5', 'verification code');
   const dt = Date.now() - tContinue;
   check(dt < 1500, `verification screen shown ${dt} ms after Continue (no waiting on the address step)`);
   await noTech('verification screen');
@@ -85,6 +95,7 @@ try {
   await p.fill('#f-code', CODE);
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your experience/);
+  atPath('/step-6', 'experience');
 
   console.log('[e2e:apply] 6. questions (card radios), refresh mid-way resumes');
   await p.getByRole('button', { name: 'Continue' }).click();
@@ -92,22 +103,38 @@ try {
   await p.getByText('1 to 3 years').click();
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your schedule/);
+  atPath('/step-7', 'schedule');
   await p.getByText('Part time').click();
   await p.getByText('Sometimes').click();
   await p.reload();
-  await h1(/Welcome back/i).catch(() => {});
-  await p.getByRole('button', { name: /Continue application|View role details/ }).click();
-  await h1(/Your schedule|Your experience|Getting started|role details/i);
-  const resumedTitle = await p.locator('main h1').innerText();
-  check(/Your schedule/.test(resumedTitle), `refresh resumed on the same step (${resumedTitle})`);
+  await h1(/Your schedule/);
+  atPath('/step-7', 'refresh on a step URL restores that step directly');
   check(await p.locator('#q-scheduleType-part_time').isChecked() && await p.locator('#q-weekends-sometimes').isChecked(), 'answers restored after refresh');
+  const cookiesBefore = (await ctx.cookies(base)).find((c) => c.name === 'shipzora_session')!.value;
+  await p.goto(`${base}/step-8`);
+  await h1(/Your schedule/);
+  atPath('/step-7', 'a step beyond the first incomplete one is clamped');
+  await p.goto(base);
+  await p.locator('.landing-panel h2').filter({ hasText: /Welcome back/ }).waitFor({ timeout: 15000 });
+  await p.getByRole('button', { name: /Continue application/ }).click();
+  await h1(/Your schedule/);
+  atPath('/step-7', 'Continue application resumes the saved step');
+  check((await ctx.cookies(base)).find((c) => c.name === 'shipzora_session')!.value === cookiesBefore, 'refresh and resume kept the same application session');
   await p.getByRole('button', { name: 'Back' }).click();
   await h1(/Your experience/);
+  atPath('/step-6', 'header Back');
   check(await p.locator('#q-deliveryExperience-1_3').isChecked(), 'Back keeps previous answers');
+  await p.goBack();
+  await h1(/Your schedule/);
+  atPath('/step-7', 'browser Back returns to the step left with the header arrow');
+  await p.goForward();
+  await h1(/Your experience/);
+  atPath('/step-6', 'browser Forward');
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your schedule/);
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Getting started/);
+  atPath('/step-8', 'availability');
   await p.getByText('Right away').click();
   await p.locator('#q-driversLicense-yes + label').click();
   await p.getByRole('button', { name: 'Continue' }).click();
@@ -116,10 +143,16 @@ try {
   await h1(/role details/i);
   const firstTitle = await p.locator('main h1').innerText();
   console.log(`  final screen first shows: "${firstTitle}"`);
+  if (/Preparing/.test(firstTitle)) atPath('/preparing', 'preparing state');
   await noTech('final screen');
   const cta = p.locator('#btnViewRole');
   await cta.waitFor({ timeout: 120_000 });
-  check(/Your role details are ready/.test(await p.locator('main h1').innerText()), 'CTA appeared live when the link was ready');
+  check(/your role details are ready/i.test(await p.locator('main h1').innerText()), 'CTA appeared live when the link was ready');
+  await p.waitForFunction(() => location.pathname === '/completed', null, { timeout: 5000 }).catch(() => {});
+  atPath('/completed', 'role-ready conversion route');
+  await p.reload();
+  await cta.waitFor({ timeout: 15_000 });
+  atPath('/completed', 'refresh on /completed keeps the completed screen');
   check(!/hired|job offer|congratulations/i.test(await text()), 'no offer/hired wording');
   const href = await cta.getAttribute('href');
   check(!!href && /\/test\/it-worked\//.test(href), 'CTA points at this application\'s generated link');
@@ -170,6 +203,8 @@ try {
   check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications') && (await fetch(`${base}/admin.css`)).status === 200, '/debug and /admin/accounts still served');
   check((await fetch(`${base}/debug.html`)).status === 404 && (await fetch(`${base}/index.html`)).status === 404, 'files are not reachable by guessing names');
   check((await fetch(`${base}/privacy`)).status === 200, 'footer placeholder pages respond');
+  const direct = await fetch(`${base}/step-3`);
+  check(direct.status === 200 && (await direct.text()).includes('/apply/apply.js') && (await fetch(`${base}/completed`)).status === 200 && (await fetch(`${base}/step-x`)).status === 404, 'server serves the applicant page for /step-n and /completed, 404 otherwise');
   check(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors.join(' | ') : ''}`);
 } catch (e) {
   const t = await text().catch(() => '');

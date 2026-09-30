@@ -31,6 +31,7 @@ const PAGES: Record<string, [string, string]> = {
   '/admin.css': [INTERNAL_DIR, 'admin.css'],
 };
 const PLACEHOLDER_PAGES: Record<string, string> = { '/privacy': 'Privacy', '/terms': 'Terms', '/contact': 'Contact' };
+const APPLY_ROUTES = /^\/(step-\d{1,2}|preparing|completed)$/;
 
 export interface ServerDeps {
   cfg: SiteBConfig;
@@ -232,6 +233,8 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
 
   try {
     if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
+    // applicant step routes (/step-2 … /step-n, /preparing, /completed): the applicant page restores the step client-side
+    if (method === 'GET' && APPLY_ROUTES.test(url)) return serveFile(APPLY_DIR, 'index.html', res);
     if (method === 'GET' && url.startsWith('/apply/')) return serveFile(APPLY_DIR, url.slice('/apply/'.length), res);
     if (method === 'GET' && PLACEHOLDER_PAGES[url]) return placeholderPage(PLACEHOLDER_PAGES[url], res);
     // ---- development: automation browser mode (internal, /debug) ----

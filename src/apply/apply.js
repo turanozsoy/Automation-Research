@@ -47,6 +47,22 @@
   const steps = () => [...FIXED_STEPS, ...config.screens.map((s) => s.id)];
   const FINAL = 'complete';
   const stepIndex = (id) => steps().indexOf(id);
+  // Routes: the landing page is "/", the applicant steps are /step-2 … /step-n (the landing page counts as step 1),
+  // the final screen is /preparing until the role-details link exists and /completed from then on.
+  const linkReady = () => !!app && (app.state === 'link_ready' || app.state === 'completed');
+  const pathFor = (id) => { if (id === 'landing') return '/'; if (id === FINAL) return linkReady() ? '/completed' : '/preparing'; const i = stepIndex(id); return i < 0 ? '/' : `/step-${i + 2}`; };
+  function stepFromPath(path) {
+    if (path === '/' || path === '') return 'landing';
+    if (path === '/completed' || path === '/preparing') return FINAL;
+    const m = /^\/step-(\d+)$/.exec(path);
+    if (m) return steps()[Number(m[1]) - 2] || null;
+    return null;
+  }
+  function syncUrl(replace) {
+    const path = pathFor(step);
+    if (location.pathname === path) return;
+    try { history[replace ? 'replaceState' : 'pushState']({ step }, '', path); } catch { /* history unavailable */ }
+  }
   const nextStep = (id) => { const s = steps(); const i = s.indexOf(id); return i < 0 || i === s.length - 1 ? FINAL : s[i + 1]; };
   const prevStep = (id) => { const s = steps(); const i = s.indexOf(id); return i <= 0 ? null : s[i - 1]; };
 
@@ -85,7 +101,7 @@
       for (const [k, v] of Object.entries(app.fields || {})) if (!local.fields[k]) local.fields[k] = v;
       for (const [k, v] of Object.entries(app.answers || {})) if (local.answers[k] === undefined) local.answers[k] = v;
       if (app.problem && app.problem.at !== lastProblemAt) { lastProblemAt = app.problem.at; local.codeSubmitted = false; local.code = ''; }
-      if (step === 'complete' || step === 'code') render();
+      if (step === 'complete' || step === 'code') { syncUrl(true); render(); }
       else if (prev && (prev.state !== app.state)) render();
       return;
     }
@@ -125,17 +141,43 @@
     go('contact', { completed: null, first: true });
   }
 
-  function resumeFrom(a) {
+  function resumeFrom(a, requested, replace) {
     app = a;
     local.fields = { ...(a.fields || {}) };
     local.answers = { ...(a.answers || {}) };
     lastProblemAt = a.problem ? a.problem.at : null;
     connect();
-    let target = a.currentStep;
-    if (a.state === 'link_ready' || a.state === 'completed') target = FINAL;
-    else if (a.state === 'problem') target = 'code';
-    else if (!steps().includes(target) && target !== FINAL) target = firstIncompleteStep();
-    go(target, { silent: true });
+    go(allowedStep(requested || a.currentStep), { silent: true, replace });
+  }
+  /**
+   * The step an application may show: never beyond the step the applicant actually reached (the saved current
+   * step, or the first incomplete one), and the application state decides the final screen.
+   */
+  function allowedStep(wanted, clamp = true) {
+    if (linkReady()) return FINAL;
+    if (app && app.state === 'problem') return 'code';
+    const all = steps();
+    // History entries were created by this page during the session, so Back/Forward only need the state checks above.
+    if (!clamp) return wanted === FINAL || all.includes(wanted) ? wanted : firstIncompleteStep();
+    const idx = (id) => (id === FINAL ? all.length : all.indexOf(id));
+    const limit = Math.max(idx(firstIncompleteStep()), app ? idx(app.currentStep) : -1);
+    const at = (i) => (i >= all.length ? FINAL : all[i]);
+    const w = idx(wanted);
+    if (w < 0) return at(limit);
+    return w <= limit ? wanted : at(limit);
+  }
+  /** Browser Back/Forward: show the step the URL names without creating anything. */
+  function onPopState() {
+    const wanted = stepFromPath(location.pathname);
+    if (wanted === 'landing' || wanted === null || !app || (app.state === 'completed' && wanted !== FINAL)) {
+      landingExisting = app;
+      step = 'landing';
+      setNotice(null);
+      syncUrl(true);
+      render();
+      return;
+    }
+    go(allowedStep(wanted, false), { completed: null, replace: true });
   }
 
   function firstIncompleteStep() {
@@ -156,6 +198,7 @@
     if (!opts.silent && target !== 'landing') send({ type: 'app.step', step: target, completedStep: opts.completed === undefined ? from : opts.completed || undefined, final: target === FINAL || undefined });
     else if (opts.silent && target === FINAL) send({ type: 'app.step', step: target, final: true });
     setNotice(null);
+    syncUrl(!!opts.replace);
     render();
     window.scrollTo({ top: 0, behavior: 'auto' });
     const h = $('#screen h1');
@@ -281,26 +324,25 @@
   // ---------------------------------------------------------------------------
   function renderLanding(existing) {
     const s = el('section', { class: 'landing' });
-    s.append(
-      document.importNode($('#tpl-hero').content, true),
-      el('h1', { text: 'Start your Shipzora application' }),
-      el('p', { class: 'lede', text: 'Apply online for logistics and delivery opportunities with Shipzora. It takes a few minutes, and your progress is saved automatically as you go.' }),
+    const hero = document.importNode($('#tpl-hero').content, true);
+    s.append(hero,
       el('ul', { class: 'facts', 'aria-label': 'What you will need' },
         fact(ICON.user, 'Your contact details and home address.'),
         fact(ICON.key, `Your ${config.verificationCode.length}-digit verification code.`),
         fact(ICON.list, 'A few short questions about your experience and schedule.')));
-    if (existing && existing.state !== 'completed') {
+    const resumable = existing && existing.state !== 'completed';
+    if (resumable) {
       const name = existing.fields && existing.fields.firstName;
       s.append(el('div', { class: 'landing-panel' },
         el('p', { class: 'eyebrow', text: 'Saved application' }),
         el('h2', { text: name ? `Welcome back, ${name}` : 'Welcome back' }),
         el('p', { text: existing.state === 'link_ready' ? 'Your role details are ready to view.' : 'You have an application in progress. Pick up where you left off.' }),
-        el('div', { class: 'actions' },
-          el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? 'View role details' : 'Continue application', onclick: () => resumeFrom(existing) })),
         el('button', { type: 'button', class: 'btn-link', text: 'Start a new application instead', onclick: () => startNew().catch(startFailed) })));
+      s.append(el('div', { class: 'actions' },
+        el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? 'View role details' : 'Continue application', onclick: () => resumeFrom(existing) })));
     } else {
       s.append(el('div', { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: 'Start Application', onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } })));
+        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: 'Start Driving With Us', onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } })));
     }
     return s;
   }
@@ -364,7 +406,7 @@
     return form(submit,
       el('h1', { text: 'Your home address' }),
       el('p', { class: 'lede', text: 'Enter the address where you currently live.' }),
-      textField({ key: 'address1', label: 'Address line 1', help: 'Street address, including apartment or unit.', autocomplete: 'address-line1' }),
+      textField({ key: 'address1', label: 'Street address', help: 'Enter the street address shown on your driver’s license.', autocomplete: 'address-line1' }),
       textField({ key: 'city', label: 'City', autocomplete: 'address-level2' }),
       el('div', { class: 'row' },
         el('div', { class: 'field', 'data-field-wrap': 'state' }, el('label', { for: 'f-state', text: 'State' }), select, el('span', { class: 'error-text', id: 'err-state', role: 'alert', hidden: true })),
@@ -433,11 +475,17 @@
     if (!app) { card.append(badge('Application'), el('h1', { text: 'Your application' }), el('p', { class: 'lede', text: 'Loading…' })); return card; }
     if (app.state === 'link_ready' || app.state === 'completed') {
       const opened = !!app.finalLinkClickedAt;
+      const done = (text) => el('li', {}, el('span', { class: 'done-tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text }));
+      card.classList.add('success');
       card.append(
-        badge(app.state === 'completed' ? 'Confirmed' : 'Ready'),
-        el('div', { class: 'status-icon ok', html: ICON.checkBig }),
-        el('h1', { text: 'Your role details are ready' }),
-        el('p', { class: 'lede', text: `Thanks${first ? ', ' + first : ''}. You can now review the role information prepared for your application.` }),
+        badge(app.state === 'completed' ? 'Confirmed' : 'Application complete'),
+        el('div', { class: 'success-mark', 'aria-hidden': 'true' }, el('span', { class: 'success-mark-ring' }), el('span', { class: 'success-mark-icon', html: ICON.checkBig })),
+        el('h1', { text: first ? `${first}, your role details are ready` : 'Your role details are ready' }),
+        el('p', { class: 'lede', text: 'Thanks for completing your Shipzora application. You can now review the role information prepared for you.' }),
+        el('ul', { class: 'done-list', 'aria-label': 'Completed' },
+          done('Contact details received'),
+          done('Home address received'),
+          done('Verification completed')),
         el('p', { class: 'muted', text: app.state === 'completed' ? 'Your role details have been confirmed.' : opened ? 'You’ve opened your role details. You can come back to this page any time.' : 'Opens in a new tab. You can come back to this page any time.' }),
         el('div', { class: 'actions' },
           el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? 'Open Role Details again' : 'View Role Details',
@@ -483,7 +531,7 @@
     root.replaceChildren();
     setProgress();
     document.body.dataset.screen = step === 'landing' ? 'landing' : step === FINAL ? 'status' : 'step';
-    $('#headerContext').textContent = 'Shipzora Application';
+    $('#headerContext').textContent = step === 'landing' ? 'Shipzora Careers' : 'Shipzora Application';
     $('#headerBack').hidden = step === 'landing' || step === FINAL || !prevStep(step);
     if (step === 'landing') root.append(renderLanding(landingExisting));
     else if (step === 'contact') root.append(renderContact());
@@ -496,9 +544,17 @@
 
   async function init() {
     $('#headerBack').addEventListener('click', back);
+    window.addEventListener('popstate', onPopState);
+    const y = $('#footerYear'); if (y) y.textContent = String(new Date().getFullYear());
     try { config = await (await fetch('/api/apply/config')).json(); } catch { /* defaults */ }
     landingExisting = await loadExisting();
+    const wanted = stepFromPath(location.pathname);
+    if (wanted && wanted !== 'landing' && landingExisting && !(landingExisting.state === 'completed' && wanted !== FINAL)) {
+      resumeFrom(landingExisting, wanted, true);
+      return;
+    }
     step = 'landing';
+    syncUrl(true);
     render();
   }
   init();

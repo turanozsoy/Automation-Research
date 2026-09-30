@@ -254,14 +254,23 @@ shell is the same on every step: header (back arrow + centred title on steps, br
 4 px red/yellow progress line, "Step n of 7" badge, heading, copy, then a bottom action area with one red
 CTA. Back navigation is the header arrow (`#headerBack`, `aria-label="Back"`). The type face is Inter
 from Google Fonts with a system-sans fallback; self-host it if external font requests are unwanted.
-`body[data-screen]` is `landing`, `step` or `status`. Flow:
+`body[data-screen]` is `landing`, `step` or `status`.
+
+Routes (one browser path per funnel stage, for later pixel/funnel tracking; the server serves the applicant
+page for all of them): `/` landing · `/step-2` about you · `/step-3` date of birth · `/step-4` address ·
+`/step-5` verification code · `/step-6` experience · `/step-7` schedule · `/step-8` getting started ·
+`/preparing` while the role details are being prepared (also the problem state) · `/completed` only once
+the generated role-details link exists. Refreshing or opening a step URL directly resumes that step when the
+saved application has reached it (otherwise the furthest reached step), never creates an application, and
+shows the landing page when there is no application; browser Back/Forward move between steps; nothing
+about the application is in the URL. Flow:
 
 | Screen | Saves | Notes |
 |---|---|---|
-| Landing | — | Start Application → `POST /api/applications` (cookie). A returning applicant sees Continue / Start a new application. |
+| Landing | — | hero (image placeholder: see the comment in `index.html`), earnings pill, Start Driving With Us → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the sticky CTA resumes. |
 | 1 About you | firstName, lastName, mobileNumber (digits), email | `autocomplete` given-name / family-name / tel / email |
 | 2 Date of birth | dateOfBirth (ISO) | month / day / year inputs (`bday-*`); copy says it sets up the onboarding record and is not used to evaluate the application |
-| 3 Address | address1, city, state, zip | separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |
+| 3 Address | address1, city, state, zip | "Street address" (as on the driver’s license), City, State + ZIP; separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |
 | 4 Verification code | nothing (code → `app.verify` only) | one numeric `one-time-code` input, length from config; shows "received" once handed over; asks again after a problem |
 | 5–7 Questions | answers (saved on each selection) | card radios from `config/apply-questions.json` |
 | Final | — | `processing` → "Preparing your role details…" (updates live); `link_ready` → "Your role details are ready" + **View Role Details** (new tab, `app.link_opened` → visited); `completed` → confirmed; `problem` → Try again (back to the code step) |
