@@ -34,6 +34,7 @@ export interface VerifiedApplicationItem {
   id: string; displayId: string; fullName: string; email: string | null;
   createdAt: number; generatedUrlReadyAt: number | null; finalLinkClickedAt: number | null; visitedAt: number | null; verifiedAt: number | null;
   workflowId: string | null; workflowOutcome: string | null;
+  egress: { id: string; label: string } | null;
   processedWith: { profileId: string; label: string; exists: boolean; sessionStatus: 'none' | 'current' | 'attention' | 'expired'; sessionNote: string | null; sessionSavedAt: number | null; lastUsedAt: number | null } | null;
   sessionResult: 'refreshed' | 'failed' | null;
   answers: Record<string, unknown>;
@@ -49,7 +50,7 @@ function applicantMessage(code: string): string {
     case 'ADDRESS_NOT_ACCEPTED': case 'ADDRESS_MISMATCH': return 'We could not confirm your address. Please check the address fields and try again.';
     case 'FIELD_FILL_FAILED': case 'RECONCILE_MISMATCH': return 'Some of your information was not accepted. Please review your details and try again.';
     case 'URL_TIMEOUT': return 'We did not receive your link in time. Please try again.';
-    case 'BROWSER_CLOSED': case 'SERVICE_RESTARTED': case 'AUTOMATION_ABANDONED': return 'Processing was interrupted. Please try again.';
+    case 'BROWSER_CLOSED': case 'SERVICE_RESTARTED': case 'AUTOMATION_ABANDONED': case 'EGRESS_FAILED': return 'Processing was interrupted. Please try again.';
     default: return 'We could not complete this step automatically. Please try again.';
   }
 }
@@ -277,7 +278,7 @@ export class ApplicationService {
       return { ok: false, code: 'INVALID_STATE', message: 'Processing is not available right now' };
     }
     const id = row.id;
-    const { workflowId, queuePosition } = this.registry.startWorkflow(clientIp);
+    const { workflowId, queuePosition } = this.registry.startWorkflow(clientIp, id);
     const attempts = row.workflow_count + 1;
     this.store.patch(id, {
       state: 'processing', workflow_id: workflowId, workflow_count: attempts, verification_step: 'required',
@@ -491,6 +492,7 @@ export class ApplicationService {
       createdAt: r.created_at, generatedUrlReadyAt: r.generated_url_ready_at, finalLinkClickedAt: r.final_link_clicked_at, visitedAt: r.visited_at, verifiedAt: r.verified_at,
       workflowId: r.processed_workflow_id,
       workflowOutcome: asg ? `${asg.state}${asg.outcome_code ? ' (' + asg.outcome_code + ')' : ''}` : null,
+      egress: asg?.egress_id ? { id: asg.egress_id, label: this.profiles.egress.get(asg.egress_id)?.label ?? '(removed egress)' } : null,
       processedWith: r.processed_profile_id
         ? { profileId: r.processed_profile_id, label: profile?.label ?? r.processed_profile_label ?? '(removed account)', exists: !!profile,
             sessionStatus: meta?.sessionStatus ?? 'none', sessionNote: meta?.sessionNote ?? null, sessionSavedAt: meta?.sessionSavedAt ?? null, lastUsedAt: meta?.lastUsedAt ?? null }

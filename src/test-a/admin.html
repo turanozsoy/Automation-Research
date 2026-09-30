@@ -19,6 +19,7 @@
     <nav class="topnav" aria-label="Sections">
       <a href="#overview">Overview</a>
       <a href="#accounts">Accounts &amp; Sessions</a>
+      <a href="#egress">Proxies</a>
       <a href="#verified">Verified Applications</a>
     </nav>
     <div class="topbar-right">
@@ -40,6 +41,7 @@
       <div class="card"><div class="card-label">Accounts</div><div class="card-value" id="statAccounts">–</div><div class="card-note" id="statAccountsNote">&nbsp;</div></div>
       <div class="card"><div class="card-label">Sessions current</div><div class="card-value" id="statCurrent">–</div><div class="card-note" id="statCurrentNote">&nbsp;</div></div>
       <div class="card"><div class="card-label">Needs attention</div><div class="card-value" id="statAttention">–</div><div class="card-note" id="statAttentionNote">&nbsp;</div></div>
+      <div class="card"><div class="card-label">Proxies available</div><div class="card-value" id="statProxies">–</div><div class="card-note" id="statProxiesNote">&nbsp;</div></div>
       <div class="card"><div class="card-label">Verified applicants</div><div class="card-value" id="statVerified">–</div><div class="card-note" id="statVerifiedNote">&nbsp;</div></div>
     </div>
   </section>
@@ -73,6 +75,21 @@
     </div>
   </section>
 
+  <!-- ===== Proxy egress ===== -->
+  <section id="egress" class="section">
+    <div class="section-head">
+      <div><h2>Proxy egress <span class="count" id="egressCount">…</span></h2><p class="section-sub">Each proxy session is used by one browser at a time. After a workflow it is <strong>held</strong> until you release it; a session marked down or retired is never allocated until you restore it. Credentials are stored encrypted and never shown.</p></div>
+      <div class="section-actions"><button class="btn btn-primary" id="btnAddProxies" type="button">Add proxies</button></div>
+    </div>
+    <div class="toolbar"><span class="toolbar-note" id="egressNote"></span></div>
+    <div class="table-wrap">
+      <table class="table" id="egressTable">
+        <thead><tr><th>Proxy</th><th>Status</th><th>Health</th><th>Used</th><th class="th-actions">Actions</th></tr></thead>
+        <tbody id="egressRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ===== Verified applications ===== -->
   <section id="verified" class="section">
     <div class="section-head">
@@ -102,6 +119,20 @@
     <div class="dialog-actions">
       <button type="button" class="btn btn-secondary" id="btnCancelAdd">Cancel</button>
       <button type="submit" class="btn btn-primary" id="btnCreate">Create and get cookies</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== Add proxies ===== -->
+<dialog id="dlgProxies" class="dialog">
+  <form method="dialog" class="dialog-body" id="proxyForm">
+    <h3>Add proxies</h3>
+    <p class="dialog-sub">One per line, as <code>host:port:username:password</code> (the username may carry provider parameters), <code>host:port</code>, or <code>http://user:pass@host:port</code>. Duplicates are skipped. Passwords are encrypted on save and never displayed again.</p>
+    <label class="field"><span>Proxies</span><textarea id="proxyLines" rows="8" spellcheck="false" autocomplete="off" placeholder="geo.iproyal.com:12321:username_country-us_session-abc123:password"></textarea></label>
+    <div class="import-result" id="proxyResult" hidden></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" id="btnCancelProxies">Close</button>
+      <button type="submit" class="btn btn-primary" id="btnImportProxies">Add</button>
     </div>
   </form>
 </dialog>

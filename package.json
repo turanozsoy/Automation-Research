@@ -19,7 +19,9 @@
     "e2e:app:problem": "tsx dev/app-problem-e2e.ts",
     "app:start": "tsx dev/app-start.ts",
     "e2e:apply": "tsx dev/apply-page-test.ts",
-    "e2e:concurrency": "tsx dev/concurrency-e2e.ts"
+    "e2e:concurrency": "tsx dev/concurrency-e2e.ts",
+    "e2e:egress": "tsx dev/egress-e2e.ts",
+    "fake-proxy": "tsx dev/fake-proxy.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

@@ -132,6 +132,47 @@ const MIGRATIONS: string[] = [
   -- Operator-facing note about the saved session (e.g. SESSION_PERSIST_FAILED); cleared when a session is saved.
   ALTER TABLE profiles ADD COLUMN session_note TEXT;
   `,
+  `
+  -- Egress: where a workflow's traffic leaves from. 'direct' is the server's own IP. Proxy rows are exclusive
+  -- sessions (max_concurrent, default 1) that are HELD after use until an operator releases them. Credentials
+  -- use the same envelope encryption as sessions.
+  CREATE TABLE egress (
+    id                   TEXT PRIMARY KEY,
+    label                TEXT NOT NULL,
+    kind                 TEXT NOT NULL,            -- direct | http | socks5
+    host                 TEXT,
+    port                 INTEGER,
+    fingerprint          TEXT NOT NULL UNIQUE,     -- sha256 of kind|host|port|username|password: the same proxy is never stored twice
+    cred_enc             BLOB, cred_nonce BLOB, cred_key_enc BLOB, cred_key_version INTEGER,
+    has_auth             INTEGER NOT NULL DEFAULT 0,
+    max_concurrent       INTEGER NOT NULL DEFAULT 1,
+    hold_after_use       INTEGER NOT NULL DEFAULT 1,
+    state                TEXT NOT NULL,            -- available | in_use | held | down | retired
+    state_reason         TEXT,
+    health               TEXT NOT NULL DEFAULT 'unknown',   -- unknown | healthy | degraded | down
+    last_check_at        INTEGER,
+    last_error           TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    use_count            INTEGER NOT NULL DEFAULT 0,
+    last_used_at         INTEGER,
+    held_since           INTEGER,
+    released_at          INTEGER,
+    created_at           INTEGER NOT NULL,
+    updated_at           INTEGER NOT NULL
+  );
+  CREATE TABLE egress_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, egress_id TEXT NOT NULL, from_state TEXT, to_state TEXT NOT NULL,
+    reason TEXT, workflow_id TEXT, at INTEGER NOT NULL
+  );
+  INSERT INTO egress (id, label, kind, fingerprint, has_auth, max_concurrent, hold_after_use, state, health, created_at, updated_at)
+    VALUES ('direct', 'Direct (server IP)', 'direct', 'direct', 0, 1000, 0, 'available', 'healthy', strftime('%s','now') * 1000, strftime('%s','now') * 1000);
+  -- Which egress a workflow ran through, which application it belongs to, and a lease token that fences late writes.
+  ALTER TABLE assignments ADD COLUMN egress_id TEXT;
+  ALTER TABLE assignments ADD COLUMN application_id TEXT;
+  ALTER TABLE assignments ADD COLUMN lease_token TEXT;
+  CREATE UNIQUE INDEX assignments_live_application ON assignments(application_id)
+    WHERE application_id IS NOT NULL AND state IN ('allocating','preparing','ready','submitting','paused');
+  `,
 ];
 
 export function openDb(path: string): Db {

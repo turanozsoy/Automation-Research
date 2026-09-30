@@ -7,7 +7,7 @@ import type { Settings } from './settings.js';
 import { AutomationError, type Timeline } from './timeline.js';
 import { Workflow, toAutomationError, type TerminalOutcome } from './workflow.js';
 
-interface Queued { workflowId: string; clientIp?: string; enqueuedAt: number; timer: NodeJS.Timeout }
+interface Queued { workflowId: string; clientIp?: string; applicationId?: string; enqueuedAt: number; timer: NodeJS.Timeout }
 const workflowId = (m: FieldUpdateMsg) => m.workflowId;
 
 /**
@@ -84,12 +84,12 @@ export class WorkflowRegistry {
   // ---------- start / queue ----------
 
   /** Create a workflow id, allocate a profile (or queue), and prepare the context. */
-  startWorkflow(clientIp?: string): { workflowId: string; queuePosition?: number } {
+  startWorkflow(clientIp?: string, applicationId?: string): { workflowId: string; queuePosition?: number } {
     const workflowId = randomUUID();
     this.early.set(workflowId, []);
-    if (this.live.size >= this.settings.maxWorkflows || !this.tryAllocate(workflowId, clientIp)) {
+    if (this.live.size >= this.settings.maxWorkflows || !this.tryAllocate(workflowId, clientIp, applicationId)) {
       const timer = setTimeout(() => this.queueTimeout(workflowId), this.settings.queueTimeoutMs);
-      this.queue.push({ workflowId, clientIp, enqueuedAt: Date.now(), timer });
+      this.queue.push({ workflowId, clientIp, applicationId, enqueuedAt: Date.now(), timer });
       this.tl.child(workflowId).mark('queued for a profile', `position ${this.queue.length}, ${this.poolStatus().available} available, ${this.live.size}/${this.settings.maxWorkflows} live`);
       this.broadcastPool();
       return { workflowId, queuePosition: this.queue.length };
@@ -110,7 +110,7 @@ export class WorkflowRegistry {
   private async processQueue(): Promise<void> {
     while (this.queue.length && this.live.size < this.settings.maxWorkflows) {
       const next = this.queue[0];
-      if (!this.tryAllocate(next.workflowId, next.clientIp)) return;
+      if (!this.tryAllocate(next.workflowId, next.clientIp, next.applicationId)) return;
       clearTimeout(next.timer);
       this.queue.shift();
       this.send({ type: 'workflow.accepted', ts: Date.now(), workflowId: next.workflowId });
@@ -118,8 +118,14 @@ export class WorkflowRegistry {
   }
 
   /** Reserve a profile and kick off preparation. Returns false when no profile is available. */
-  private tryAllocate(workflowId: string, clientIp?: string): boolean {
-    const r = this.store.reserve(workflowId, this.settings.leaseMs, clientIp);
+  private tryAllocate(workflowId: string, clientIp?: string, applicationId?: string): boolean {
+    let r: ReturnType<ProfileStore['reserve']>;
+    try { r = this.store.reserve(workflowId, this.settings.leaseMs, clientIp, applicationId); }
+    catch (e) {
+      // e.g. the unique index refused a second live workflow for the same application
+      this.tl.child(workflowId).mark('reservation refused', e instanceof Error ? e.message.split('\n')[0] : String(e));
+      return false;
+    }
     if (!r) return false;
     void this.prepare(workflowId, r.profile.id, r.profile.label, 0);
     return true;
@@ -141,7 +147,10 @@ export class WorkflowRegistry {
         tl.mark('profile invalid', `${label}: storageState unreadable`);
         return this.reassign(workflowId, attempt, 'storageState unreadable');
       }
-      const bundle = await this.browser.createContext(workflowId, storageState);
+      const asg = this.store.getAssignment(workflowId);
+      const proxy = asg?.egress_id ? this.store.egress.proxyOptions(asg.egress_id) : null;
+      if (asg?.egress_id && asg.egress_id !== 'direct') tl.mark('egress', this.store.egress.get(asg.egress_id)?.label ?? asg.egress_id);
+      const bundle = await this.browser.createContext(workflowId, storageState, proxy);
       wf = new Workflow(workflowId, bundle, this.cfg, tl, this.send);
       this.live.set(workflowId, wf);
       wf.setTerminalHandler((outcome, code) => {
@@ -163,7 +172,16 @@ export class WorkflowRegistry {
       this.store.markVerified(profileId);
       this.broadcastPool();
     } catch (e) {
-      const ae = toAutomationError(e);
+      let ae = toAutomationError(e);
+      // A network failure while opening Website B through a proxy egress is the egress's fault, not the account's.
+      if (/ERR_(PROXY|TUNNEL|SOCKS)|ERR_PROXY_AUTH|ERR_NO_SUPPORTED_PROXIES|ERR_HTTP_RESPONSE_CODE_FAILURE/.test(ae.message)) {
+        const asg = this.store.getAssignment(workflowId);
+        if (asg?.egress_id && asg.egress_id !== 'direct') {
+          this.store.egress.recordWorkflowFailure(asg.egress_id, workflowId, ae.message.replace(/https?:\/\/\S+/g, '<url>'));
+          ae = new AutomationError('EGRESS_FAILED', `Egress ${this.store.egress.get(asg.egress_id)?.label ?? asg.egress_id} failed: ${ae.message.split(' at ')[0]}`);
+          tl.mark('egress failed', ae.message);
+        }
+      }
       if (ae.code === 'LOGIN_REQUIRED' && wf && !wf.isTerminal()) {
         // Profile session is dead: retire it and try another profile under the same workflow id.
         tl.mark('profile expired', `${label}: ${ae.message}`);
@@ -208,6 +226,10 @@ export class WorkflowRegistry {
   // ---------- routing ----------
 
   get(workflowId: string): Workflow | undefined { return this.live.get(workflowId); }
+
+  /** An operator released an egress or an account: try to serve the queue now. */
+  kick(): Promise<void> { return this.processQueue(); }
+  isPerContextProxy(): boolean { return this.browser.isPerContextProxy(); }
 
   /** Workflows that hold or are about to hold a browser context (live, preparing or queued). */
   activeCount(): number { return this.live.size + this.early.size; }

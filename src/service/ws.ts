@@ -7,6 +7,8 @@ import type { AppClientMsg, AppServerMsg, ApplicationEventType, ApplicationView,
 import type { LoginSessionManager } from './accounts/login-sessions.js';
 import type { ApplicationService } from './applications/service.js';
 import type { BrowserModeControl } from './dev/browser-mode.js';
+import type { EgressHealth } from './egress/health.js';
+import { parseProxyLine } from './egress/store.js';
 import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
@@ -37,10 +39,11 @@ export interface ServerDeps {
   logins: LoginSessionManager;
   apps: ApplicationService;
   browserMode: BrowserModeControl;
+  egressHealth: EgressHealth;
   settings: Settings;
   tl: Timeline;
   /** Set by startServer: nudge the operations page. */
-  notifyAdmin?: (what: 'verified' | 'accounts') => void;
+  notifyAdmin?: (what: 'verified' | 'accounts' | 'egress') => void;
 }
 
 /**
@@ -67,12 +70,13 @@ export function startServer(deps: ServerDeps): Promise<void> {
   const devClients = new Set<WebSocket>();
   const adminClients = new Set<WebSocket>();
   // Internal operations page: a data-free nudge; the page re-fetches what changed over the admin API.
-  const notifyAdmin = (what: 'verified' | 'accounts') => {
+  const notifyAdmin = (what: 'verified' | 'accounts' | 'egress') => {
     const data = JSON.stringify({ type: 'admin.changed', what, ts: Date.now() });
     for (const c of adminClients) if (c.readyState === WebSocket.OPEN) c.send(data);
   };
   apps.setAdminNotifier(notifyAdmin);
   deps.notifyAdmin = notifyAdmin;
+  deps.egressHealth.setOnChange(() => notifyAdmin('egress'));
   const appSockets = new Map<string, Set<WebSocket>>();
   const sendApp = (applicationId: string, m: AppServerMsg) => {
     const set = appSockets.get(applicationId);
@@ -252,6 +256,36 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
 
     // ---- operations page (internal) ----
     if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
+
+    // ---- egress (proxies): metadata only, never credentials ----
+    if (url === '/api/admin/egress' && method === 'GET') return json(200, { egress: deps.store.egress.list(), counts: deps.store.egress.counts(), directAllowed: !deps.registry.isPerContextProxy() });
+    if (url === '/api/admin/egress' && method === 'POST') {
+      const body = await readJson(req);
+      const text = typeof body.lines === 'string' ? body.lines : typeof body.line === 'string' ? body.line : '';
+      if (!text.trim()) return json(400, { error: 'nothing to import' });
+      if (text.length > 200_000) return json(413, { error: 'too much input' });
+      const r = deps.store.egress.importLines(text);
+      deps.tl.mark('egress import', `${r.added} added / ${r.duplicates} duplicates / ${r.invalid.length} invalid`);
+      if (r.added) { deps.notifyAdmin?.('egress'); void deps.egressHealth.checkAll(); }
+      return json(200, r);
+    }
+    if (url === '/api/admin/egress/validate' && method === 'POST') {
+      const body = await readJson(req);
+      const r = parseProxyLine(String(body.line ?? ''));
+      return json(200, r.ok ? { ok: true, host: r.proxy.host, port: r.proxy.port, kind: r.proxy.kind, hasAuth: r.proxy.username !== undefined } : { ok: false, reason: r.reason });
+    }
+    const eg = /^\/api\/admin\/egress\/([^/]+)(?:\/(release|retire|check))?$/.exec(url);
+    if (eg) {
+      const id = decodeURIComponent(eg[1]);
+      const action = eg[2];
+      if (!deps.store.egress.get(id)) return json(404, { error: 'egress not found' });
+      try {
+        if (!action && method === 'DELETE') { deps.store.egress.remove(id); deps.tl.mark('egress removed', id.slice(0, 8)); deps.notifyAdmin?.('egress'); return json(200, { ok: true }); }
+        if (action === 'release' && method === 'POST') { const m = deps.store.egress.release(id); deps.tl.mark('egress released', m.label); deps.notifyAdmin?.('egress'); void deps.registry.kick(); return json(200, m); }
+        if (action === 'retire' && method === 'POST') { const m = deps.store.egress.retire(id); deps.tl.mark('egress retired', m.label); deps.notifyAdmin?.('egress'); return json(200, m); }
+        if (action === 'check' && method === 'POST') { const r = await deps.egressHealth.check(id); deps.notifyAdmin?.('egress'); return json(200, { ...r, egress: deps.store.egress.meta(deps.store.egress.get(id)!) }); }
+      } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
+    }
     if (url === '/api/admin/applications/verified' && method === 'GET') {
       const qs = new URL(req.url ?? '/', 'http://x').searchParams;
       const limit = Math.min(100, Math.max(1, Number(qs.get('limit') ?? 25) || 25));

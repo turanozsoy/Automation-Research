@@ -1,6 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db.js';
 import type { Vault } from '../crypto.js';
+import { EgressStore } from '../egress/store.js';
 
 export type ProfileState = 'available' | 'reserved' | 'starting' | 'active' | 'cooldown' | 'expired' | 'invalid' | 'disabled';
 export type AssignmentState = 'allocating' | 'preparing' | 'ready' | 'submitting' | 'paused' | 'completed' | 'failed' | 'abandoned' | 'lost' | 'uncertain';
@@ -33,6 +34,7 @@ export interface AssignmentRow {
   client_ip: string | null; reassign_count: number; submit_state: string; idempotency_key: string | null;
   snapshot_hash: string | null; submitted_at: number | null; result_url: string | null; outcome_code: string | null;
   link_state: 'none' | 'visited' | 'verified'; visited_at: number | null; verified_at: number | null;
+  egress_id: string | null; application_id: string | null; lease_token: string | null;
   created_at: number; updated_at: number; ended_at: number | null;
 }
 export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; noSession: number; nextAvailableInMs: number | null }
@@ -46,7 +48,16 @@ const LIVE: AssignmentState[] = ['allocating', 'preparing', 'ready', 'submitting
  * statement, and the partial unique index on live assignments backs that up.
  */
 export class ProfileStore {
-  constructor(private db: Db, private vault: Vault, private instanceId: string) {}
+  /** Egress rows live in the same database, so account + egress are acquired in ONE transaction. */
+  readonly egress: EgressStore;
+  /** False when Chromium was launched in per-context proxy mode (Windows): contexts without a proxy cannot work there. */
+  private directAllowed = true;
+
+  constructor(private db: Db, private vault: Vault, private instanceId: string) {
+    this.egress = new EgressStore(db, vault);
+  }
+
+  setDirectAllowed(v: boolean): void { this.directAllowed = v; }
 
   // ---------- CRUD ----------
 
@@ -143,8 +154,13 @@ export class ProfileStore {
   refreshStorageState(id: string, storageStateJson: string, workflowId?: string): void {
     const e = this.vault.encrypt(id, storageStateJson);
     const now = Date.now();
-    this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?, session_note=NULL, updated_at=? WHERE id=?`)
-      .run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id);
+    // Fenced: only the workflow whose assignment still names this account may write its session (a zombie after
+    // reassignment or lease loss writes nothing).
+    const r = workflowId
+      ? this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?, session_note=NULL, updated_at=?
+          WHERE id=? AND EXISTS (SELECT 1 FROM assignments WHERE workflow_id=? AND profile_id=?)`).run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id, workflowId, id)
+      : this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?, session_note=NULL, updated_at=? WHERE id=?`).run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id);
+    if (r.changes === 0) throw new Error('session write fenced: this workflow no longer holds the account');
     this.event(id, null, 'session_refreshed', 'session exported from the workflow context after a successful run', workflowId);
   }
 
@@ -173,11 +189,15 @@ export class ProfileStore {
    * and assignment, or null when none is available. Calling it again with the same
    * workflowId returns the existing assignment (idempotent).
    */
-  reserve(workflowId: string, leaseMs: number, clientIp?: string): { profile: ProfileRow; assignment: AssignmentRow } | null {
+  reserve(workflowId: string, leaseMs: number, clientIp?: string, applicationId?: string): { profile: ProfileRow; assignment: AssignmentRow } | null {
     const now = Date.now();
     return this.db.transaction(() => {
       const existing = this.getAssignment(workflowId);
       if (existing && LIVE.includes(existing.state)) return { profile: this.get(existing.profile_id)!, assignment: existing };
+
+      // Both resources or neither: an egress must be allocatable before the account is touched.
+      const egressId = this.egress.pickAvailable(this.directAllowed);
+      if (!egressId) return null;
 
       const row = this.db.prepare(`
         UPDATE profiles SET state='reserved', last_used_at=?, use_count=use_count+1, updated_at=?
@@ -190,10 +210,11 @@ export class ProfileStore {
         RETURNING *`).get(now, now, now) as ProfileRow | undefined;
       if (!row) return null;
 
-      this.db.prepare(`INSERT INTO assignments (workflow_id,profile_id,state,instance_id,lease_expires_at,client_ip,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?)`).run(workflowId, row.id, 'allocating', this.instanceId, now + leaseMs, clientIp ?? null, now, now);
+      this.db.prepare(`INSERT INTO assignments (workflow_id,profile_id,state,instance_id,lease_expires_at,client_ip,egress_id,application_id,lease_token,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(workflowId, row.id, 'allocating', this.instanceId, now + leaseMs, clientIp ?? null, egressId, applicationId ?? null, randomBytes(16).toString('hex'), now, now);
+      this.egress.markInUse(egressId, workflowId);
       this.event(row.id, 'available', 'reserved', 'allocated', workflowId);
-      this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}`);
+      this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}, egress ${this.egress.get(egressId)?.label ?? egressId}`);
       return { profile: row, assignment: this.getAssignment(workflowId)! };
     })();
   }
@@ -258,6 +279,7 @@ export class ProfileStore {
     const now = Date.now();
     this.db.transaction(() => {
       const p = this.get(a.profile_id)!;
+      if (a.egress_id) this.egress.markUsed(a.egress_id, workflowId, outcome);
       const wfState: AssignmentState = outcome === 'auth_expired' || outcome === 'invalid' ? 'failed' : outcome === 'lost' ? 'lost' : outcome;
       if (!opts.reassign) {
         this.db.prepare('UPDATE assignments SET state=?, outcome_code=?, ended_at=?, updated_at=? WHERE workflow_id=?').run(wfState, opts.outcomeCode ?? null, now, now, workflowId);

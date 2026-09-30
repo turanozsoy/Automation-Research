@@ -19,6 +19,8 @@ What exists now:
   screen. Vanilla HTML/CSS/JS in `src/apply/`, mobile-first, saves every step, resumes by cookie, never
   shows workflow/profile/pool/automation detail. Questions and the code length live in
   `config/apply-questions.json` (`APPLY_CONFIG` to override). See [Applicant site](#applicant-site).
+- **Proxy egress.** Optional per-workflow proxies managed on the operations page: exclusive sessions,
+  held after use until released, encrypted credentials, health checks. See [Proxy egress](#proxy-egress).
 - **Applications.** A persistent applicant record (`applications` + `application_events`), independent
   of any workflow: it survives refreshes, reconnects, automation failures and service restarts. Owned
   through an opaque session token in an HttpOnly cookie (only its hash is stored). See
@@ -95,6 +97,45 @@ recorded. If the export or save fails, the account gets `session_note = SESSION_
 `session_persist_failed` is recorded; the applicant is not told (their application is unaffected).
 The accounts table's Session column shows: none / saved · current / saved · needs attention /
 saved · expired.
+
+### Proxy egress
+
+Where a workflow's traffic leaves from is an **egress**. `Direct (server IP)` is the first row and is
+what every workflow used until now. Proxy rows are **exclusive sessions**: `max_concurrent` (1) live
+workflows at a time, and after a workflow they are **held** until an operator presses *Release proxy*
+on the operations page, after checking with the provider that the session may be reused. Lifecycle:
+
+```
+available → in_use → held → (Release proxy) → available
+available / held → down            three failed health checks or network failures; needs Restore
+any (not in use) → retired         Retire; needs Reinstate
+```
+
+- **Import** on `/admin/accounts` → *Add proxies*: one per line as `host:port:username:password`
+  (the username may carry provider parameters), `host:port`, or `http://user:pass@host:port`.
+  Feedback: `N added / N duplicates / N invalid` with the reason per invalid line. The same proxy is
+  never stored twice (fingerprint of kind, host, port and credentials).
+- **Credentials** are encrypted with the same envelope encryption as sessions and only ever reach
+  Playwright's context options. The API, the page, logs, events and sockets carry host:port only.
+- **Allocation** is one SQLite transaction with the account: an allocatable egress (available, below
+  its cap; proxies before direct, least recently used first) must exist before the account is
+  reserved. Both or neither. The egress is fixed for the workflow's lifetime and recorded on the
+  assignment (`egress_id`); verified applications show it in their details.
+- **Health**: an active probe through each proxy every `EGRESS_CHECK_INTERVAL_MS` (60 s) against
+  `EGRESS_CHECK_URL` (default Website B's base URL), plus passive failures when a workflow cannot open
+  Website B through its proxy (`EGRESS_FAILED`, a retryable problem for the applicant; the other
+  workflows are unaffected). Three consecutive failures take the session down.
+- **No pooling of used sessions.** Finishing a workflow never returns a session to the pool.
+- **Direct** can be retired to force proxy-only operation (workflows then queue when no session is
+  available) and reinstated later.
+- **Windows note.** Chromium needs Playwright's per-context proxy placeholder on Windows
+  (`CHROMIUM_PROXY_MODE=per-context`, or `auto` when a proxy exists at start); under it no context can
+  go direct, so the direct egress is unavailable. Linux and macOS need nothing special.
+- The manual login capture browser still uses the server IP; it is not routed through a session.
+
+Testing: `npm run fake-proxy -- --port 3100 --control 3900 --auth user1:pass1` (and a second on 3101),
+then `npm run e2e:egress`: import feedback, exclusive use, held/release serving the queue, health
+down, a failing proxy failing only its own workflow, Restore, and no credential in any table, log or page.
 
 ### Adding accounts (manual login, no extension)
 
@@ -333,6 +374,9 @@ src/service/applications/store.ts    applications + application_events persisten
 src/service/applications/service.ts  application ⇄ workflow bridge: start when complete, seed, submit, map results, problems, restart recovery
 src/service/applications/session.ts  opaque session token, hashing, cookie helpers
 src/service/dev/browser-mode.ts      development control: visible / headless switch, deferred while workflows run, persisted preference
+src/service/egress/store.ts          proxy egress: parser, encrypted credentials, exclusive sessions, held/release, health state
+src/service/egress/health.ts         active proxy probes (CONNECT / GET through the proxy)
+dev/fake-proxy.ts, egress-e2e.ts     local CONNECT proxy with a control port; egress end-to-end test
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
 src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session

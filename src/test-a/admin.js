@@ -232,6 +232,75 @@
   }
 
   // =====================================================================
+  // proxy egress
+  // =====================================================================
+  const EGRESS_STATE = { available: ['ok', 'Available'], in_use: ['brand', 'In use'], held: ['warn', 'Held'], down: ['danger', 'Down'], retired: ['neutral', 'Retired'] };
+  const EGRESS_HEALTH = { healthy: ['ok', 'Healthy'], degraded: ['warn', 'Degraded'], down: ['danger', 'Down'], unknown: ['neutral', 'Unknown'] };
+  let egressDirectAllowed = true;
+
+  async function loadEgress() {
+    let j;
+    try { j = await api('/api/admin/egress'); } catch (e) { $('#egressNote').textContent = e.message; return; }
+    egressDirectAllowed = j.directAllowed;
+    const c = j.counts;
+    $('#egressCount').textContent = `${c.total} session${c.total === 1 ? '' : 's'}`;
+    $('#statProxies').textContent = c.available;
+    $('#statProxiesNote').textContent = c.total ? `${c.inUse} in use · ${c.held} held · ${c.down} down` : 'Workflows use the server IP';
+    $('#egressNote').textContent = egressDirectAllowed ? '' : 'Per-context proxy mode: the direct egress is unavailable; every workflow needs a proxy.';
+    const tb = $('#egressRows');
+    tb.innerHTML = '';
+    for (const e of j.egress) tb.appendChild(renderEgress(e));
+  }
+
+  function renderEgress(e) {
+    const tr = document.createElement('tr');
+    tr.dataset.egressId = e.id;
+    const isDirect = e.kind === 'direct';
+    const where = isDirect ? '<span class="sub">The server\u2019s own outbound IP</span>' : `<span class="sub mono">${esc(e.kind)}://${esc(e.host)}:${esc(String(e.port))}${e.hasAuth ? ' · auth' : ''}</span>`;
+    const stateBadge = badge(EGRESS_STATE, e.state);
+    const stateSub = e.state === 'held' ? `<span class="sub">since ${esc(human(e.heldSince))}</span>`
+      : e.state === 'in_use' ? `<span class="sub">${e.liveWorkflows} workflow${e.liveWorkflows === 1 ? '' : 's'}</span>`
+      : e.state === 'available' && isDirect ? `<span class="sub">${e.liveWorkflows} live workflow${e.liveWorkflows === 1 ? '' : 's'}${egressDirectAllowed ? '' : ' · unavailable in per-context mode'}</span>`
+      : e.state === 'available' && e.releasedAt ? `<span class="sub">released ${esc(human(e.releasedAt))}</span>`
+      : e.stateReason ? `<span class="sub">${esc(e.stateReason)}</span>` : '';
+    const healthBadge = isDirect ? '<span class="sub">—</span>' : badge(EGRESS_HEALTH, e.health);
+    const healthSub = isDirect ? '' : `<span class="sub">${e.lastCheckAt ? 'checked ' + esc(ago(e.lastCheckAt)) : 'not checked yet'}${e.lastError ? ' · ' + esc(e.lastError) : ''}</span>`;
+    tr.innerHTML = `
+      <td data-label="Proxy"><span class="acct-name">${esc(e.label)}</span>${where}</td>
+      <td data-label="Status">${stateBadge}${stateSub}</td>
+      <td data-label="Health">${healthBadge}${healthSub}</td>
+      <td data-label="Used">${e.useCount} run${e.useCount === 1 ? '' : 's'}<span class="sub">${e.lastUsedAt ? 'last ' + esc(human(e.lastUsedAt)) : 'never'}</span></td>
+      <td data-label="Actions" class="td-actions"></td>`;
+    const actions = tr.lastElementChild;
+    const btn = (text, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = fn; actions.appendChild(b); return b; };
+    const act = async (path, method, okMsg) => { try { await api(path, { method }); if (okMsg) msg(okMsg); await loadEgress(); } catch (err) { msg(err.message, true); } };
+    if (e.state === 'held') btn('Release proxy', 'btn btn-primary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} released to the pool.`));
+    if (e.state === 'down') btn('Restore', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} restored.`));
+    if (e.state === 'retired') btn('Reinstate', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} reinstated.`));
+    if (!isDirect) btn('Check now', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/check`, 'POST'));
+    if (e.state !== 'retired' && e.state !== 'in_use') btn('Retire', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/retire`, 'POST', `${e.label} retired.`));
+    if (!isDirect && e.state !== 'in_use') btn('Remove', 'btn-text-danger', () => { if (confirm(`Remove proxy ${e.label}? Its history stays on past workflows.`)) act(`/api/admin/egress/${e.id}`, 'DELETE', `${e.label} removed.`); });
+    return tr;
+  }
+
+  $('#btnAddProxies').onclick = () => { $('#proxyLines').value = ''; $('#proxyResult').hidden = true; $('#dlgProxies').showModal(); $('#proxyLines').focus(); };
+  $('#btnCancelProxies').onclick = () => $('#dlgProxies').close();
+  $('#proxyForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const lines = $('#proxyLines').value;
+    if (!lines.trim()) { msg('Paste at least one proxy.', true); return; }
+    $('#btnImportProxies').disabled = true;
+    try {
+      const r = await api('/api/admin/egress', { method: 'POST', body: JSON.stringify({ lines }) });
+      const box = $('#proxyResult');
+      box.hidden = false;
+      box.innerHTML = `<strong>${r.added} added / ${r.duplicates} duplicates / ${r.invalid.length} invalid</strong>${r.invalid.length ? '<ul>' + r.invalid.map((i) => `<li>Line ${i.line}: ${esc(i.reason)}</li>`).join('') + '</ul>' : ''}`;
+      $('#proxyLines').value = '';
+      await loadEgress();
+    } catch (e) { msg(e.message, true); } finally { $('#btnImportProxies').disabled = false; }
+  });
+
+  // =====================================================================
   // verified applications
   // =====================================================================
   const PAGE = 25;
@@ -305,6 +374,7 @@
     row('Session after this run', it.sessionResult === 'failed' ? badge({ f: ['warn', 'SESSION_PERSIST_FAILED'] }, 'f') : it.sessionResult === 'refreshed' ? badge({ r: ['ok', 'Refreshed'] }, 'r') : '—');
     row('Workflow ID', `<code>${esc(it.workflowId || '—')}</code>`);
     row('Workflow outcome', esc(it.workflowOutcome || '—'));
+    row('Egress', it.egress ? esc(it.egress.label) : '—');
     group('Answers');
     const answers = Object.entries(it.answers || {});
     if (!answers.length) row('Answers', '<span class="sub">None recorded</span>');
@@ -333,6 +403,7 @@
       if (m.type !== 'admin.changed') return;
       if (m.what === 'verified') loadVerified(false);
       if (m.what === 'accounts') { load().catch(() => {}); loadVerified(false); }
+      if (m.what === 'egress') loadEgress();
     };
     ws.onclose = () => { $('#liveDot').classList.remove('on'); setTimeout(connectAdmin, 3000); };
   }
@@ -350,6 +421,7 @@
 
   load().catch((e) => msg(e.message, true));
   loadVerified(true);
+  loadEgress();
   connectAdmin();
   pollMode();
   setInterval(pollMode, 15000);

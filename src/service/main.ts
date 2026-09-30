@@ -7,6 +7,7 @@ import { LoginSessionManager } from './accounts/login-sessions.js';
 import { ApplicationService } from './applications/service.js';
 import { ApplicationStore } from './applications/store.js';
 import { BrowserModeControl } from './dev/browser-mode.js';
+import { EgressHealth } from './egress/health.js';
 import { ProfileStore } from './profiles/store.js';
 import { loadSettings } from './settings.js';
 import { Timeline } from './timeline.js';
@@ -32,13 +33,22 @@ async function main(): Promise<void> {
   const registry = new WorkflowRegistry(settings, cfg, store, browser, tl);
   const browserMode = new BrowserModeControl(settings, browser, registry, tl);
   browser.setMode(browserMode.initialMode());
+  // Windows needs Playwright's per-context placeholder for per-context proxies; under it no context can go direct.
+  const proxyEgresses = store.egress.counts().total;
+  const perContext = settings.chromiumProxyMode === 'per-context' || (settings.chromiumProxyMode === 'auto' && process.platform === 'win32' && proxyEgresses > 0);
+  browser.setPerContextProxy(perContext);
+  store.setDirectAllowed(!perContext);
+  const eg = store.egress.counts();
+  tl.mark('egress', `${eg.total} proxy egress(es): ${eg.available} available, ${eg.inUse} in use, ${eg.held} held, ${eg.down} down, ${eg.retired} retired; direct ${perContext ? 'unavailable (per-context proxy mode)' : 'allowed'}`);
   await browser.launch();
   registry.start();
   const logins = new LoginSessionManager(settings, cfg, store, tl);
   const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl, store);
   const interrupted = apps.recoverOnBoot();
   if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
-  await startServer({ cfg, registry, store, logins, apps, browserMode, settings, tl });
+  const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl);
+  await startServer({ cfg, registry, store, logins, apps, browserMode, egressHealth, settings, tl });
+  egressHealth.start();
   tl.mark('server listening', `http://localhost:${settings.port}`);
 
   console.log('\n────────────────────────────────────────────────────────────');
@@ -51,6 +61,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     tl.mark('shutting down');
+    egressHealth.stop();
     await logins.closeAll();
     await registry.stop();
     await browser.close();

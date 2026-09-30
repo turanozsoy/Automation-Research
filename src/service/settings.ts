@@ -31,6 +31,11 @@ export interface Settings {
   devSettingsPath: string;
   /** Development: screenshots / sanitized HTML / JSON written when an automation step fails (empty string disables). */
   failureArtifactsDir: string;
+  /** Egress health: interval for active proxy checks (0 disables) and the URL probed through each proxy (default: Website B's base URL). */
+  egressCheckIntervalMs: number;
+  egressCheckUrl: string | null;
+  /** Chromium proxy launch mode: 'auto' (per-context placeholder only on Windows when a proxy egress exists), 'per-context', or 'none'. */
+  chromiumProxyMode: 'auto' | 'per-context' | 'none';
 }
 
 const num = (name: string, def: number) => {
@@ -57,5 +62,8 @@ export function loadSettings(): Settings {
     applicantSubmitFallbackMs: num('APPLICANT_SUBMIT_FALLBACK_MS', 20_000),
     devSettingsPath: resolve(dataDir, 'dev-settings.json'),
     failureArtifactsDir: process.env.FAILURE_ARTIFACTS === '0' ? '' : resolve(dataDir, 'debug', 'failures'),
+    egressCheckIntervalMs: num('EGRESS_CHECK_INTERVAL_MS', 60_000),
+    egressCheckUrl: process.env.EGRESS_CHECK_URL || null,
+    chromiumProxyMode: (process.env.CHROMIUM_PROXY_MODE as 'auto' | 'per-context' | 'none') || 'auto',
   };
 }

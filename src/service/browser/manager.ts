@@ -30,6 +30,8 @@ export class BrowserManager {
   private contexts = new Map<string, ContextBundle>();
   private onDisconnect: (() => void) | null = null;
   private headless: boolean;
+  /** Launch with Playwright's 'per-context' proxy placeholder (needed on Windows for per-context proxies; contexts without a proxy cannot work then). */
+  private perContextProxy = false;
   private restarting = false;
   private closingIntentionally = false;
   private captures = new Map<string, Promise<void>>();
@@ -43,6 +45,9 @@ export class BrowserManager {
   isRestarting(): boolean { return this.restarting; }
   /** Only before launch() / restart(): the mode the next Chromium process uses. */
   setMode(mode: BrowserMode): void { this.headless = mode === 'headless'; }
+  /** Only before launch() / restart(). */
+  setPerContextProxy(v: boolean): void { this.perContextProxy = v; }
+  isPerContextProxy(): boolean { return this.perContextProxy; }
 
   async launch(): Promise<void> {
     const { chromiumPath } = this.settings;
@@ -54,6 +59,9 @@ export class BrowserManager {
       // The service's own shutdown ends workflows, exports their sessions, then closes Chromium.
       // Playwright's default signal handlers would kill Chromium the instant SIGTERM/SIGINT arrives.
       handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+      // Linux/macOS: per-context proxies work with a plain launch and no-proxy contexts go direct. Windows needs the
+      // placeholder, under which EVERY context must carry a proxy (the 'direct' egress is then unavailable).
+      proxy: this.perContextProxy ? { server: 'per-context' } : undefined,
     });
     this.browser = browser;
     browser.on('disconnected', () => {
@@ -63,7 +71,7 @@ export class BrowserManager {
       this.browser = null;
       this.onDisconnect?.();
     });
-    this.tl.mark('Chromium launched', headless ? 'headless' : 'visible');
+    this.tl.mark('Chromium launched', `${headless ? 'headless' : 'visible'}${this.perContextProxy ? ', per-context proxy mode' : ''}`);
   }
 
   /**
@@ -143,13 +151,14 @@ export class BrowserManager {
     return this.contexts.size;
   }
 
-  /** New isolated context for a workflow, seeded with the profile's storageState (JSON string). */
-  async createContext(workflowId: string, storageStateJson: string): Promise<ContextBundle> {
+  /** New isolated context for a workflow, seeded with the profile's storageState (JSON string) and, for a proxy egress, its proxy. */
+  async createContext(workflowId: string, storageStateJson: string, proxy?: { server: string; username?: string; password?: string } | null): Promise<ContextBundle> {
     if (!this.browser) throw new Error('browser not running');
     const storageState = JSON.parse(storageStateJson);
     const context = await this.browser.newContext({
       storageState,
       viewport: this.headless ? { width: 1280, height: 900 } : null,
+      proxy: proxy ?? undefined,
     });
     const page = await context.newPage();
     const bundle = { context, page };
