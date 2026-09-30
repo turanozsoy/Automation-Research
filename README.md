@@ -49,6 +49,21 @@ Then open <http://localhost:3000> in one tab per user you want to simulate. Each
 **Start workflow** (a profile is reserved and Website B opens in its own context, already logged in),
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 
+### Optional: driver's-license autofill (test form)
+
+The test form has a "Scan driver's license to autofill" box. It takes a photo of the **back** of a
+U.S. license (camera capture on phones, or upload; live camera on localhost/HTTPS), downsizes it in
+the page, and posts it to `POST /api/scan/license`. The service decodes the PDF417 barcode in memory
+(ZXing WebAssembly, no network), parses the AAMVA record, returns only first name, last name, date of
+birth, address line 1, city, state and ZIP, and drops the image and the record. The page fills those
+inputs, marks them as auto-filled for review, and the values reach the automation through the normal
+field sync as if typed. Nothing about the image is stored or logged; the log line says only
+"decoded, n/7 fields in N ms". "Clear fields" and "Scan another ID" reset the form for the next card.
+
+Testing without a real card: `npm run scan:fixture -- license.png` writes a barcode with fictional
+data, and `npm run e2e:scan -- license.png` uploads it through the real page and checks the fields.
+A front-side OCR fallback (specialised ID API) is planned for cards whose barcode cannot be read.
+
 ### Adding accounts (manual login, no extension)
 
 Open <http://localhost:3000/admin/accounts> while the service runs.
@@ -163,6 +178,8 @@ src/service/ws.ts           static test page + WebSocket server, routing by work
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
 src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session
+src/service/scan/license.ts             server-side PDF417 decode + AAMVA parse, returns only the needed fields
+src/test-a/scan.js                      license scan UI: camera / upload, downsize, post, fill, clear
 src/test-a/admin.html, admin.js         the accounts management page (Website A side)
 src/test-a/                 the local Website A stand-in (index.html + client.js)
 dev/fake-b/                 local fake Website B (testing only)

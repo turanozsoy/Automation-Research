@@ -4,6 +4,7 @@ import { resolve, extname } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { ClientMsg, ServerMsg } from '../shared/messages.js';
 import type { LoginSessionManager } from './accounts/login-sessions.js';
+import { scanLicense } from './scan/license.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
 import type { Settings } from './settings.js';
@@ -12,6 +13,7 @@ import type { WorkflowRegistry } from './workflows.js';
 
 const STATIC_DIR = resolve(process.cwd(), 'src/test-a');
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const SCAN_MAX_BYTES = 6 * 1024 * 1024;
 
 export interface ServerDeps {
   cfg: SiteBConfig;
@@ -96,6 +98,17 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
 
     if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
 
+    // Driver's-license autofill: the image is decoded in memory and dropped; only the needed fields are returned.
+    // Nothing about the image or the decoded record is logged.
+    if (url === '/api/scan/license' && method === 'POST') {
+      const image = await readBytes(req, SCAN_MAX_BYTES);
+      if (!image) return json(413, { ok: false, error: 'IMAGE_TOO_LARGE' });
+      const t0 = Date.now();
+      const r = await scanLicense(image);
+      deps.tl.mark('license scan', `${r.ok ? `decoded, ${7 - r.missing.length}/7 fields` : r.error} in ${Date.now() - t0} ms, ${Math.round(image.length / 1024)} KB`);
+      return json(r.ok ? 200 : 422, r);
+    }
+
     if (url === '/api/accounts' && method === 'POST') {
       const body = await readJson(req);
       const name = String(body.name ?? '').trim();
@@ -142,6 +155,17 @@ function activeLogins(deps: ServerDeps): Record<string, ReturnType<LoginSessionM
     if (s.open) out[a.id] = s;
   }
   return out;
+}
+
+/** Raw request body up to `max` bytes; null when exceeded. */
+function readBytes(req: IncomingMessage, max: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => { size += c.length; if (size > max) { req.destroy(); resolve(null); return; } chunks.push(c); });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
 }
 
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
