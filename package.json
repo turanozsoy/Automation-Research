@@ -17,6 +17,7 @@
     "test:app": "tsx dev/application-store-test.ts",
     "e2e:app": "tsx dev/app-e2e.ts",
     "e2e:app:problem": "tsx dev/app-problem-e2e.ts",
+    "e2e:checkout": "tsx dev/checkout-paths-e2e.ts",
     "app:start": "tsx dev/app-start.ts",
     "e2e:apply": "tsx dev/apply-page-test.ts",
     "e2e:concurrency": "tsx dev/concurrency-e2e.ts",

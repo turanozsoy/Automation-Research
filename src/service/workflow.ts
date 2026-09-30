@@ -232,11 +232,13 @@ export class Workflow {
 
   private submitCtx: { snapshot: Record<string, string>; requestedAt: number } | null = null;
   private stepIndex = 0;
+  /** Which checkout path the race in 'checkout-route' chose: 'agree' = 4 → optional 5 → 6 → 7, 'direct' = 6 → 7. */
+  private checkoutPath: 'agree' | 'direct' | null = null;
   private stepNames(): string[] {
-    const names = ['reconcile', 'address', 'submit-click'];
-    if (this.cfg.checkout.agreeButton) names.push('agree');
-    names.push('checkout-toggle', 'primary', 'secondary', 'capture-url');
-    return names;
+    // Checkout after the submit click (Step 3): Step 4 (Agree) and Step 6 (primary button) are raced in
+    // 'checkout-route'; Steps 4/5 do not exist for some previously-used accounts. When Step 6 wins there,
+    // 'checkout-toggle' and 'primary' are no-ops and the run continues with Step 7 ('secondary').
+    return ['reconcile', 'address', 'submit-click', 'checkout-route', 'checkout-toggle', 'primary', 'secondary', 'capture-url'];
   }
 
   async submit(snapshot: Record<string, string>, requestedAt: number): Promise<void> {
@@ -252,6 +254,7 @@ export class Workflow {
     if (this.drainPromise) await this.drainPromise;
     this.submitCtx = { snapshot, requestedAt };
     this.stepIndex = 0;
+    this.checkoutPath = null;
     this.onSubmitState('submitting');
     this.capture.arm();
     await this.runSteps();
@@ -345,41 +348,50 @@ export class Workflow {
         }
         throw new AutomationError('FIELD_FILL_FAILED', `Website B still reports field errors after ${fe.maxRetries + 1} submit attempt(s)`);
       }
-      case 'agree': {
-        const sel = this.cfg.checkout.agreeButton!;
-        // A returning account may never see the Agree screen: when a later checkout element (the toggle or the
-        // primary button) shows up first, the step is not going to happen and is skipped instead of timing out.
-        const laterSteps = this.cfg.checkout.agreeOptional ? [this.cfg.checkout.toggle, this.cfg.checkout.primaryButton] : [];
-        const hit = await this.siteB.findFrameWithAny([sel, ...laterSteps], this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
-        if (hit.selector !== sel) { this.tl.mark('Agree and continue not present, skipped', `checkout already shows ${hit.selector}`); return; }
-        await this.siteB.clickInFrame(hit.frame, sel, 'AGREE_NOT_FOUND');
-        this.tl.mark('Agree and continue clicked');
+      case 'checkout-route': {
+        // Step 3 is done. For some previously-used accounts Steps 4 (Agree) and 5 (toggle) never appear, so this
+        // is a race between Step 4 and Step 6 (primary button): whichever is visible first decides the path.
+        // There is no wait for Step 4 followed by a fallback to Step 6.
+        const agree = this.cfg.checkout.agreeButton;
+        const primary = this.cfg.checkout.primaryButton;
+        if (!agree) { this.checkoutPath = 'agree'; this.tl.mark('no Agree button configured', 'continuing with the toggle and primary steps'); return; }
+        const candidates = this.cfg.checkout.agreeOptional ? [agree, primary] : [agree];
+        const hit = await this.siteB.findFrameWithAny(candidates, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
+        if (hit.selector === agree) {
+          this.checkoutPath = 'agree';
+          await this.siteB.clickInFrame(hit.frame, agree, 'AGREE_NOT_FOUND');
+          this.tl.mark('Agree and continue clicked', 'Step 4 appeared first: optional toggle, then primary, then secondary');
+          return;
+        }
+        // Step 6 appeared before Step 4: Steps 4 and 5 are skipped for this account; click Step 6 now.
+        this.checkoutPath = 'direct';
+        this.tl.mark('Agree and continue not present: primary button visible first', 'Steps 4 and 5 skipped for this account');
+        await this.clickPrimary(hit.frame);
         return;
       }
       case 'checkout-toggle': {
-        const laterSteps = this.cfg.checkout.toggleOptional ? [this.cfg.checkout.primaryButton] : [];
-        const hit = await this.siteB.findFrameWithAny([this.cfg.checkout.toggle, ...laterSteps], this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
+        if (this.checkoutPath === 'direct') { this.tl.mark('checkout toggle step skipped', 'primary button already clicked'); return; }
+        // After Step 4: look for Step 5 and Step 6 together. Step 5 is optional and is only ever turned OFF.
+        const toggle = this.cfg.checkout.toggle;
+        const primary = this.cfg.checkout.primaryButton;
+        const candidates = this.cfg.checkout.toggleOptional ? [toggle, primary] : [toggle];
+        const hit = await this.siteB.findFrameWithAny(candidates, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
         this.tl.mark('iframe detected', hit.frame.url());
-        if (hit.selector !== this.cfg.checkout.toggle) {
-          // The primary button is there but the toggle is not: give the toggle a short grace period, then move on.
-          const late = await hit.frame.locator(this.cfg.checkout.toggle).first().waitFor({ state: 'visible', timeout: 1500 }).then(() => true, () => false);
-          if (!late) { this.tl.mark('checkout toggle not present, skipped', 'primary button already visible'); return; }
+        if (hit.selector !== toggle) {
+          // The UI advanced straight to Step 6: one instant re-check of that frame for the toggle, no waiting.
+          const present = await hit.frame.locator(toggle).filter({ visible: true }).count().catch(() => 0);
+          if (!present) { this.tl.mark('checkout toggle not present, skipped', 'primary button already visible'); return; }
         }
-        const toggle = await this.siteB.ensureToggleOff(hit.frame);
-        this.tl.mark(toggle === 'unchecked' ? 'checkbox unchecked' : 'checkbox already unchecked');
+        const result = await this.siteB.ensureToggleOff(hit.frame);
+        this.tl.mark(result === 'unchecked' ? 'checkbox unchecked' : 'checkbox already unchecked');
         return;
       }
       case 'primary': {
+        if (this.checkoutPath === 'direct') { this.tl.mark('primary step already done', 'clicked when it appeared before the Agree button'); return; }
         const sel = this.cfg.checkout.primaryButton;
         const f = await this.siteB.findFrameWith(sel, this.cfg.timeouts.checkoutStep, 'PRIMARY_NOT_FOUND');
         this.tl.mark('primary available');
-        const secondaryVisibleBefore = await f.locator(this.cfg.checkout.secondaryButton).filter({ visible: true }).count().catch(() => 0);
-        await this.siteB.clickInFrame(f, sel, 'PRIMARY_NOT_FOUND');
-        this.tl.mark('primary clicked');
-        if (secondaryVisibleBefore > 0) {
-          const changed = await this.waitForStateChange(f, sel, this.cfg.timeouts.checkoutStep);
-          this.tl.mark(changed ? 'checkout state changed after primary' : 'no state change detected after primary, continuing');
-        }
+        await this.clickPrimary(f);
         return;
       }
       case 'secondary': {
@@ -503,6 +515,18 @@ export class Workflow {
   private touch(): void { this.lastActivityAt = Date.now(); }
 
   // ---------- helpers ----------
+
+  /** Step 6: click the primary button in `f`; when the secondary button was already visible, wait for the checkout state to change. */
+  private async clickPrimary(f: Frame): Promise<void> {
+    const sel = this.cfg.checkout.primaryButton;
+    const secondaryVisibleBefore = await f.locator(this.cfg.checkout.secondaryButton).filter({ visible: true }).count().catch(() => 0);
+    await this.siteB.clickInFrame(f, sel, 'PRIMARY_NOT_FOUND');
+    this.tl.mark('primary clicked');
+    if (secondaryVisibleBefore > 0) {
+      const changed = await this.waitForStateChange(f, sel, this.cfg.timeouts.checkoutStep);
+      this.tl.mark(changed ? 'checkout state changed after primary' : 'no state change detected after primary, continuing');
+    }
+  }
 
   private waitForStateChange(frame: Frame, primarySelector: string, timeout: number): Promise<boolean> {
     const page = this.bundle.page;

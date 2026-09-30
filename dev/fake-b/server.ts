@@ -111,9 +111,12 @@ createServer((req, res) => {
           // a last name containing NOIFRAME makes the checkout iframe never appear (per-applicant failure injection).
           document.cookie = 'lastApplicant=' + encodeURIComponent(document.getElementById('first-name').value) + '; Path=/';
           const noIframe = /NOIFRAME/.test(document.getElementById('last-name').value);
+          // a last name containing RETURNING makes this applicant's account behave like a previously-used one
+          // (no Agree screen, no toggle): the checkout iframe with the primary button appears straight away.
+          const returningAccount = ${returning} || /RETURNING/.test(document.getElementById('last-name').value);
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
-          if (${returning}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout?returning=1"></iframe>'; }, 900); return; }
+          if (returningAccount) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout?returning=1"></iframe>'; }, 900); return; }
           setTimeout(() => {
             document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
             document.getElementById('agree').onclick = () => {
