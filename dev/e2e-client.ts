@@ -12,6 +12,7 @@ const parallel = Number(process.env.E2E_PARALLEL ?? 1);
 const expectAdvanced = process.env.E2E_EXPECT_ADVANCED === '1';
 const expectPause = process.env.E2E_EXPECT_PAUSE === '1';
 const expectFieldError = process.env.E2E_EXPECT_FIELD_ERROR === '1';
+const expectReturning = process.env.E2E_EXPECT_RETURNING === '1'; // fake started with FAKE_B_RETURNING=1: no Agree, no toggle
 const overall = setTimeout(() => { console.error('[e2e] TIMEOUT'); process.exit(1); }, 150_000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -89,7 +90,7 @@ ws.on('message', async (raw) => {
     for (const f of ['address1', 'city', 'zip']) if (!run.acks.has(f)) problems.push(`${f} was not live-synced`);
     const expected = ['session verified', 'authenticationCode started, finalizing address', 'pending address updates flushed', 'Enter pressed on address1', 'address autocomplete finalized', 'authenticationCode updated (masked)',
       'final reconciliation started', 'ordinary fields reconciled', 'verifying final address', 'final address verified', 'authenticationCode verified (masked, not compared)', 'final reconciliation complete',
-      ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : ['Agree and continue clicked']),
+      ...(expectPause ? ['paused:agree', 'step "agree" skipped by user (done manually)'] : expectReturning ? ['Agree and continue not present, skipped', 'checkout toggle not present, skipped'] : ['Agree and continue clicked', 'checkbox unchecked']),
       ...(expectAdvanced ? [] : ['Website B submit clicked']),
       ...(expectFieldError ? ['field error detected: city', 'field re-filled: city', 'field errors fixed', 'submit retried (attempt 2)'] : [])];
     expected.push('result', 'link opened by user (visited)', 'link state stored: visited', 'verification text found', 'link state stored: verified');

@@ -1,8 +1,9 @@
 /**
- * Failure path of the applicant foundation. Requires the fake Website B WITHOUT its Agree button,
- * so the workflow pauses at the "agree" step; for an applicant workflow the bridge aborts it,
- * releases the profile and records a retryable problem. A second attempt hits the same wall.
- *   FAKE_B_NO_AGREE=1 npm run fake-b   +   npm run start:fake (one imported fake account is enough), then:
+ * Failure path of the applicant foundation. The applicant's last name contains NOIFRAME, which makes
+ * the fake Website B never show the checkout iframe, so the workflow pauses at "checkout-toggle";
+ * for an applicant workflow the bridge aborts it, releases the profile and records a retryable
+ * problem. A second attempt hits the same wall.
+ *   npm run fake-b   +   npm run start:fake (one imported fake account is enough), then:
  *   npm run e2e:app:problem
  */
 import Database from 'better-sqlite3';
@@ -40,16 +41,16 @@ const devSeen: string[] = [];
 const dev = new WebSocket(`ws://localhost:${port}/ws`);
 dev.on('message', (raw) => { const m = JSON.parse(raw.toString()) as ServerMsg; if (m.type === 'paused') devSeen.push(`paused:${m.step}`); if (m.type === 'event') devSeen.push(m.name); if (m.type === 'pool.status') devSeen.push(`pool:${m.pool.available}`); });
 
-send({ type: 'app.update', fields: { firstName: 'John', lastName: 'Doe', dateOfBirth: '1990-05-17', mobileNumber: '5551234567', address1: '1 Main St', city: 'Springfield', state: 'NY', zip: '10001' } });
+send({ type: 'app.update', fields: { firstName: 'John', lastName: 'DoeNOIFRAME', dateOfBirth: '1990-05-17', mobileNumber: '5551234567', address1: '1 Main St', city: 'Springfield', state: 'NY', zip: '10001' } });
 await waitView((v) => v.missingFields.length === 0, 5000, 'fields');
 send({ type: 'app.verify', code: CODE });
 await waitView((v) => v.state === 'processing', 5000, 'processing');
 const problem = await waitView((v) => v.state === 'problem', 120_000, 'problem');
 console.log(`  problem: ${JSON.stringify(problem.problem)}`);
-check(problem.problem?.code === 'AGREE_NOT_FOUND', 'problem code is the failed step\'s code (AGREE_NOT_FOUND)');
+check(problem.problem?.code === 'IFRAME_NOT_FOUND', 'problem code is the failed step\'s code (IFRAME_NOT_FOUND)');
 check(!/a\[|button|aria-label|selector|http/i.test(problem.problem?.message ?? ''), 'applicant message contains no selectors or URLs');
 check(problem.verificationStep === 'failed' && problem.automation.active === false && problem.automation.attempts === 1, 'verification step failed, automation inactive, 1 attempt');
-check(devSeen.includes('paused:agree'), 'the workflow paused at "agree" (developer telemetry)');
+check(devSeen.includes('paused:checkout-toggle'), 'the workflow paused at "checkout-toggle" (developer telemetry)');
 check(devSeen.some((n) => n.startsWith('applicant workflow paused: aborting')), 'the bridge aborted the paused workflow instead of holding the profile');
 
 // The profile must be released (cooldown -> available) rather than held by the paused workflow.
@@ -58,7 +59,7 @@ const db = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
 const live = (db.prepare("SELECT COUNT(*) n FROM assignments WHERE state IN ('allocating','preparing','ready','submitting','paused')").get() as { n: number }).n;
 check(live === 0, 'no live assignment is left behind');
 const ev = db.prepare("SELECT * FROM application_events WHERE application_id = ? AND type = 'problem' ORDER BY id DESC LIMIT 1").get(application.id) as Record<string, unknown>;
-check(ev && ev.code === 'AGREE_NOT_FOUND' && ev.stage === 'agree' && ev.retry_count === 0 && typeof ev.workflow_id === 'string', 'problem event: code, stage, retry count, workflow id');
+check(ev && ev.code === 'IFRAME_NOT_FOUND' && ev.stage === 'checkout-toggle' && ev.retry_count === 0 && typeof ev.workflow_id === 'string', 'problem event: code, stage, retry count, workflow id');
 check(!String(ev.detail ?? '').includes(CODE) && !String(ev.message ?? '').includes(CODE), 'problem event carries no secret');
 db.close();
 
@@ -66,7 +67,7 @@ db.close();
 send({ type: 'app.verify', code: CODE });
 await waitView((v) => v.state === 'processing' && v.automation.attempts === 2, 5000, 'second processing');
 const problem2 = await waitView((v) => v.state === 'problem' && v.automation.attempts === 2, 120_000, 'second problem');
-check(problem2.problem?.code === 'AGREE_NOT_FOUND', 'second attempt recorded as a new problem');
+check(problem2.problem?.code === 'IFRAME_NOT_FOUND', 'second attempt recorded as a new problem');
 const db2 = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
 const wfIds = (db2.prepare("SELECT DISTINCT workflow_id FROM application_events WHERE application_id = ? AND type = 'automation_started'").all(application.id) as { workflow_id: string }[]).map((x) => x.workflow_id);
 check(wfIds.length === 2 && wfIds[0] !== wfIds[1], 'two distinct workflows in the history of one application');

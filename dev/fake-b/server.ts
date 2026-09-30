@@ -14,6 +14,7 @@ const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays e
 const noAgree = process.env.FAKE_B_NO_AGREE === '1';
 const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1';
 const urlRedirects = process.env.FAKE_B_URL_REDIRECTS === '1';
+const returning = process.env.FAKE_B_RETURNING === '1'; // an account used before: no Agree screen, checkout without the pre-checked toggle
 const cityError = process.env.FAKE_B_CITY_ERROR === '1'; // first submit: clear city, flag it red (data-accent-color) and refuse to advance // the first it-worked URL redirects to a different final one after loading // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
@@ -112,6 +113,7 @@ createServer((req, res) => {
           const noIframe = /NOIFRAME/.test(document.getElementById('last-name').value);
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
+          if (${returning}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout?returning=1"></iframe>'; }, 900); return; }
           setTimeout(() => {
             document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
             document.getElementById('agree').onclick = () => {
@@ -126,7 +128,7 @@ createServer((req, res) => {
 
   if (url.pathname === '/checkout') {
     return page(`<h2>Checkout — step 1</h2>
-      <label><input type="checkbox" id="v-0-0-0-0-0-0" checked> Add optional extra</label>
+      ${url.searchParams.has('returning') ? '' : '<label><input type="checkbox" id="v-0-0-0-0-0-0" checked> Add optional extra</label>'}
       <p><button data-variant="secondary" id="cancel">Cancel</button> <button data-variant="primary" id="pay">Continue to payment</button></p>
       <script>
         document.getElementById('pay').onclick = () => { document.getElementById('pay').disabled = true; setTimeout(() => location.href = '/checkout/step2', 700); };

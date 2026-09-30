@@ -131,6 +131,10 @@ export interface SiteBConfig {
     frameUrlIncludes?: string;
     /** Optional button shown right after the submit click (e.g. aria-label="Agree and continue"). */
     agreeButton?: string;
+    /** A returning account may skip the Agree screen / the pre-checked toggle: when true (default) the step is
+     *  skipped as soon as a LATER checkout element is visible instead of failing after the timeout. */
+    agreeOptional: boolean;
+    toggleOptional: boolean;
     toggle: string;
     primaryButton: string;
     secondaryButton: string;
@@ -223,6 +227,8 @@ export function loadConfig(): SiteBConfig {
     checkout: {
       frameUrlIncludes: raw.checkout.frameUrlIncludes || undefined,
       agreeButton: raw.checkout.agreeButton || undefined,
+      agreeOptional: raw.checkout.agreeOptional !== false,
+      toggleOptional: raw.checkout.toggleOptional !== false,
       toggle: raw.checkout.toggle,
       primaryButton: raw.checkout.primaryButton,
       secondaryButton: raw.checkout.secondaryButton,

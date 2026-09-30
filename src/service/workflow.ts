@@ -347,15 +347,25 @@ export class Workflow {
       }
       case 'agree': {
         const sel = this.cfg.checkout.agreeButton!;
-        const f = await this.siteB.findFrameWith(sel, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
-        await this.siteB.clickInFrame(f, sel, 'AGREE_NOT_FOUND');
+        // A returning account may never see the Agree screen: when a later checkout element (the toggle or the
+        // primary button) shows up first, the step is not going to happen and is skipped instead of timing out.
+        const laterSteps = this.cfg.checkout.agreeOptional ? [this.cfg.checkout.toggle, this.cfg.checkout.primaryButton] : [];
+        const hit = await this.siteB.findFrameWithAny([sel, ...laterSteps], this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
+        if (hit.selector !== sel) { this.tl.mark('Agree and continue not present, skipped', `checkout already shows ${hit.selector}`); return; }
+        await this.siteB.clickInFrame(hit.frame, sel, 'AGREE_NOT_FOUND');
         this.tl.mark('Agree and continue clicked');
         return;
       }
       case 'checkout-toggle': {
-        const f = await this.siteB.findFrameWith(this.cfg.checkout.toggle, this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
-        this.tl.mark('iframe detected', f.url());
-        const toggle = await this.siteB.ensureToggleOff(f);
+        const laterSteps = this.cfg.checkout.toggleOptional ? [this.cfg.checkout.primaryButton] : [];
+        const hit = await this.siteB.findFrameWithAny([this.cfg.checkout.toggle, ...laterSteps], this.cfg.timeouts.iframe, 'IFRAME_NOT_FOUND');
+        this.tl.mark('iframe detected', hit.frame.url());
+        if (hit.selector !== this.cfg.checkout.toggle) {
+          // The primary button is there but the toggle is not: give the toggle a short grace period, then move on.
+          const late = await hit.frame.locator(this.cfg.checkout.toggle).first().waitFor({ state: 'visible', timeout: 1500 }).then(() => true, () => false);
+          if (!late) { this.tl.mark('checkout toggle not present, skipped', 'primary button already visible'); return; }
+        }
+        const toggle = await this.siteB.ensureToggleOff(hit.frame);
         this.tl.mark(toggle === 'unchecked' ? 'checkbox unchecked' : 'checkbox already unchecked');
         return;
       }

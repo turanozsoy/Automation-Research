@@ -498,11 +498,20 @@ export class SiteB {
    * stale frame reference because it is re-run for every checkout step.
    */
   async findFrameWith(selector: string, timeout: number, code: import('../shared/messages.js').ErrorCode): Promise<Frame> {
+    return (await this.findFrameWithAny([selector], timeout, code)).frame;
+  }
+
+  /**
+   * Same search for several selectors at once: resolves with the first (selector, frame) pair that
+   * becomes visible, in selector order within each check. Lets a step wait for "the element I want,
+   * or the element of a later step that proves mine is not going to appear".
+   */
+  async findFrameWithAny(selectors: string[], timeout: number, code: import('../shared/messages.js').ErrorCode): Promise<{ frame: Frame; selector: string }> {
     const page = this.page;
     const urlFilter = this.cfg.checkout.frameUrlIncludes;
     const deadline = Date.now() + timeout;
 
-    return new Promise<Frame>((resolve, reject) => {
+    return new Promise<{ frame: Frame; selector: string }>((resolve, reject) => {
       let settled = false;
       let checking = false;
 
@@ -520,20 +529,22 @@ export class SiteB {
           for (const f of page.frames()) {
             if (settled) return;
             if (urlFilter && !f.url().includes(urlFilter)) continue;
-            try {
-              if (await f.locator(selector).filter({ visible: true }).first().isVisible()) {
-                cleanup();
-                resolve(f);
-                return;
-              }
-            } catch { /* frame detached mid-check */ }
+            for (const selector of selectors) {
+              try {
+                if (await f.locator(selector).filter({ visible: true }).first().isVisible()) {
+                  cleanup();
+                  resolve({ frame: f, selector });
+                  return;
+                }
+              } catch { /* frame detached mid-check */ }
+            }
           }
         } finally {
           checking = false;
         }
         if (!settled && Date.now() > deadline) {
           cleanup();
-          reject(new AutomationError(code, `No frame showed ${selector} within ${timeout} ms (frames: ${page.frames().map(f => f.url() || 'about:blank').join(', ')})`));
+          reject(new AutomationError(code, `No frame showed ${selectors.join(' | ')} within ${timeout} ms (frames: ${page.frames().map(f => f.url() || 'about:blank').join(', ')})`));
         }
       };
       const kick = () => { void check(); };

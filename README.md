@@ -278,6 +278,7 @@ plain language, and sends `app.validation_failed` with field names only.
 | `fields.<name>.requiredAtStart` | `false` for fields that only exist after a later step (state appears once an address is accepted). Live updates to such fields are held and applied at submit. |
 | `addressFinalize` | `fields` (sync/repair order), `inputField` (where Enter is pressed), `trigger` (the field whose first update finalises the address), `suggestionsWaitMs` (Enter is pressed only with a suggestion list open; the list is re-triggered once with Space+Backspace), `settleQuietMs` / `settleMaxMs` (wait for address values to stop changing), `repairRounds`. |
 | `checkout.agreeButton` | Optional button that appears right after the submit click (e.g. `button[aria-label="Agree and continue"]`), clicked before the checkout iframe steps. |
+| `checkout.agreeOptional`, `checkout.toggleOptional` | Default `true`: a returning account may not see the Agree screen or the pre-checked toggle. The step waits for its own element *or* a later checkout element; when the later one appears first the step is recorded as "not present, skipped" instead of failing after the timeout. Set `false` to require the element. |
 | `submitButton` | The *last* visible, enabled match is clicked. |
 | `checkout.toggle` | Element inside the iframe that must end up unchecked/off. |
 | `checkout.primaryButton`, `checkout.secondaryButton` | Clicked inside the *current* frame, re-located for every step. |
@@ -347,8 +348,9 @@ npm run typecheck
 #   CONCURRENCY=3 EXPIRE_ONE=1        an expired profile is inserted; the workflow that draws it is reassigned, profile leaves rotation
 #   CONCURRENCY=3 SKIP_CTA=1          applicant #1 never clicks View Role Details: verified without visited
 #   CONCURRENCY=3 SKIP_CTA=1 NO_VERIFY=1  with FAKE_B_GOOD_TO_GO_MS=600000 npm run fake-b: nobody verifies; workflows keep monitoring and hold their profiles
-# failure path: run the fake WITHOUT its Agree button, the applicant workflow pauses -> is aborted -> retryable problem
-FAKE_B_NO_AGREE=1 npm run fake-b   &&   npm run e2e:app:problem
+# returning account (no Agree screen, no toggle): FAKE_B_RETURNING=1 npm run fake-b  then  E2E_EXPECT_RETURNING=1 npm run e2e  and  npm run e2e:apply
+# failure path: an applicant whose last name contains NOIFRAME never gets the checkout iframe on the fake -> pause -> aborted -> retryable problem
+npm run e2e:app:problem
 # restart recovery: start an applicant workflow, kill -9 the service, start it again -> the application is a SERVICE_RESTARTED problem
 npm run app:start
 ```
