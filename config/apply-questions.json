@@ -1,0 +1,72 @@
+{
+  "verificationCode": {
+    "length": 6,
+    "help": "Enter the verification code provided for your Shipzora application."
+  },
+  "screens": [
+    {
+      "id": "experience",
+      "title": "Your experience",
+      "questions": [
+        {
+          "key": "deliveryExperience",
+          "label": "How much delivery or driving experience do you have?",
+          "options": [
+            { "value": "none", "label": "None yet" },
+            { "value": "under_1", "label": "Less than a year" },
+            { "value": "1_3", "label": "1 to 3 years" },
+            { "value": "over_3", "label": "More than 3 years" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "schedule",
+      "title": "Your schedule",
+      "questions": [
+        {
+          "key": "scheduleType",
+          "label": "What type of schedule works best for you?",
+          "options": [
+            { "value": "full_time", "label": "Full time" },
+            { "value": "part_time", "label": "Part time" },
+            { "value": "flexible", "label": "Flexible", "hint": "Open to different shifts and days" }
+          ]
+        },
+        {
+          "key": "weekends",
+          "label": "Are you available to work weekends?",
+          "options": [
+            { "value": "yes", "label": "Yes" },
+            { "value": "sometimes", "label": "Sometimes" },
+            { "value": "no", "label": "No" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "availability",
+      "title": "Getting started",
+      "questions": [
+        {
+          "key": "startTiming",
+          "label": "When could you start?",
+          "options": [
+            { "value": "immediately", "label": "Right away" },
+            { "value": "two_weeks", "label": "Within two weeks" },
+            { "value": "one_month", "label": "Within a month" },
+            { "value": "later", "label": "More than a month from now" }
+          ]
+        },
+        {
+          "key": "driversLicense",
+          "label": "Do you have a valid driver's license?",
+          "options": [
+            { "value": "yes", "label": "Yes" },
+            { "value": "no", "label": "No" }
+          ]
+        }
+      ]
+    }
+  ]
+}

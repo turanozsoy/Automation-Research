@@ -110,9 +110,9 @@ export type VerificationStep = 'required' | 'completed' | 'failed';
 export type LinkState = 'none' | 'visited' | 'verified';
 
 export type ApplicationEventType =
-  | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required'
-  | 'automation_started' | 'automation_ready' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
-  | 'generated_link_ready' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted';
+  | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required' | 'validation_failed' | 'address_completed'
+  | 'automation_started' | 'automation_ready' | 'automation_phase_changed' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
+  | 'generated_link_ready' | 'final_step_reached' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted';
 
 /** Everything an applicant is allowed to see about their own application. */
 export interface ApplicationView {
@@ -145,8 +145,10 @@ export type ApplicantErrorCode = 'UNAUTHENTICATED' | 'INVALID_FIELD' | 'INFORMAT
 export interface AppUpdateMsg { type: 'app.update'; ts: number; fields: Record<string, string> }
 /** Save job/application answers (free-form JSON, merged). */
 export interface AppAnswersMsg { type: 'app.answers'; ts: number; answers: Record<string, unknown> }
-/** The applicant moved to a step; optionally names the step they just completed. */
-export interface AppStepMsg { type: 'app.step'; ts: number; step: string; completedStep?: string }
+/** The applicant moved to a step; optionally names the step they just completed. `final` marks the last screen (final_step_reached). */
+export interface AppStepMsg { type: 'app.step'; ts: number; step: string; completedStep?: string; final?: boolean }
+/** Local validation stopped the applicant on a step; field names only, never values. */
+export interface AppValidationFailedMsg { type: 'app.validation_failed'; ts: number; step: string; fields: string[] }
 /**
  * The applicant completed the address step (all Website B fields except the code are saved). Starts and
  * prepares the onboarding workflow in the background: profile, page, seeded fields, address finalisation.
@@ -161,7 +163,7 @@ export interface AppVerifyMsg { type: 'app.verify'; ts: number; code: string }
 /** The applicant clicked the final call to action that opens the generated link. */
 export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
 export interface AppPingMsg { type: 'ping'; ts: number }
-export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
 
 // ---- service -> applicant ----
 /** Full safe snapshot; sent on connect and after every change. */

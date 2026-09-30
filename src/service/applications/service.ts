@@ -180,7 +180,7 @@ export class ApplicationService {
     return { ok: true };
   }
 
-  setStep(id: string, step: unknown, completedStep?: unknown): Result {
+  setStep(id: string, step: unknown, completedStep?: unknown, final?: unknown): Result {
     const row = this.store.get(id);
     if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
     if (typeof step !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(step)) return { ok: false, code: 'BAD_REQUEST', message: 'invalid step name' };
@@ -188,7 +188,17 @@ export class ApplicationService {
     if (typeof completedStep === 'string') this.store.event(id, 'step_completed', { step: completedStep });
     this.store.patch(id, { current_step: step });
     this.store.event(id, 'step_viewed', { step });
+    if (final === true && row.current_step !== step) this.store.event(id, 'final_step_reached', { step, workflowId: row.workflow_id });
     this.emit(id);
+    return { ok: true };
+  }
+
+  /** Client-side validation stopped the applicant. Field names only; never values. */
+  validationFailed(id: string, step: unknown, fields: unknown): Result {
+    if (!this.store.get(id)) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
+    if (typeof step !== 'string' || !/^[a-z0-9_-]{1,40}$/i.test(step)) return { ok: false, code: 'BAD_REQUEST', message: 'invalid step name' };
+    if (!Array.isArray(fields) || fields.length > 20 || !fields.every((f) => typeof f === 'string' && /^[a-z0-9_-]{1,40}$/i.test(f))) return { ok: false, code: 'BAD_REQUEST', message: 'invalid fields' };
+    this.store.event(id, 'validation_failed', { step, detail: fields.join(',') });
     return { ok: true };
   }
 
@@ -207,9 +217,9 @@ export class ApplicationService {
       this.emit(id);
       return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
     }
-    if (this.runtimeOf(row)) { this.store.event(id, 'step_completed', { step: 'address', workflowId: row.workflow_id }); return { ok: true }; }
+    if (this.runtimeOf(row)) { this.store.event(id, 'address_completed', { workflowId: row.workflow_id, detail: 'workflow already live' }); return { ok: true }; }
     if (row.state === 'processing') return { ok: false, code: 'INVALID_STATE', message: 'Your application is already being processed' };
-    this.store.event(id, 'step_completed', { step: 'address' });
+    this.store.event(id, 'address_completed');
     return this.startAutomation(row, clientIp, null);
   }
 
@@ -274,7 +284,7 @@ export class ApplicationService {
     const field = this.writeOnlyFields()[0];
     rt.codeInjected = true;
     rt.pendingCode = null;
-    rt.phase = 'submitting';
+    this.setPhase(rt, workflowId, 'submitting');
     rt.seeded.add(field);
     rt.resolved.delete(field);
     this.registry.handleFieldUpdate({ type: 'field.update', ts: Date.now(), workflowId, field, value: code, seq: ++rt.seq });
@@ -299,8 +309,14 @@ export class ApplicationService {
     this.store.event(rt.applicationId, 'address_finalized', { workflowId });
     this.progress(rt.applicationId, 'address_finalized');
     if (rt.pendingCode !== null) this.injectCode(rt, workflowId, rt.pendingCode);
-    else rt.phase = 'awaiting_code';
+    else this.setPhase(rt, workflowId, 'awaiting_code');
     this.emit(rt.applicationId);
+  }
+
+  private setPhase(rt: Runtime, workflowId: string, phase: Runtime['phase']): void {
+    if (rt.phase === phase) return;
+    rt.phase = phase;
+    this.store.event(rt.applicationId, 'automation_phase_changed', { workflowId, detail: phase });
   }
 
   /** The applicant clicked the final call to action. Persists visited on the application and, when the workflow is live, on its assignment too. */
@@ -316,8 +332,10 @@ export class ApplicationService {
       visited_at: row.visited_at ?? now,
     });
     if (first) {
+      // The click is the applicant's action and is recorded as such even when Website B already verified.
       this.store.event(id, 'final_cta_clicked', { workflowId: row.workflow_id, step: row.current_step });
-      if (row.link_state === 'none') { this.store.event(id, 'visited', { workflowId: row.workflow_id }); this.progress(id, 'visited'); }
+      this.store.event(id, 'visited', { workflowId: row.workflow_id, detail: row.link_state === 'verified' ? 'already verified' : undefined });
+      this.progress(id, 'visited');
     }
     if (row.workflow_id) this.registry.get(row.workflow_id)?.linkOpened();
     this.emit(id);

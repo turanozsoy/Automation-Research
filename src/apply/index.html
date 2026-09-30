@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0b5d57">
+<meta name="robots" content="noindex">
+<title>Apply to Shipzora</title>
+<link rel="stylesheet" href="/apply/apply.css">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to application</a>
+
+<header class="site-header">
+  <div class="shell header-row">
+    <!-- Brand: wordmark + mark. Replace .brand-mark's SVG with the final Shipzora logo asset when available. -->
+    <a class="brand" href="/" aria-label="Shipzora Careers home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28" focusable="false">
+          <rect x="3" y="9" width="18" height="14" rx="2" fill="currentColor"/>
+          <path d="M21 13h5l3 4v6h-8z" fill="currentColor" opacity=".72"/>
+          <circle cx="9" cy="24.5" r="2.6" fill="#fff"/>
+          <circle cx="24" cy="24.5" r="2.6" fill="#fff"/>
+          <path d="M6 13h9" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9"/>
+        </svg>
+      </span>
+      <span class="brand-text"><span class="brand-name">Shipzora</span><span class="brand-sub">Careers</span></span>
+    </a>
+    <span class="header-context" id="headerContext">Application</span>
+  </div>
+</header>
+
+<div class="progress-wrap shell" id="progressWrap" hidden>
+  <p class="progress-label" id="progressLabel"></p>
+  <div class="progress-track" role="progressbar" id="progressBar" aria-labelledby="progressLabel" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <div class="progress-fill" id="progressFill"></div>
+  </div>
+</div>
+
+<main id="main" class="shell main" tabindex="-1">
+  <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+  <div id="screen" class="screen"></div>
+</main>
+
+<footer class="site-footer">
+  <div class="shell footer-row">
+    <span class="footer-copy">Shipzora Careers</span>
+    <nav aria-label="Footer">
+      <a href="/privacy">Privacy</a>
+      <a href="/terms">Terms</a>
+      <a href="/contact">Contact</a>
+    </nav>
+  </div>
+</footer>
+
+<template id="tpl-spinner">
+  <span class="spinner" aria-hidden="true"></span>
+</template>
+
+<script src="/apply/apply.js" defer></script>
+</body>
+</html>

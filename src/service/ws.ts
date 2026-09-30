@@ -13,8 +13,20 @@ import type { Settings } from './settings.js';
 import type { Timeline } from './timeline.js';
 import type { WorkflowRegistry } from './workflows.js';
 
-const STATIC_DIR = resolve(process.cwd(), 'src/test-a');
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
+const INTERNAL_DIR = resolve(process.cwd(), 'src/test-a');   // /debug harness + /admin/accounts (internal pages)
+const APPLY_DIR = resolve(process.cwd(), 'src/apply');       // the public Shipzora application
+const APPLY_CONFIG = resolve(process.cwd(), process.env.APPLY_CONFIG ?? 'config/apply-questions.json');
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
+
+/** Explicit routes only: nothing under src/ is reachable by guessing a file name. */
+const PAGES: Record<string, [string, string]> = {
+  '/': [APPLY_DIR, 'index.html'],
+  '/debug': [INTERNAL_DIR, 'debug.html'],
+  '/debug.js': [INTERNAL_DIR, 'debug.js'],
+  '/admin/accounts': [INTERNAL_DIR, 'admin.html'],
+  '/admin.js': [INTERNAL_DIR, 'admin.js'],
+};
+const PLACEHOLDER_PAGES: Record<string, string> = { '/privacy': 'Privacy', '/terms': 'Terms', '/contact': 'Contact' };
 
 export interface ServerDeps {
   cfg: SiteBConfig;
@@ -148,7 +160,8 @@ export function startServer(deps: ServerDeps): Promise<void> {
       switch (m?.type) {
         case 'app.update': r = apps.updateFields(applicationId, m.fields); break;
         case 'app.answers': r = apps.mergeAnswers(applicationId, m.answers); break;
-        case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep); break;
+        case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep, m.final); break;
+        case 'app.validation_failed': r = apps.validationFailed(applicationId, m.step, m.fields); break;
         case 'app.address_completed': r = apps.addressCompleted(applicationId, clientIp); break;
         case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
         case 'app.link_opened': r = apps.linkOpened(applicationId); break;
@@ -184,9 +197,10 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
   };
 
   try {
-    if (url === '/' && method === 'GET') return serveStatic('/index.html', res);
-    if (url === '/debug' && method === 'GET') return serveStatic('/debug.html', res);
-    if (url === '/admin/accounts' && method === 'GET') return serveStatic('/admin.html', res);
+    if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
+    if (method === 'GET' && url.startsWith('/apply/')) return serveFile(APPLY_DIR, url.slice('/apply/'.length), res);
+    if (method === 'GET' && PLACEHOLDER_PAGES[url]) return placeholderPage(PLACEHOLDER_PAGES[url], res);
+    if (method === 'GET' && url === '/api/apply/config') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(readFileSync(APPLY_CONFIG)); return; }
 
     // ---- applicant session ----
     if (url === '/api/applications' && method === 'POST') {
@@ -236,7 +250,8 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       if (action === 'login/cancel' && method === 'POST') { await deps.logins.cancel(id); return json(200, { ok: true }); }
     }
 
-    return serveStatic(url, res);
+    res.writeHead(404, { 'content-type': 'text/plain' });
+    res.end('not found');
   } catch (e) {
     return json(500, { error: e instanceof Error ? e.message : String(e) });
   }
@@ -260,14 +275,22 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   });
 }
 
-function serveStatic(path: string, res: ServerResponse): void {
-  if (path.includes('..')) { res.writeHead(400); res.end(); return; }
+function serveFile(dir: string, rel: string, res: ServerResponse): void {
+  if (rel.includes('..') || rel.includes('\\') || rel === '') { res.writeHead(404); res.end('not found'); return; }
   try {
-    const body = readFileSync(resolve(STATIC_DIR, `.${path}`));
-    res.writeHead(200, { 'content-type': MIME[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    const body = readFileSync(resolve(dir, rel));
+    res.writeHead(200, { 'content-type': MIME[extname(rel)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(body);
   } catch {
     res.writeHead(404);
     res.end('not found');
   }
+}
+
+/** Footer links exist in the UI before the pages do; say so plainly instead of inventing policy text. */
+function placeholderPage(title: string, res: ServerResponse): void {
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} — Shipzora Careers</title>
+<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;margin:0;background:#f3f4f1;color:#1b1f24}main{max-width:560px;margin:0 auto;padding:48px 20px}a{color:#084b46}</style></head>
+<body><main><h1>${title}</h1><p>This page isn\u2019t available yet.</p><p><a href="/">Back to your application</a></p></main></body></html>`);
 }

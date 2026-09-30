@@ -14,6 +14,11 @@ third-party service unless `config/site-b.local.json` says so.
 
 What exists now:
 
+- **Public application (`/`).** Shipzora Careers: landing, then Step 1–7 (about you, date of birth,
+  address, verification code, three configurable question screens) and a final "Your role details"
+  screen. Vanilla HTML/CSS/JS in `src/apply/`, mobile-first, saves every step, resumes by cookie, never
+  shows workflow/profile/pool/automation detail. Questions and the code length live in
+  `config/apply-questions.json` (`APPLY_CONFIG` to override). See [Applicant site](#applicant-site).
 - **Applications.** A persistent applicant record (`applications` + `application_events`), independent
   of any workflow: it survives refreshes, reconnects, automation failures and service restarts. Owned
   through an opaque session token in an HttpOnly cookie (only its hash is stored). See
@@ -40,7 +45,7 @@ What exists now:
 - Everything from the earlier phase: debounced live sync, masked verification code, keyboard-driven
   Google address autocomplete, pausable submit steps with manual retry/skip, final-URL capture.
 
-Not yet: the public applicant UI (`/` is a placeholder), admin authentication, headless by default,
+Not yet: admin authentication, headless by default,
 process sharding, warm pool, IP handling, deployment. The driver's-license autofill experiment was removed.
 
 ## Run it
@@ -161,6 +166,25 @@ information_required, automation_started, automation_ready, address_finalized, v
 problem (code, stage, safe message, bounded internal detail, retry count), final_cta_clicked, visited,
 verified, automation_ended, service_restarted.
 
+## Applicant site
+
+`src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`; footer
+links `/privacy`, `/terms`, `/contact` are honest placeholders until real pages exist. Flow:
+
+| Screen | Saves | Notes |
+|---|---|---|
+| Landing | — | Start Application → `POST /api/applications` (cookie). A returning applicant sees Continue / Start a new application. |
+| 1 About you | firstName, lastName, mobileNumber (digits), email | `autocomplete` given-name / family-name / tel / email |
+| 2 Date of birth | dateOfBirth (ISO) | month / day / year inputs (`bday-*`); copy says it sets up the onboarding record and is not used to evaluate the application |
+| 3 Address | address1, city, state, zip | separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |
+| 4 Verification code | nothing (code → `app.verify` only) | one numeric `one-time-code` input, length from config; shows "received" once handed over; asks again after a problem |
+| 5–7 Questions | answers (saved on each selection) | card radios from `config/apply-questions.json` |
+| Final | — | `processing` → "Preparing your role details…" (updates live); `link_ready` → "Your role details are ready" + **View Role Details** (new tab, `app.link_opened` → visited); `completed` → confirmed; `problem` → Try again (back to the code step) |
+
+Resume: on load the page calls `GET /api/applications/me`; fields, answers, current step and state
+come back through `app.state`. The verification code is never restored. Validation is inline, in
+plain language, and sends `app.validation_failed` with field names only.
+
 ## Configuration (`config/site-b.json`)
 
 | Key | Meaning |
@@ -215,6 +239,7 @@ npm run start:fake                 # terminal 2: service using config/site-b.fak
 E2E_PARALLEL=3 npm run e2e         # terminal 3 (optional): 3 simultaneous scripted workflows (2 profiles + 1 queued)
 npm run e2e:page                   # drives the /debug harness in a headless browser (Start, type, Submit, Open link, verified)
 npm run e2e:app                    # applicant foundation: session, resume, reconnect, isolation, workflow mapping, URL, visited/verified, no secret in the DB
+npm run e2e:apply                  # drives the public application at / on a phone viewport: start → steps → code → questions → refresh/resume → role details → visited → verified
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 npm run test:app                   # application store + session helpers (throwaway DB)
 npm run typecheck
@@ -253,10 +278,12 @@ scripts/profile.ts          profile CLI
 src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session
 src/test-a/admin.html, admin.js         the accounts management page (internal)
 src/test-a/debug.html, debug.js         the developer harness served at /debug (raw workflow protocol)
-src/test-a/index.html                   placeholder for the applicant site (the real UI comes next)
+src/apply/index.html, apply.css, apply.js   the public Shipzora application (served at /)
+config/apply-questions.json              question screens + verification-code length for the public application
 dev/fake-b/                 local fake Website B (testing only)
 dev/e2e-client.ts           scripted end-to-end run over /ws
 dev/app-e2e.ts, app-problem-e2e.ts, app-start.ts   applicant foundation tests / helper
+dev/apply-page-test.ts      public application driven like an applicant (phone viewport)
 ```
 
 ## Error codes
