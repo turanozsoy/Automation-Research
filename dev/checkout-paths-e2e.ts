@@ -1,10 +1,12 @@
 /**
- * Checkout navigation after the submit click (Step 3): Step 4 (Agree) and Step 6 (primary button) are raced.
+ * Checkout navigation after the submit click (Step 3): Step 4 (Agree) and Step 7 (secondary button) are raced.
  *   Path A (fresh account):            3 → 4 → 5 → 6 → 7
- *   Path B (previously-used account):  3 → 6 → 7   (Steps 4 and 5 never appear)
- * Path B must prove the automation does not sit waiting for Step 4 while Step 6 is already visible.
- * The fake Website B takes a last name containing RETURNING as "previously-used account" for that applicant only.
- *   npm run fake-b   +   npm run start:fake (two imported fake accounts), then:
+ *   Path B (previously-used account):  3 → 7        (Steps 4, 5 and 6 never appear)
+ *   Fallback (checkout opens on 6):    3 → 6 → 7    (no Agree screen, primary button first)
+ * Path B must prove the automation does not sit waiting for Step 4 while Step 7 is already visible.
+ * The fake Website B takes a last name containing RETURNING as "previously-used account" for that applicant
+ * only (RETURNING6: the variant whose checkout opens on the primary button).
+ *   npm run fake-b   +   npm run start:fake (three imported fake accounts), then:
  *   npm run e2e:checkout
  */
 import Database from 'better-sqlite3';
@@ -16,7 +18,7 @@ const port = Number(process.env.PORT ?? 3000);
 const base = `http://localhost:${port}`;
 const dataDir = resolve(process.cwd(), process.env.DATA_DIR ?? 'data/fake');
 const CODE = '123456789';
-/** Upper bound for "Step 6 clicked promptly": the fake shows the returning checkout ~0.9 s after submit. Far below timeouts.checkoutStep (30 s). */
+/** Upper bound for "the next step was clicked promptly": the fake shows the returning checkout ~0.9 s after submit. Far below timeouts.checkoutStep (30 s). */
 const PROMPT_MS = 5000;
 setTimeout(() => { console.error('[e2e:checkout] TIMEOUT'); process.exit(1); }, 240_000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,26 +72,35 @@ function ordered(a: Applicant, names: string[]): boolean {
 
 const fresh = await start('Paula', 'Fresh');
 const returning = await start('Rhea', 'RETURNINGaccount');
+const opensOnSix = await start('Sam', 'RETURNING6account');
 const linkA = await waitView(fresh, (v) => v.generatedUrl !== null, 120_000, 'fresh applicant link');
 const linkB = await waitView(returning, (v) => v.generatedUrl !== null, 120_000, 'returning applicant link');
+const linkC = await waitView(opensOnSix, (v) => v.generatedUrl !== null, 120_000, 'opens-on-six applicant link');
 await sleep(300);
 
 console.log('[e2e:checkout] Path A (fresh account): 3 → 4 → 5 → 6 → 7');
 check(/\/test\/it-worked\//.test(linkA.generatedUrl!), `fresh applicant got a generated link (${linkA.generatedUrl})`);
 check(ordered(fresh, ['Website B submit clicked', 'Agree and continue clicked', 'checkbox unchecked', 'primary clicked', 'secondary clicked', 'generated URL detected']), 'Step 3, Agree (4), toggle turned off (5), primary (6), secondary (7), URL — in that order');
 check(has(fresh, 'toggle inspected'), 'the toggle was inspected before being turned off (never turned on)');
-check(!has(fresh, 'checkout toggle step skipped') && !has(fresh, 'primary step already done'), 'nothing was skipped on the fresh path');
+check(!has(fresh, 'checkout toggle step skipped') && !has(fresh, 'primary step skipped') && !has(fresh, 'primary step already done') && !has(fresh, 'secondary step already done'), 'nothing was skipped on the fresh path');
 
-console.log('[e2e:checkout] Path B (previously-used account): 3 → 6 → 7');
+console.log('[e2e:checkout] Path B (previously-used account): 3 → 7');
 check(/\/test\/it-worked\//.test(linkB.generatedUrl!), `returning applicant got a generated link (${linkB.generatedUrl})`);
-check(ordered(returning, ['Website B submit clicked', 'Agree and continue not present: primary button visible first', 'primary clicked', 'checkout toggle step skipped', 'primary step already done', 'secondary clicked', 'generated URL detected']), 'Step 3, primary (6) as soon as it appeared, secondary (7), URL — Steps 4 and 5 skipped');
-check(!has(returning, 'Agree and continue clicked') && !has(returning, 'toggle inspected') && !has(returning, 'iframe detected'), 'no Agree click, no toggle inspection, no separate iframe wait on the returning path');
-const submitToPrimary = tsOf(returning, 'primary clicked')! - tsOf(returning, 'Website B submit clicked')!;
-check(submitToPrimary < PROMPT_MS, `Step 6 clicked ${submitToPrimary} ms after the submit click: no wait for Step 4 (bound ${PROMPT_MS} ms, checkoutStep timeout 30 000 ms)`);
-check(!paused.some((p) => p.startsWith(workflowOf(returning)) || p.startsWith(workflowOf(fresh))), 'neither workflow paused');
+check(ordered(returning, ['Website B submit clicked', 'Agree and continue not present: secondary button visible first', 'secondary clicked', 'checkout toggle step skipped', 'primary step skipped', 'secondary step already done', 'generated URL detected']), 'Step 3, secondary (7) as soon as it appeared, URL — Steps 4, 5 and 6 skipped');
+check(!has(returning, 'Agree and continue clicked') && !has(returning, 'toggle inspected') && !has(returning, 'iframe detected') && !has(returning, 'primary clicked'), 'no Agree click, no toggle inspection, no iframe wait, no primary click on the returning path');
+const submitToSecondary = tsOf(returning, 'secondary clicked')! - tsOf(returning, 'Website B submit clicked')!;
+check(submitToSecondary < PROMPT_MS, `Step 7 clicked ${submitToSecondary} ms after the submit click: no wait for Step 4 (bound ${PROMPT_MS} ms, checkoutStep timeout 30 000 ms)`);
 
-console.log('[e2e:checkout] both applicants reach the role details');
-for (const a of [fresh, returning]) {
+console.log('[e2e:checkout] Fallback (checkout opens on the primary button): 3 → 6 → 7');
+check(/\/test\/it-worked\//.test(linkC.generatedUrl!), `opens-on-six applicant got a generated link (${linkC.generatedUrl})`);
+check(ordered(opensOnSix, ['Website B submit clicked', 'Agree and continue not present: primary button visible first', 'primary clicked', 'checkout toggle step skipped', 'primary step already done', 'secondary clicked', 'generated URL detected']), 'Step 3, primary (6) as soon as it appeared, secondary (7), URL — Steps 4 and 5 skipped');
+check(!has(opensOnSix, 'Agree and continue clicked') && !has(opensOnSix, 'toggle inspected'), 'no Agree click, no toggle inspection on the fallback path');
+const submitToPrimary = tsOf(opensOnSix, 'primary clicked')! - tsOf(opensOnSix, 'Website B submit clicked')!;
+check(submitToPrimary < PROMPT_MS, `Step 6 clicked ${submitToPrimary} ms after the submit click (bound ${PROMPT_MS} ms)`);
+check(!paused.some((p) => [fresh, returning, opensOnSix].some((a) => p.startsWith(workflowOf(a)))), 'no workflow paused');
+
+console.log('[e2e:checkout] all applicants reach the role details');
+for (const a of [fresh, returning, opensOnSix]) {
   a.ws.send(JSON.stringify({ ts: Date.now(), type: 'app.link_opened' }));
   const done = await waitView(a, (v) => v.state === 'completed', 90_000, `${a.name} completed`);
   check(done.linkState === 'verified', `${a.name}: link visited and verified`);

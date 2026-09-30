@@ -14,7 +14,7 @@ const enterSubmits = process.env.FAKE_B_ENTER_SUBMITS === '1'; // submit stays e
 const noAgree = process.env.FAKE_B_NO_AGREE === '1';
 const urlAsText = process.env.FAKE_B_URL_AS_TEXT === '1';
 const urlRedirects = process.env.FAKE_B_URL_REDIRECTS === '1';
-const returning = process.env.FAKE_B_RETURNING === '1'; // an account used before: no Agree screen, checkout without the pre-checked toggle
+const returning = process.env.FAKE_B_RETURNING === '1'; // an account used before: no Agree screen, no toggle, no primary button; checkout opens on the secondary button (Step 7)
 const cityError = process.env.FAKE_B_CITY_ERROR === '1'; // first submit: clear city, flag it red (data-accent-color) and refuse to advance // the first it-worked URL redirects to a different final one after loading // show the generated URL as plain text inside the iframe instead of navigating to it // no "Agree and continue" button: the agree step fails and the workflow pauses
 const html = (body: string) => `<!doctype html><html><head><meta charset="utf-8"><title>Fake B</title>
 <style>body{font-family:sans-serif;margin:24px}input,select{display:block;margin:4px 0 12px;padding:6px;width:280px}iframe{width:520px;height:320px;border:2px solid #888;margin-top:16px}</style>
@@ -111,12 +111,15 @@ createServer((req, res) => {
           // a last name containing NOIFRAME makes the checkout iframe never appear (per-applicant failure injection).
           document.cookie = 'lastApplicant=' + encodeURIComponent(document.getElementById('first-name').value) + '; Path=/';
           const noIframe = /NOIFRAME/.test(document.getElementById('last-name').value);
-          // a last name containing RETURNING makes this applicant's account behave like a previously-used one
-          // (no Agree screen, no toggle): the checkout iframe with the primary button appears straight away.
-          const returningAccount = ${returning} || /RETURNING/.test(document.getElementById('last-name').value);
+          // A last name containing RETURNING makes this applicant's account behave like a previously-used one:
+          // no Agree screen, no toggle, no primary button; the checkout iframe opens on the secondary button
+          // (Step 7) straight away. RETURNING6 is the variant that opens on the primary button (Step 6) instead.
+          const lastName = document.getElementById('last-name').value;
+          const returningAccount = ${returning} || /RETURNING/.test(lastName);
+          const opensOnPrimary = /RETURNING6/.test(lastName);
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
-          if (returningAccount) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout?returning=1"></iframe>'; }, 900); return; }
+          if (returningAccount) { setTimeout(() => { document.getElementById('checkout').innerHTML = opensOnPrimary ? '<iframe src="/checkout?returning=1"></iframe>' : '<iframe src="/checkout/step2"></iframe>'; }, 900); return; }
           setTimeout(() => {
             document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
             document.getElementById('agree').onclick = () => {

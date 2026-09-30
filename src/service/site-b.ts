@@ -445,9 +445,10 @@ export class SiteB {
    *   'form-gone' — the form disappeared but the next step is not visible yet
    */
   async watchAfterSubmit(timeout: number): Promise<{ outcome: 'advanced' | 'errors' | 'form-still-here' | 'form-gone'; errors: { field: string; reason: string }[] }> {
-    // "Advanced" = any of the next checkout controls is visible: Step 4 (Agree), Step 5 (toggle) or Step 6 (primary
-    // button). A previously-used account goes straight to Step 6, and must not sit here until the timeout.
-    const nextSels = [this.cfg.checkout.agreeButton, this.cfg.checkout.toggle, this.cfg.checkout.primaryButton].filter((x): x is string => !!x);
+    // "Advanced" = any of the next checkout controls is visible: Step 4 (Agree), Step 5 (toggle), Step 6 (primary
+    // button) or Step 7 (secondary button). A previously-used account goes straight to Step 7, and must not sit
+    // here until the timeout.
+    const nextSels = [this.cfg.checkout.agreeButton, this.cfg.checkout.toggle, this.cfg.checkout.primaryButton, this.cfg.checkout.secondaryButton].filter((x): x is string => !!x);
     const firstField = Object.keys(this.cfg.fields)[0];
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {

@@ -277,7 +277,7 @@ plain language, and sends `app.validation_failed` with field names only.
 | `fields.<name>.inputMethod` | `fill` (default) or `type` (key presses, no delay) for widgets that need key events. |
 | `fields.<name>.requiredAtStart` | `false` for fields that only exist after a later step (state appears once an address is accepted). Live updates to such fields are held and applied at submit. |
 | `addressFinalize` | `fields` (sync/repair order), `inputField` (where Enter is pressed), `trigger` (the field whose first update finalises the address), `suggestionsWaitMs` (Enter is pressed only with a suggestion list open; the list is re-triggered once with Space+Backspace), `settleQuietMs` / `settleMaxMs` (wait for address values to stop changing), `repairRounds`. |
-| `checkout.agreeButton` | Step 4: optional button that appears right after the submit click (e.g. `button[aria-label="Agree and continue"]`). After Step 3 the workflow races Step 4 against Step 6 (`primaryButton`), searching every frame: if Step 4 is visible first the path is 4 → optional 5 → 6 → 7; if Step 6 is visible first (a previously-used account) it is clicked at once and Steps 4/5 are never waited for (6 → 7). The post-submit field-error watch also ends as soon as any of these controls shows up. |
+| `checkout.agreeButton` | Step 4: optional button that appears right after the submit click (e.g. `button[aria-label="Agree and continue"]`). After Step 3 the workflow races Step 4 against Step 7 (`secondaryButton`), searching every frame: if Step 4 is visible first the path is 4 → optional 5 → 6 → 7; if Step 7 is visible first (a previously-used account lands there directly) it is clicked at once and Steps 4, 5 and 6 are never waited for. A checkout that opens on the primary button without an Agree screen is handled as 6 → 7. The post-submit field-error watch also ends as soon as any of these controls shows up. |
 | `checkout.agreeOptional`, `checkout.toggleOptional` | Default `true`: Step 4 and Step 5 may not exist. `agreeOptional: false` waits for Step 4 alone; `toggleOptional: false` requires the toggle after Step 4. After Step 4 the toggle (5) and the primary button (6) are looked for together; when 6 is there without 5 the toggle step is skipped without waiting. The toggle is only ever turned OFF. |
 | `submitButton` | The *last* visible, enabled match is clicked. |
 | `checkout.toggle` | Element inside the iframe that must end up unchecked/off. |
@@ -349,10 +349,11 @@ npm run typecheck
 #   CONCURRENCY=3 EXPIRE_ONE=1        an expired profile is inserted; the workflow that draws it is reassigned, profile leaves rotation
 #   CONCURRENCY=3 SKIP_CTA=1          applicant #1 never clicks View Role Details: verified without visited
 #   CONCURRENCY=3 SKIP_CTA=1 NO_VERIFY=1  with FAKE_B_GOOD_TO_GO_MS=600000 npm run fake-b: nobody verifies; workflows keep monitoring and hold their profiles
-# checkout paths: a fresh account (3 → 4 → 5 → 6 → 7) and a previously-used one (3 → 6 → 7; fake: last name contains RETURNING)
-#   proves Step 6 is clicked right after it appears instead of waiting for Step 4
+# checkout paths: a fresh account (3 → 4 → 5 → 6 → 7), a previously-used one (3 → 7; fake: last name contains RETURNING)
+#   and a checkout that opens on the primary button (3 → 6 → 7; last name contains RETURNING6);
+#   proves Step 7 is clicked right after it appears instead of waiting for Step 4
 npm run e2e:checkout
-# whole fake in returning mode (no Agree screen, no toggle): FAKE_B_RETURNING=1 npm run fake-b  then  E2E_EXPECT_RETURNING=1 npm run e2e  and  npm run e2e:apply
+# whole fake in returning mode (checkout opens on Step 7): FAKE_B_RETURNING=1 npm run fake-b  then  E2E_EXPECT_RETURNING=1 npm run e2e  and  npm run e2e:apply
 # failure path: an applicant whose last name contains NOIFRAME never gets the checkout iframe on the fake -> pause -> aborted -> retryable problem
 npm run e2e:app:problem
 # restart recovery: start an applicant workflow, kill -9 the service, start it again -> the application is a SERVICE_RESTARTED problem
