@@ -149,6 +149,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
         case 'app.update': r = apps.updateFields(applicationId, m.fields); break;
         case 'app.answers': r = apps.mergeAnswers(applicationId, m.answers); break;
         case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep); break;
+        case 'app.address_completed': r = apps.addressCompleted(applicationId, clientIp); break;
         case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
         case 'app.link_opened': r = apps.linkOpened(applicationId); break;
         case 'ping': reply({ type: 'pong', ts: Date.now(), echo: m.ts }); return;

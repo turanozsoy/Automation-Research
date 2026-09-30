@@ -163,11 +163,29 @@ export class Workflow {
     this.tl.mark('pending address updates flushed', `${flushed} applied`);
   }
 
-  /** First authentication-code update: finalise the address on Website B before the code is typed. */
-  private async finalizeAddressOnTrigger(): Promise<void> {
+  /**
+   * Explicit address finalisation, for a caller that knows the address step is complete
+   * (the Shipzora application moving to its verification-code step) and does not want to
+   * wait for the first code keystroke. Same tested logic as the trigger path; runs under
+   * the drain lock so it never overlaps live field sync, and applies live updates first
+   * in their normal order. A later code update then finds the address already finalised.
+   */
+  async finalizeAddress(): Promise<'finalized' | 'already' | 'not-ready'> {
+    if (!this.cfg.addressFinalize) return 'already';
+    while (this.drainPromise) await this.drainPromise;
+    if (this.state !== 'ready') return 'not-ready';
+    if (this.addressFinalized) return 'already';
+    this.drainPromise = this.finalizeAddressOnTrigger('address step completed').finally(() => { this.drainPromise = null; });
+    await this.drainPromise;
+    void this.drain(); // anything that arrived meanwhile
+    return 'finalized';
+  }
+
+  /** First authentication-code update (or an explicit request): finalise the address on Website B before the code is typed. */
+  private async finalizeAddressOnTrigger(reason?: string): Promise<void> {
     const af = this.cfg.addressFinalize!;
     this.addressFinalized = true;
-    this.tl.mark(`${af.trigger} started, finalizing address`);
+    this.tl.mark(reason ? `finalizing address (${reason})` : `${af.trigger} started, finalizing address`);
     await this.flushPendingAddress(af.fields);
     const snapshot = this.getSnapshot();
     try {

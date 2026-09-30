@@ -8,9 +8,17 @@ import { FIELD_COLUMNS, type ApplicationRow, type ApplicationStore, type Storabl
 /** Per-workflow bookkeeping while an application's automation is running. Lives in memory only. */
 interface Runtime {
   applicationId: string;
+  phase: 'preparing' | 'awaiting_code' | 'submitting';
   /** Fields seeded into the workflow; the workflow acknowledges each one once Website B has it. */
   seeded: Set<string>;
   resolved: Set<string>;
+  /** Latest value handed to the workflow per field (to forward only real changes while live). */
+  sent: Map<string, string>;
+  seq: number;
+  addressFinalized: boolean;
+  /** Code received before the workflow was ready for it; handed over as soon as the address is finalised, then dropped. */
+  pendingCode: string | null;
+  codeInjected: boolean;
   submitted: boolean;
   submittingReported: boolean;
   fallbackTimer: NodeJS.Timeout | null;
@@ -40,11 +48,13 @@ function applicantMessage(code: string): string {
  *
  *   applicationId (persistent)  ->  current workflowId (nullable, temporary)  ->  profile  ->  browser context
  *
- * Nothing is reserved while the applicant fills in the application. When the verification code
- * arrives and every field the Website B flow needs is present, ONE workflow is started, all fields
- * are seeded at once, and the existing submit sequence runs immediately in the background. The
- * code goes from here into the workflow's snapshot and nowhere else. Workflow messages are routed
- * here by workflowId (server-side); the applicant only ever receives their own ApplicationView.
+ * Nothing is reserved while the applicant fills in the early steps. When the address step is
+ * completed (every Website B field except the code is present) ONE workflow is started: profile,
+ * onboarding page, seeded fields, then the existing address finalisation, all in the background
+ * while the applicant is on the verification-code step. The code, when it arrives, goes into the
+ * live workflow (write-only handling) and the submit sequence runs to the generated URL. The code
+ * lives in memory here only until it is handed over. Workflow messages are routed here by
+ * workflowId (server-side); the applicant only ever receives their own ApplicationView.
  */
 export class ApplicationService {
   private runtimes = new Map<string, Runtime>();
@@ -96,7 +106,7 @@ export class ApplicationService {
       answers,
       verificationStep: row.verification_step,
       missingFields: this.missingFields(row),
-      automation: { active: row.state === 'processing', attempts: row.workflow_count },
+      automation: { active: row.state === 'processing', attempts: row.workflow_count, phase: this.runtimeOf(row)?.phase ?? null },
       generatedUrl: row.generated_url,
       generatedUrlReadyAt: row.generated_url_ready_at,
       linkState: row.link_state,
@@ -105,6 +115,10 @@ export class ApplicationService {
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  private runtimeOf(row: ApplicationRow): Runtime | undefined {
+    return row.workflow_id ? this.runtimes.get(row.workflow_id) : undefined;
   }
 
   private emit(applicationId: string): void {
@@ -138,8 +152,23 @@ export class ApplicationService {
     }
     this.store.updateFields(id, clean);
     this.store.event(id, 'fields_updated', { step: row.current_step, detail: Object.keys(clean).join(',') });
+    // A live workflow that has not received the code yet keeps syncing (the existing live-sync path).
+    const rt = this.runtimeOf(row);
+    if (rt && row.workflow_id && !rt.codeInjected) {
+      for (const [field, value] of Object.entries(clean)) {
+        if (!(field in this.cfg.fields) || rt.sent.get(field) === value) continue;
+        this.forward(rt, row.workflow_id, field, value!);
+      }
+    }
     this.emit(id);
     return { ok: true };
+  }
+
+  private forward(rt: Runtime, workflowId: string, field: string, value: string): void {
+    rt.seeded.add(field);
+    rt.resolved.delete(field);
+    rt.sent.set(field, value);
+    this.registry.handleFieldUpdate({ type: 'field.update', ts: Date.now(), workflowId, field, value, seq: ++rt.seq });
   }
 
   mergeAnswers(id: string, raw: unknown): Result {
@@ -164,15 +193,13 @@ export class ApplicationService {
   }
 
   /**
-   * The applicant provided the verification code. If every Website B field is present, start the
-   * automation now: reserve a profile, seed all fields (code included) into the workflow, and let the
-   * existing flow run. The code is not kept here after seeding.
+   * The applicant completed the address step. Start and prepare the onboarding workflow now, in the
+   * background, so the address is finalised while the applicant is on the verification-code step.
+   * Idempotent while a workflow is live for this application.
    */
-  provideVerification(id: string, code: unknown, clientIp?: string): Result {
+  addressCompleted(id: string, clientIp?: string): Result {
     const row = this.store.get(id);
     if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
-    if (typeof code !== 'string' || code.trim() === '' || code.length > MAX_CODE_LEN) return { ok: false, code: 'BAD_REQUEST', message: 'A verification code is required' };
-    if (row.state === 'processing') return { ok: false, code: 'INVALID_STATE', message: 'Your application is already being processed' };
     if (row.state === 'link_ready' || row.state === 'completed') return { ok: false, code: 'INVALID_STATE', message: 'Your application has already been processed' };
     const missing = this.missingFields(row);
     if (missing.length) {
@@ -180,12 +207,48 @@ export class ApplicationService {
       this.emit(id);
       return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
     }
+    if (this.runtimeOf(row)) { this.store.event(id, 'step_completed', { step: 'address', workflowId: row.workflow_id }); return { ok: true }; }
+    if (row.state === 'processing') return { ok: false, code: 'INVALID_STATE', message: 'Your application is already being processed' };
+    this.store.event(id, 'step_completed', { step: 'address' });
+    return this.startAutomation(row, clientIp, null);
+  }
+
+  /**
+   * The applicant provided the verification code. Handed to the live workflow (after its address is
+   * finalised), or held in memory until then. If no workflow is running (a retry, or a client that
+   * skipped app.address_completed) one is started first. The code is never persisted.
+   */
+  provideVerification(id: string, code: unknown, clientIp?: string): Result {
+    const row = this.store.get(id);
+    if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
+    if (typeof code !== 'string' || code.trim() === '' || code.length > MAX_CODE_LEN) return { ok: false, code: 'BAD_REQUEST', message: 'A verification code is required' };
+    if (row.state === 'link_ready' || row.state === 'completed') return { ok: false, code: 'INVALID_STATE', message: 'Your application has already been processed' };
+    const rt = this.runtimeOf(row);
+    if (rt && row.workflow_id) {
+      if (rt.codeInjected || rt.pendingCode !== null) return { ok: false, code: 'INVALID_STATE', message: 'Your verification code was already received' };
+      if (rt.addressFinalized) this.injectCode(rt, row.workflow_id, code.trim());
+      else { rt.pendingCode = code.trim(); this.tl.child(row.workflow_id).mark('verification code received early, held until the address is finalized'); }
+      this.emit(id);
+      return { ok: true };
+    }
+    if (row.state === 'processing') return { ok: false, code: 'INVALID_STATE', message: 'Your application is already being processed' };
+    const missing = this.missingFields(row);
+    if (missing.length) {
+      this.store.event(id, 'information_required', { step: row.current_step, detail: missing.join(',') });
+      this.emit(id);
+      return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
+    }
+    return this.startAutomation(row, clientIp, code.trim());
+  }
+
+  /** Reserve a profile and seed every non-secret Website B field. The code, if already known, waits in the runtime. */
+  private startAutomation(row: ApplicationRow, clientIp: string | undefined, code: string | null): Result {
     if (this.writeOnlyFields().length !== 1) {
-      // The config is the contract: this bridge seeds exactly one write-only field with the code.
+      // The config is the contract: this bridge injects exactly one write-only field with the code.
       this.tl.mark('application cannot start automation', `config has ${this.writeOnlyFields().length} write-only field(s), expected 1`);
       return { ok: false, code: 'INVALID_STATE', message: 'Processing is not available right now' };
     }
-
+    const id = row.id;
     const { workflowId, queuePosition } = this.registry.startWorkflow(clientIp);
     const attempts = row.workflow_count + 1;
     this.store.patch(id, {
@@ -195,19 +258,49 @@ export class ApplicationService {
     this.store.event(id, 'automation_started', { workflowId, step: row.current_step, retryCount: attempts - 1, detail: queuePosition ? `queued at position ${queuePosition}` : 'profile reserved' });
     this.tl.child(workflowId).mark('application automation started', `application ${id.slice(0, 8)}, attempt ${attempts}${queuePosition ? `, queued #${queuePosition}` : ''}`);
 
-    const rt: Runtime = { applicationId: id, seeded: new Set(), resolved: new Set(), submitted: false, submittingReported: false, fallbackTimer: null, lastError: null };
+    const rt: Runtime = {
+      applicationId: id, phase: 'preparing', seeded: new Set(), resolved: new Set(), sent: new Map(), seq: 0, addressFinalized: false,
+      pendingCode: code, codeInjected: false, submitted: false, submittingReported: false, fallbackTimer: null, lastError: null,
+    };
     this.runtimes.set(workflowId, rt);
-
-    // Seed every configured field in config order (the code last: it is the address-finalisation trigger).
-    const ts = Date.now();
-    for (const field of Object.keys(this.cfg.fields)) {
-      const value = this.cfg.fields[field].writeOnly ? code.trim() : this.value(row, field);
-      rt.seeded.add(field);
-      this.registry.handleFieldUpdate({ type: 'field.update', ts, workflowId, field, value, seq: 1 });
-    }
+    for (const field of this.requiredFields()) this.forward(rt, workflowId, field, this.value(row, field));
     this.progress(id, 'automation_started');
     this.emit(id);
     return { ok: true };
+  }
+
+  /** Hand the code to the live workflow (write-only field, masked handling) and arm the submit fallback. */
+  private injectCode(rt: Runtime, workflowId: string, code: string): void {
+    const field = this.writeOnlyFields()[0];
+    rt.codeInjected = true;
+    rt.pendingCode = null;
+    rt.phase = 'submitting';
+    rt.seeded.add(field);
+    rt.resolved.delete(field);
+    this.registry.handleFieldUpdate({ type: 'field.update', ts: Date.now(), workflowId, field, value: code, seq: ++rt.seq });
+    this.store.event(rt.applicationId, 'verification_received', { workflowId });
+    this.tl.child(workflowId).mark('verification code handed to the workflow');
+    this.progress(rt.applicationId, 'verification_received');
+    if (!rt.fallbackTimer) rt.fallbackTimer = setTimeout(() => this.trySubmit(workflowId, true), this.settings.applicantSubmitFallbackMs);
+  }
+
+  /** READY arrived: apply live updates, then finalise the address with the existing tested logic. */
+  private async finalizeAddressFor(workflowId: string): Promise<void> {
+    const rt = this.runtimes.get(workflowId);
+    const wf = this.registry.get(workflowId);
+    if (!rt || !wf) return;
+    try {
+      const r = await wf.finalizeAddress();
+      if (r === 'not-ready' || !this.runtimes.has(workflowId)) return;
+    } catch (e) {
+      this.tl.child(workflowId).mark('address finalization failed, submit will verify strictly', e instanceof Error ? e.message : String(e));
+    }
+    rt.addressFinalized = true;
+    this.store.event(rt.applicationId, 'address_finalized', { workflowId });
+    this.progress(rt.applicationId, 'address_finalized');
+    if (rt.pendingCode !== null) this.injectCode(rt, workflowId, rt.pendingCode);
+    else rt.phase = 'awaiting_code';
+    this.emit(rt.applicationId);
   }
 
   /** The applicant clicked the final call to action. Persists visited on the application and, when the workflow is live, on its assignment too. */
@@ -244,7 +337,9 @@ export class ApplicationService {
           case 'ready':
             this.store.event(id, 'automation_ready', { workflowId });
             this.progress(id, 'automation_ready');
-            if (!rt.fallbackTimer) rt.fallbackTimer = setTimeout(() => this.trySubmit(workflowId, true), this.settings.applicantSubmitFallbackMs);
+            // Next tick: the workflow starts draining the seeded fields right after it announces READY;
+            // finalizeAddress() waits for that drain so the tested order (fields, then address) is kept.
+            setImmediate(() => void this.finalizeAddressFor(workflowId));
             break;
           case 'submitting':
             if (!rt.submittingReported) { rt.submittingReported = true; this.store.event(id, 'automation_submitting', { workflowId }); this.progress(id, 'automation_submitting'); }
@@ -298,10 +393,10 @@ export class ApplicationService {
     }
   }
 
-  /** Submit once Website B has acknowledged every seeded field (or the fallback fired after READY). */
+  /** Submit once the code is in and Website B has acknowledged every seeded field (or the fallback fired after the code). */
   private trySubmit(workflowId: string, force: boolean): void {
     const rt = this.runtimes.get(workflowId);
-    if (!rt || rt.submitted) return;
+    if (!rt || rt.submitted || !rt.codeInjected) return;
     const wf = this.registry.get(workflowId);
     if (!wf || wf.state !== 'ready') return;
     const pending = [...rt.seeded].filter((f) => !rt.resolved.has(f));
@@ -349,6 +444,7 @@ export class ApplicationService {
   private endRuntime(workflowId: string, why: string): void {
     const rt = this.runtimes.get(workflowId);
     if (!rt) return;
+    rt.pendingCode = null;
     if (rt.fallbackTimer) clearTimeout(rt.fallbackTimer);
     this.runtimes.delete(workflowId);
     this.tl.child(workflowId).mark('application automation ended', `${why}, application ${rt.applicationId.slice(0, 8)}`);

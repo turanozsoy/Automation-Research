@@ -111,15 +111,23 @@ Three kinds of state stay separate:
 is `NULL` when none is running; every run is in `application_events` (`automation_started` carries its
 workflow id). One application may go through several workflows.
 
-**When the automation starts.** Never while the applicant is typing: no profile is reserved until the
-verification code arrives *and* every Website B field (`config.fields` minus the write-only code:
-firstName, lastName, dateOfBirth, mobileNumber, address1, city, state, zip) is present. Then one
-workflow is started, all fields are seeded at once, and the existing sequence runs to the generated
-URL in the background while the applicant continues with later questions. Once every seeded field is
-acknowledged by Website B (or `APPLICANT_SUBMIT_FALLBACK_MS` after READY), the bridge submits. A workflow
-that pauses (a step failed) is aborted rather than held: the profile is released and the application
-becomes a `problem` the applicant can retry (the code must be entered again). Applicant activity never
-extends a workflow's life.
+**When the automation starts.** Never while the applicant fills the early steps: no profile is
+reserved until the address step is complete, i.e. `app.address_completed` arrives and every Website B
+field except the write-only code (firstName, lastName, dateOfBirth, mobileNumber, address1, city,
+state, zip, from `config.fields`) is present. Then ONE workflow starts in the background while the
+applicant moves to the verification-code step: profile reserved, onboarding page prepared, the
+collected fields seeded through the normal live-sync path, and the address finalised with the
+existing tested logic (`Workflow.finalizeAddress()`, the same code the `/debug` harness reaches through
+the first code keystroke). The view shows `automation.phase`: `preparing` → `awaiting_code` →
+`submitting`. When `app.verify` arrives the code goes into the live workflow's write-only field
+(masked handling) and the submit sequence runs to the generated URL. A code that arrives before the
+address is finalised is held in memory and handed over as soon as it is. If no workflow is running
+when the code arrives (a retry, or a client that skipped the address message) one is started first.
+Once every seeded field is acknowledged after the code (or `APPLICANT_SUBMIT_FALLBACK_MS` later) the
+bridge submits. A workflow that pauses (a step failed) is aborted rather than held: the profile is
+released and the application becomes a `problem` the applicant can retry (the code must be entered
+again). Applicant activity never extends a workflow's life; a workflow left waiting for the code is
+bounded by `IDLE_TIMEOUT_MS` like any other ready workflow.
 
 **Verification code.** Never persisted, logged, or echoed: frontend → authenticated socket →
 `ApplicationService.provideVerification` → workflow snapshot → Website B. The application records only
@@ -135,9 +143,10 @@ authenticate with the cookie; an applicationId alone opens nothing.
 | Client → service | Service → applicant |
 |---|---|
 | `app.update { fields }` save Website B fields + `email` | `app.state { application }` full safe view, on connect and after every change |
-| `app.answers { answers }` merge job answers (JSON) | `app.progress { event }` automation_started / automation_ready / automation_submitting / generated_link_ready / visited / verified / problem |
+| `app.answers { answers }` merge job answers (JSON) | `app.progress { event }` automation_started / automation_ready / address_finalized / verification_received / automation_submitting / generated_link_ready / visited / verified / problem |
 | `app.step { step, completedStep? }` | `app.error { code, message, missingFields? }` UNAUTHENTICATED, INVALID_FIELD, INFORMATION_REQUIRED, INVALID_STATE, BAD_REQUEST |
-| `app.verify { code }` start the automation | |
+| `app.address_completed` address step done → start/prepare the workflow, finalise the address | |
+| `app.verify { code }` hand the code to the live workflow (starts one if none) | |
 | `app.link_opened` final call to action clicked → visited | |
 
 Routing is server-side: a socket is bound to one application at upgrade time and receives only that
@@ -148,7 +157,7 @@ to `/ws` (the `/debug` harness and e2e scripts). Closing an applicant socket nev
 `problem` (`SERVICE_RESTARTED`) on boot. Applications at `link_ready` keep their link.
 
 **Events** (`application_events`): application_started, step_viewed, step_completed, fields_updated,
-information_required, automation_started, automation_ready, automation_submitting, generated_link_ready,
+information_required, automation_started, automation_ready, address_finalized, verification_received, automation_submitting, generated_link_ready,
 problem (code, stage, safe message, bounded internal detail, retry count), final_cta_clicked, visited,
 verified, automation_ended, service_restarted.
 
@@ -232,7 +241,7 @@ src/service/crypto.ts       envelope encryption for storageState
 src/service/profiles/store.ts   profiles, atomic allocation, leases, release policy, recovery
 src/service/browser/manager.ts  one Chromium, one isolated context per workflow
 src/service/workflows.ts    registry: allocation, queue, prepare, reassignment, idle/lease upkeep, release
-src/service/workflow.ts     one workflow runtime: snapshot, coalescing queue, pausable submit steps
+src/service/workflow.ts     one workflow runtime: snapshot, coalescing queue, explicit or code-triggered address finalisation, pausable submit steps
 src/service/site-b.ts       everything that touches Website B's UI
 src/service/url-capture.ts  generated-URL detectors (+ settle on the final URL)
 src/service/ws.ts           HTTP (static, applicant session API, accounts API) + /ws (developer) and /ws/app (applicant) with server-side routing

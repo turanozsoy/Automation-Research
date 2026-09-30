@@ -1,6 +1,7 @@
 /**
  * End-to-end test of the applicant foundation against the running service + fake Website B:
  * creation, cookie session, resume, socket reconnect, isolation between two applications,
+ * address-step start with explicit address finalisation, held / late verification code,
  * application -> workflow mapping, generated URL persistence, visited / verified propagation,
  * and the verification code never reaching the database.
  *   npm run fake-b  +  npm run start:fake  (two imported fake accounts), then: npm run e2e:app
@@ -142,21 +143,36 @@ check(cErr?.type === 'app.error' && (cErr.missingFields ?? []).length === 8, 'mi
 check(sc.view?.state === 'started' && sc.view.automation.attempts === 0, 'no workflow was started for C');
 await sc.close();
 
-console.log('[e2e:app] 6. verification starts the automation; the socket may drop meanwhile');
+console.log('[e2e:app] 6. address step starts the automation; code arrives later; the socket may drop meanwhile');
 sb.send({ type: 'app.update', fields: FIELDS_B });
 await sb.waitView((v) => v.missingFields.length === 0, 5000, 'B complete');
 const tVerify = Date.now();
-sa.send({ type: 'app.verify', code: CODE });
-sb.send({ type: 'app.verify', code: CODE });
+// A: the intended flow. Address step done -> workflow prepares and finalises the address -> awaiting the code.
+sa.send({ type: 'app.address_completed' });
 await sa.waitView((v) => v.state === 'processing', 5000, 'A processing');
+check(sa.view!.automation.active && sa.view!.automation.attempts === 1 && sa.view!.automation.phase === 'preparing', 'A: automation active, attempt 1, phase preparing');
+sa.send({ type: 'app.address_completed' });
+await sleep(300);
+check(!sa.all.some((m) => m.type === 'app.error') || sa.all.filter((m) => m.type === 'app.error').every((m) => m.type === 'app.error' && m.code === 'INVALID_FIELD'), 'a repeated address_completed is idempotent (no error)');
+// B: address step and code sent back to back; the code must be held until the address is finalised.
+sb.send({ type: 'app.address_completed' });
+sb.send({ type: 'app.verify', code: CODE });
 await sb.waitView((v) => v.state === 'processing', 5000, 'B processing');
-check(sa.view!.automation.active && sa.view!.automation.attempts === 1, 'A: automation active, attempt 1');
-// Drop A's socket while the workflow runs: the workflow must continue.
+sb.send({ type: 'app.verify', code: CODE });
+check(await sb.waitError('INVALID_STATE'), 'a second code while one is held -> INVALID_STATE');
+// Drop A's socket while the workflow prepares: the workflow must continue.
 await sa.close();
 await sleep(2500);
 sa = new AppSocket('A3', A.cookie); await sa.connect();
 const afterDrop = await sa.waitView((v) => v.id === A.id, 5000, 'A snapshot after dropping the socket mid-automation');
-check(afterDrop.state === 'processing' || afterDrop.state === 'link_ready' || afterDrop.state === 'completed', `automation survived the disconnect (state ${afterDrop.state})`);
+check(afterDrop.state === 'processing', `automation survived the disconnect (state ${afterDrop.state}, phase ${afterDrop.automation.phase})`);
+const awaiting = await sa.waitView((v) => v.automation.phase === 'awaiting_code', 60_000, 'A awaiting the code');
+console.log(`  A address finalised, awaiting code after ${Date.now() - tVerify} ms`);
+check(awaiting.state === 'processing' && awaiting.generatedUrl === null && awaiting.verificationStep === 'required', 'A waits for the code: no URL yet, verification still required');
+await sleep(1500); // the applicant "types" the code while the workflow waits
+check(sa.view!.automation.phase === 'awaiting_code' && sa.view!.state === 'processing', 'A keeps waiting; nothing was submitted without the code');
+sa.send({ type: 'app.verify', code: CODE });
+await sa.waitView((v) => v.automation.phase === 'submitting', 5000, 'A submitting after the code');
 const linkA = await sa.waitView((v) => v.generatedUrl !== null, 120_000, 'A generated link');
 const linkB = await sb.waitView((v) => v.generatedUrl !== null, 120_000, 'B generated link');
 console.log(`  A link ${linkA.generatedUrl} after ${Date.now() - tVerify} ms; B link ${linkB.generatedUrl}`);
@@ -166,6 +182,7 @@ check(linkA.state === 'link_ready' || linkA.state === 'completed', 'A state link
 check(linkA.verificationStep === 'completed', 'verification step recorded as completed (metadata only)');
 check(typeof linkA.generatedUrlReadyAt === 'number', 'generatedUrlReadyAt persisted');
 check(sa.all.some((m) => m.type === 'app.progress' && m.event === 'generated_link_ready'), 'progress event generated_link_ready received');
+check(sb.all.some((m) => m.type === 'app.progress' && m.event === 'address_finalized') && sb.all.some((m) => m.type === 'app.progress' && m.event === 'verification_received'), 'B: address finalised, then the held code was handed over');
 
 console.log('[e2e:app] 7. visited / verified propagation');
 sa.send({ type: 'app.link_opened' });
@@ -187,7 +204,9 @@ console.log('[e2e:app] 8. database: persistence, mapping, and no secret');
   check(app.first_name === 'John' && app.phone === '5551234567' && app.address_state === 'NY', 'A row: applicant fields persisted');
   const events = db.prepare('SELECT type, workflow_id FROM application_events WHERE application_id = ? ORDER BY id').all(A.id) as { type: string; workflow_id: string | null }[];
   const types = events.map((e) => e.type);
-  for (const t of ['application_started', 'fields_updated', 'step_completed', 'step_viewed', 'automation_started', 'automation_ready', 'automation_submitting', 'generated_link_ready', 'final_cta_clicked', 'visited', 'verified']) check(types.includes(t), `event ${t} recorded`);
+  for (const t of ['application_started', 'fields_updated', 'step_completed', 'step_viewed', 'automation_started', 'automation_ready', 'address_finalized', 'verification_received', 'automation_submitting', 'generated_link_ready', 'final_cta_clicked', 'visited', 'verified']) check(types.includes(t), `event ${t} recorded`);
+  const order = ['automation_ready', 'address_finalized', 'verification_received', 'automation_submitting', 'generated_link_ready'].map((t) => types.indexOf(t));
+  check(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), 'A events in order: ready -> address finalised -> code received -> submitting -> link');
   const wfId = events.find((e) => e.type === 'automation_started')?.workflow_id;
   check(!!wfId, 'automation_started names the workflow');
   const asg = wfId ? db.prepare('SELECT * FROM assignments WHERE workflow_id = ?').get(wfId) as Record<string, unknown> | undefined : undefined;

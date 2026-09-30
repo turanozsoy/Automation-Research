@@ -111,7 +111,7 @@ export type LinkState = 'none' | 'visited' | 'verified';
 
 export type ApplicationEventType =
   | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required'
-  | 'automation_started' | 'automation_ready' | 'automation_submitting' | 'automation_ended'
+  | 'automation_started' | 'automation_ready' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
   | 'generated_link_ready' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted';
 
 /** Everything an applicant is allowed to see about their own application. */
@@ -124,7 +124,11 @@ export interface ApplicationView {
   verificationStep: VerificationStep;
   /** Fields still missing before the automation can start (Website B field names). */
   missingFields: string[];
-  automation: { active: boolean; attempts: number };
+  /**
+   * phase: null when no workflow is running; `preparing` (profile reserved, onboarding page opening, fields seeding),
+   * `awaiting_code` (address finalised, waiting for the verification code), `submitting` (code received, submit sequence running).
+   */
+  automation: { active: boolean; attempts: number; phase: 'preparing' | 'awaiting_code' | 'submitting' | null };
   generatedUrl: string | null;
   generatedUrlReadyAt: number | null;
   linkState: LinkState;
@@ -143,12 +147,21 @@ export interface AppUpdateMsg { type: 'app.update'; ts: number; fields: Record<s
 export interface AppAnswersMsg { type: 'app.answers'; ts: number; answers: Record<string, unknown> }
 /** The applicant moved to a step; optionally names the step they just completed. */
 export interface AppStepMsg { type: 'app.step'; ts: number; step: string; completedStep?: string }
-/** The verification code. Held only in memory, handed to the workflow, never persisted or logged. Starts the automation when every required field is present. */
+/**
+ * The applicant completed the address step (all Website B fields except the code are saved). Starts and
+ * prepares the onboarding workflow in the background: profile, page, seeded fields, address finalisation.
+ * The applicant can move on to the verification-code step immediately. Idempotent while a workflow is live.
+ */
+export interface AppAddressCompletedMsg { type: 'app.address_completed'; ts: number }
+/**
+ * The verification code. Held only in memory, handed to the live workflow, never persisted or logged.
+ * Continues the submit sequence; if no workflow is running yet (e.g. a retry), it starts one first.
+ */
 export interface AppVerifyMsg { type: 'app.verify'; ts: number; code: string }
 /** The applicant clicked the final call to action that opens the generated link. */
 export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
 export interface AppPingMsg { type: 'ping'; ts: number }
-export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
 
 // ---- service -> applicant ----
 /** Full safe snapshot; sent on connect and after every change. */
