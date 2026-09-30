@@ -58,6 +58,7 @@ export class ProfileStore {
   }
 
   setDirectAllowed(v: boolean): void { this.directAllowed = v; }
+  isDirectAllowed(): boolean { return this.directAllowed; }
 
   // ---------- CRUD ----------
 

@@ -106,6 +106,25 @@ console.log('[e2e:egress] 1. import');
   check(l2.egress.filter((e) => e.kind !== 'direct').every((e) => e.health === 'healthy'), `active health checks passed (${l2.egress.filter((e) => e.kind !== 'direct').map((e) => e.health).join(', ')})`);
 }
 
+console.log('[e2e:egress] 1b. login capture takes a session exclusively');
+{
+  const acct = (db.prepare("SELECT id, label FROM profiles ORDER BY created_at LIMIT 1").get() as { id: string; label: string });
+  const before1 = await stats(P1.control), before2 = await stats(P2.control);
+  const st = await api(`/api/accounts/${acct.id}/login/start`, { method: 'POST' });
+  check(st.status === 200 && st.body.open && /127\.0\.0\.1:310[01]/.test(st.body.egress ?? ''), `login browser opened via ${st.body.egress}`);
+  await sleep(2500);
+  const inUse = (await egressList()).egress.filter((e) => e.state === 'in_use');
+  check(inUse.length === 1 && inUse[0].label === st.body.egress, 'that session is in use while the capture browser is open');
+  const after1 = await stats(P1.control), after2 = await stats(P2.control);
+  const used = st.body.egress.endsWith(':3100') ? after1.requests - before1.requests : after2.requests - before2.requests;
+  check(used > 0, `the capture browser's traffic went through the session (${used} requests)`);
+  await api(`/api/accounts/${acct.id}/login/cancel`, { method: 'POST' });
+  await sleep(800);
+  const held = await byLabel(st.body.egress);
+  check(held.state === 'held', 'the session is held after the capture, not returned to the pool');
+  await api(`/api/admin/egress/${held.id}/release`, { method: 'POST' });
+}
+
 console.log('[e2e:egress] 2. exclusive use, held after use, release serves the queue');
 const direct = await byLabel('Direct (server IP)');
 await api(`/api/admin/egress/${direct.id}/retire`, { method: 'POST' });

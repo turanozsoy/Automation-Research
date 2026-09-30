@@ -178,6 +178,23 @@ export class EgressStore {
     }
   }
 
+  /**
+   * Take one egress exclusively for something that is not a workflow (the manual login capture browser).
+   * Same rules as allocation; the session is in_use until releaseExclusive(), then held.
+   */
+  acquireExclusive(directAllowed: boolean, tag: string): string | null {
+    return this.db.transaction(() => {
+      const id = this.pickAvailable(directAllowed);
+      if (!id) return null;
+      this.markInUse(id, tag);
+      return id;
+    })();
+  }
+
+  releaseExclusive(id: string, tag: string, reason: string): void {
+    this.markUsed(id, tag, reason);
+  }
+
   /** The workflow that used it ended: a session is HELD until an operator releases it; direct stays available. */
   markUsed(id: string, workflowId: string, reason: string): void {
     const r = this.get(id);

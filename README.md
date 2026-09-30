@@ -131,7 +131,10 @@ any (not in use) → retired         Retire; needs Reinstate
 - **Windows note.** Chromium needs Playwright's per-context proxy placeholder on Windows
   (`CHROMIUM_PROXY_MODE=per-context`, or `auto` when a proxy exists at start); under it no context can
   go direct, so the direct egress is unavailable. Linux and macOS need nothing special.
-- The manual login capture browser still uses the server IP; it is not routed through a session.
+- **Login capture** (Add account / Refresh cookies) takes one available session exclusively for the
+  capture browser and launches through it; on Done, Cancel or closing the window the session becomes
+  held, like after a workflow. With no available session and Direct retired, the action is refused
+  with a message rather than silently using the server IP.
 
 Testing: `npm run fake-proxy -- --port 3100 --control 3900 --auth user1:pass1` (and a second on 3101),
 then `npm run e2e:egress`: import feedback, exclusive use, held/release serving the queue, health

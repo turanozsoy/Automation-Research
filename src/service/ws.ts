@@ -319,14 +319,14 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
         deps.notifyAdmin?.('accounts');
         return json(200, { ok: true });
       }
-      if (action === 'login/start' && method === 'POST') return json(200, await deps.logins.start(id));
+      if (action === 'login/start' && method === 'POST') { const st = await deps.logins.start(id); deps.notifyAdmin?.('egress'); return json(200, st); }
       if (action === 'login/status' && method === 'GET') return json(200, deps.logins.status(id));
       if (action === 'login/done' && method === 'POST') {
         const r = await deps.logins.done(id);
-        if (r.saved) deps.notifyAdmin?.('accounts');
+        if (r.saved) { deps.notifyAdmin?.('accounts'); deps.notifyAdmin?.('egress'); }
         return json(r.saved ? 200 : 409, r);
       }
-      if (action === 'login/cancel' && method === 'POST') { await deps.logins.cancel(id); return json(200, { ok: true }); }
+      if (action === 'login/cancel' && method === 'POST') { await deps.logins.cancel(id); deps.notifyAdmin?.('egress'); return json(200, { ok: true }); }
     }
 
     res.writeHead(404, { 'content-type': 'text/plain' });

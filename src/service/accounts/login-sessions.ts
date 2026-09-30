@@ -4,9 +4,9 @@ import type { ProfileStore } from '../profiles/store.js';
 import type { Settings } from '../settings.js';
 import type { Timeline } from '../timeline.js';
 
-interface LoginSession { accountId: string; browser: Browser; context: BrowserContext; page: Page; startedAt: number }
+interface LoginSession { accountId: string; browser: Browser; context: BrowserContext; page: Page; startedAt: number; egressId: string | null }
 
-export interface LoginStatus { accountId: string; open: boolean; startedAt?: number; currentUrl?: string; onLoginPage?: boolean }
+export interface LoginStatus { accountId: string; open: boolean; startedAt?: number; currentUrl?: string; onLoginPage?: boolean; egress?: string | null }
 
 /**
  * Manual-login browsers for the accounts page. Each "Get Cookies" / "Refresh Cookies"
@@ -26,7 +26,7 @@ export class LoginSessionManager {
     const s = this.sessions.get(accountId);
     if (!s) return { accountId, open: false };
     const url = s.page.isClosed() ? '' : s.page.url();
-    return { accountId, open: true, startedAt: s.startedAt, currentUrl: url, onLoginPage: isLoginUrl(this.cfg, url) };
+    return { accountId, open: true, startedAt: s.startedAt, currentUrl: url, onLoginPage: isLoginUrl(this.cfg, url), egress: s.egressId ? (this.store.egress.get(s.egressId)?.label ?? s.egressId) : null };
   }
 
   /** Open the visible login browser for an account. Idempotent: an open one is reused. */
@@ -37,29 +37,44 @@ export class LoginSessionManager {
     if (existing && !existing.page.isClosed()) return this.status(accountId);
     if (existing) await this.close(accountId);
 
+    // The capture browser leaves through one exclusively held egress, like a workflow: a proxy session if one is
+    // available (held afterwards until released), else direct when allowed. Never silently the server IP otherwise.
+    const tag = `login:${accountId}`;
+    const egressId = this.store.egress.acquireExclusive(this.store.isDirectAllowed(), tag);
+    if (!egressId) throw new Error('No egress available for the login browser: release a proxy session (or reinstate Direct) and try again');
+    const proxy = this.store.egress.proxyOptions(egressId);
     // Visible by default; LOGIN_HEADLESS=1 exists only for automated tests.
     const headless = process.env.LOGIN_HEADLESS === '1';
-    const browser = await chromium.launch({
-      headless,
-      executablePath: this.settings.chromiumPath,
-      args: headless ? [] : ['--window-size=1200,860', '--window-position=80,60'],
-    });
+    let browser: Browser;
+    try {
+      browser = await chromium.launch({
+        headless,
+        executablePath: this.settings.chromiumPath,
+        args: headless ? [] : ['--window-size=1200,860', '--window-position=80,60'],
+        proxy: proxy ?? undefined,
+        handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
+      });
+    } catch (e) {
+      this.store.egress.releaseExclusive(egressId, tag, 'login browser failed to launch');
+      throw e;
+    }
     let storageState: object | undefined;
     if (account.session_saved_at) {
       try { storageState = JSON.parse(this.store.decryptStorageState(account)); } catch { storageState = undefined; }
     }
     const context = await browser.newContext({ storageState: storageState as any, viewport: headless ? { width: 1200, height: 860 } : null });
     const page = await context.newPage();
-    const session: LoginSession = { accountId, browser, context, page, startedAt: Date.now() };
+    const session: LoginSession = { accountId, browser, context, page, startedAt: Date.now(), egressId };
     this.sessions.set(accountId, session);
     browser.on('disconnected', () => {
       if (this.sessions.get(accountId) === session) {
         this.sessions.delete(accountId);
+        this.store.egress.releaseExclusive(egressId, tag, 'login browser closed by user');
         this.tl.mark('login browser closed by user', account.label);
       }
     });
     await page.goto(this.cfg.targetUrl, { waitUntil: 'domcontentloaded', timeout: this.cfg.timeouts.pageLoad }).catch(() => {});
-    this.tl.mark('login browser opened', `${account.label} (${account.account_key}) → ${page.url()}${storageState ? ' with current session' : ''}`);
+    this.tl.mark('login browser opened', `${account.label} (${account.account_key}) via ${this.store.egress.get(egressId)?.label ?? egressId} → ${page.url()}${storageState ? ' with current session' : ''}`);
     return this.status(accountId);
   }
 
@@ -94,7 +109,10 @@ export class LoginSessionManager {
   private async close(accountId: string): Promise<void> {
     const s = this.sessions.get(accountId);
     this.sessions.delete(accountId);
-    if (s) await s.browser.close().catch(() => {});
+    if (s) {
+      await s.browser.close().catch(() => {});
+      if (s.egressId) this.store.egress.releaseExclusive(s.egressId, `login:${accountId}`, 'login capture ended');
+    }
   }
 
   async closeAll(): Promise<void> {

@@ -182,7 +182,7 @@
     try {
       const s = await api(`/api/accounts/${activeLogin.id}/login/status`);
       if (!s.open) { hideLogin('The login browser was closed. Nothing was saved. Use Get or Refresh cookies to try again.', true); await load(); return; }
-      $('#loginUrl').textContent = `${s.currentUrl || '…'}${s.onLoginPage ? '  (still the login page)' : ''}`;
+      $('#loginUrl').textContent = `${s.currentUrl || '…'}${s.onLoginPage ? '  (still the login page)' : ''}${s.egress ? `  ·  via ${s.egress}` : ''}`;
     } catch { /* transient */ }
   }
   function hideLogin(text, err) {
