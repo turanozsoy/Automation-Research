@@ -24,6 +24,10 @@
     checkBig: '<svg width="26" height="26" viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10.5l4 4 8-9" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     warn: '<svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l10 18H2z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v5m0 3v.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>',
     lock: '<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+    user: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M4 20a8 8 0 0 1 16 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    key: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="9" width="18" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 15h.5M12 15h.5M16 15h.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M8 9V6.5a4 4 0 0 1 8 0V9" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
+    list: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h12M8 12h12M8 17h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 7h.5M4 12h.5M4 17h.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>',
+    save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
   };
   const US_STATES = [['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','District of Columbia'],['FL','Florida'],['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming']];
 
@@ -261,11 +265,12 @@
       el('span', { class: 'error-text', id: `err-${key}`, role: 'alert', hidden: true }));
   }
 
-  function actions({ primary = 'Continue', onPrimary, showBack = true, disabled = false }) {
+  // Bottom action area. Back navigation lives in the header arrow (#headerBack), not next to the primary button.
+  function actions({ primary = 'Continue', onPrimary, disabled = false }) {
     return el('div', { class: 'actions' },
-      showBack && prevStep(step) ? el('button', { type: 'button', class: 'btn btn-secondary btn-back', onclick: back, text: 'Back' }) : null,
       el('button', { type: 'submit', class: 'btn btn-primary', text: primary, disabled, onclick: onPrimary ? (ev) => { ev.preventDefault(); onPrimary(); } : undefined }));
   }
+  const badge = (text) => el('p', { class: 'step-badge', text });
 
   function form(onSubmit, ...children) {
     return el('form', { novalidate: true, onsubmit: (ev) => { ev.preventDefault(); onSubmit(); } }, ...children);
@@ -277,15 +282,17 @@
   function renderLanding(existing) {
     const s = el('section', { class: 'landing' });
     s.append(
+      document.importNode($('#tpl-hero').content, true),
       el('h1', { text: 'Start your Shipzora application' }),
       el('p', { class: 'lede', text: 'Apply online for logistics and delivery opportunities with Shipzora. It takes a few minutes, and your progress is saved automatically as you go.' }),
-      el('ul', { class: 'facts' },
-        fact('You’ll be asked for your contact details and address.'),
-        fact(`You’ll need your ${config.verificationCode.length}-digit verification code.`),
-        fact('A few short questions about your experience and schedule.')));
+      el('ul', { class: 'facts', 'aria-label': 'What you will need' },
+        fact(ICON.user, 'Your contact details and home address.'),
+        fact(ICON.key, `Your ${config.verificationCode.length}-digit verification code.`),
+        fact(ICON.list, 'A few short questions about your experience and schedule.')));
     if (existing && existing.state !== 'completed') {
       const name = existing.fields && existing.fields.firstName;
       s.append(el('div', { class: 'landing-panel' },
+        el('p', { class: 'eyebrow', text: 'Saved application' }),
         el('h2', { text: name ? `Welcome back, ${name}` : 'Welcome back' }),
         el('p', { text: existing.state === 'link_ready' ? 'Your role details are ready to view.' : 'You have an application in progress. Pick up where you left off.' }),
         el('div', { class: 'actions' },
@@ -297,7 +304,7 @@
     }
     return s;
   }
-  const fact = (text) => el('li', {}, el('span', { html: ICON.check }), el('span', { text }));
+  const fact = (icon, text) => el('li', {}, el('span', { class: 'fact-icon', html: icon, 'aria-hidden': 'true' }), el('span', { text }));
   const startFailed = () => setNotice('We couldn’t start your application just now. Please try again in a moment.', 'error');
 
   function renderContact() {
@@ -335,7 +342,7 @@
     return form(submit,
       el('h1', { text: 'Your date of birth' }),
       el('p', { class: 'lede', id: 'help-dateOfBirth', text: 'We need this to set up your onboarding record. It isn’t used to evaluate your application.' }),
-      el('fieldset', { class: 'field', 'data-field-wrap': 'dateOfBirth' },
+      el('fieldset', { class: 'field dob', 'data-field-wrap': 'dateOfBirth' },
         el('legend', { text: 'Date of birth' }),
         el('div', { class: 'row-3' }, part('m', 'Month', 'm', 2, 'bday-month', 'MM'), part('d', 'Day', 'd', 2, 'bday-day', 'DD'), part('y', 'Year', 'y', 4, 'bday-year', 'YYYY')),
         el('span', { class: 'error-text', id: 'err-dateOfBirth', role: 'alert', hidden: true })),
@@ -370,7 +377,7 @@
     if (codeReceived() && !codeNeededAgain()) {
       return form(() => go(nextStep('code')),
         el('h1', { text: 'Verification code' }),
-        el('div', { class: 'code-received' }, el('span', { html: ICON.check }), el('span', { text: 'Your verification code has been received. You can continue with your application.' })),
+        el('div', { class: 'code-received' }, el('span', { class: 'tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text: 'Your verification code has been received. You can continue with your application.' })),
         actions({}));
     }
     const submit = () => {
@@ -384,19 +391,18 @@
     };
     const input = el('input', {
       class: 'input code-input', id: 'f-code', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: n, pattern: '[0-9]*',
-      'aria-describedby': 'help-code err-code', autocapitalize: 'off', spellcheck: 'false',
+      placeholder: '•'.repeat(n), 'aria-describedby': 'help-code err-code', autocapitalize: 'off', spellcheck: 'false',
       oninput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, n); local.code = ev.target.value; clearError('code'); },
     });
     return form(submit,
       el('h1', { text: 'Verification code' }),
-      codeNeededAgain()
-        ? el('div', { class: 'notice warn', role: 'status', text: 'We couldn’t finish the previous step. Your details are saved. Enter your verification code again to try again.' })
-        : el('p', { class: 'lede', text: 'One more detail while we get your application ready.' }),
-      el('div', { class: 'field', 'data-field-wrap': 'code' },
-        el('label', { for: 'f-code', text: `${n}-digit verification code` }),
-        el('span', { class: 'help', id: 'help-code', text: config.verificationCode.help }),
+      el('p', { class: 'lede', id: 'help-code', text: config.verificationCode.help || 'Enter the verification code provided for your Shipzora application.' }),
+      codeNeededAgain() ? el('div', { class: 'notice warn', role: 'status', text: 'We couldn’t finish the previous step. Your details are saved. Enter your verification code again to try again.' }) : null,
+      el('div', { class: 'field code-field', 'data-field-wrap': 'code' },
+        el('label', { for: 'f-code', text: `${n}-digit code` }),
         input,
         el('span', { class: 'error-text', id: 'err-code', role: 'alert', hidden: true })),
+      el('p', { class: 'code-note' }, el('span', { html: ICON.lock, 'aria-hidden': 'true' }), el('span', { text: 'Your code is used once to prepare your application and is never stored.' })),
       actions({}));
   }
 
@@ -408,9 +414,9 @@
     };
     return form(submit,
       el('h1', { text: screen.title }),
-      ...screen.questions.map((q) => el('fieldset', { 'data-field-wrap': q.key },
+      ...screen.questions.map((q) => el('fieldset', { class: 'question', 'data-field-wrap': q.key },
         el('legend', { text: q.label }),
-        el('div', { class: 'choices', role: 'presentation' }, ...q.options.map((o) => {
+        el('div', { class: `choices${q.options.length === 4 && q.options.every((o) => !o.hint) ? ' choices-grid' : ''}`, role: 'presentation' }, ...q.options.map((o) => {
           const id = `q-${q.key}-${o.value}`;
           return el('div', { class: 'choice' },
             el('input', { type: 'radio', id, name: q.key, value: o.value, checked: local.answers[q.key] === o.value, onchange: () => { local.answers[q.key] = o.value; clearError(q.key); $(`[data-field-wrap="${q.key}"] .choices`).classList.remove('invalid'); send({ type: 'app.answers', answers: { [q.key]: o.value } }); } }),
@@ -422,40 +428,45 @@
 
   function renderComplete() {
     const first = (local.fields.firstName || (app && app.fields && app.fields.firstName) || '').trim();
-    const card = el('section', { class: 'status-card' });
-    if (!app) { card.append(el('h1', { text: 'Your application' }), el('p', { class: 'lede', text: 'Loading…' })); return card; }
+    const card = el('section', { class: 'status' });
+    const reassure = (text) => el('p', { class: 'reassure' }, el('span', { html: ICON.save, 'aria-hidden': 'true' }), el('span', { text }));
+    if (!app) { card.append(badge('Application'), el('h1', { text: 'Your application' }), el('p', { class: 'lede', text: 'Loading…' })); return card; }
     if (app.state === 'link_ready' || app.state === 'completed') {
       const opened = !!app.finalLinkClickedAt;
       card.append(
+        badge(app.state === 'completed' ? 'Confirmed' : 'Ready'),
         el('div', { class: 'status-icon ok', html: ICON.checkBig }),
         el('h1', { text: 'Your role details are ready' }),
         el('p', { class: 'lede', text: `Thanks${first ? ', ' + first : ''}. You can now review the role information prepared for your application.` }),
+        el('p', { class: 'muted', text: app.state === 'completed' ? 'Your role details have been confirmed.' : opened ? 'You’ve opened your role details. You can come back to this page any time.' : 'Opens in a new tab. You can come back to this page any time.' }),
         el('div', { class: 'actions' },
           el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? 'Open Role Details again' : 'View Role Details',
-            onclick: () => { send({ type: 'app.link_opened' }); } })),
-        el('p', { class: 'muted', text: app.state === 'completed' ? 'Your role details have been confirmed.' : opened ? 'You’ve opened your role details. You can come back to this page any time.' : 'Opens in a new tab. You can come back to this page any time.' }));
+            onclick: () => { send({ type: 'app.link_opened' }); } })));
       return card;
     }
     if (app.state === 'problem') {
       card.append(
+        badge('Action needed'),
         el('div', { class: 'status-icon warn', html: ICON.warn }),
         el('h1', { text: 'We couldn’t finish preparing your role details' }),
         el('p', { class: 'lede', text: (app.problem && app.problem.message) || 'We couldn’t finish this step. Please try again.' }),
-        el('p', { class: 'muted', text: 'Your answers are saved. To try again, enter your verification code once more.' }),
+        reassure('Your answers are saved. To try again, enter your verification code once more.'),
         el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: 'Try again', onclick: () => go('code', { completed: null }) })));
       return card;
     }
     if (app.state === 'processing') {
       const sp = document.importNode($('#tpl-spinner').content, true);
       card.append(
+        badge('Preparing'),
         el('div', { class: 'status-icon wait' }, sp),
         el('h1', { text: 'Preparing your role details…' }),
         el('p', { class: 'lede', text: `Thanks${first ? ', ' + first : ''}. We’re getting your role information ready. This page will update on its own when it’s available.` }),
-        el('p', { class: 'muted', text: 'You can keep this page open. If you leave, you can return and pick up where you left off.' }));
+        reassure('You can keep this page open. If you leave, you can return and pick up where you left off.'));
       return card;
     }
     // started: the applicant reached the end without the automation ever starting (missing information)
     card.append(
+      badge('Almost there'),
       el('div', { class: 'status-icon warn', html: ICON.warn }),
       el('h1', { text: 'Almost there' }),
       el('p', { class: 'lede', text: 'Some information is still missing before we can prepare your role details.' }),
@@ -471,7 +482,9 @@
     const root = $('#screen');
     root.replaceChildren();
     setProgress();
-    $('#headerContext').textContent = step === 'landing' ? 'Careers' : step === FINAL ? 'Application' : 'Application';
+    document.body.dataset.screen = step === 'landing' ? 'landing' : step === FINAL ? 'status' : 'step';
+    $('#headerContext').textContent = 'Shipzora Application';
+    $('#headerBack').hidden = step === 'landing' || step === FINAL || !prevStep(step);
     if (step === 'landing') root.append(renderLanding(landingExisting));
     else if (step === 'contact') root.append(renderContact());
     else if (step === 'dob') root.append(renderDob());
@@ -482,6 +495,7 @@
   }
 
   async function init() {
+    $('#headerBack').addEventListener('click', back);
     try { config = await (await fetch('/api/apply/config')).json(); } catch { /* defaults */ }
     landingExisting = await loadExisting();
     step = 'landing';

@@ -39,7 +39,7 @@ try {
   await p.getByRole('button', { name: 'Start Application' }).click();
   await h1(/Tell us about yourself/);
   check((await ctx.cookies(base)).some((c) => c.name === 'shipzora_session' && c.httpOnly), 'HttpOnly session cookie set on start');
-  check(await p.locator('#progressLabel').innerText() === 'Step 1 of 7', 'progress reads Step 1 of 7');
+  check(/^step 1 of 7$/i.test(await p.locator('#progressLabel').innerText()), 'step badge reads Step 1 of 7');
 
   console.log('[e2e:apply] 2. contact: validation then continue');
   await p.getByRole('button', { name: 'Continue' }).click();

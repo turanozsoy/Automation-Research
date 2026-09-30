@@ -246,7 +246,15 @@ verified, automation_ended, service_restarted.
 ## Applicant site
 
 `src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`; footer
-links `/privacy`, `/terms`, `/contact` are honest placeholders until real pages exist. Flow:
+links `/privacy`, `/terms`, `/contact` are honest placeholders until real pages exist.
+
+Design: mobile-first, 540 px container, white background, black type, red primary action, warm yellow
+accent; tokens live at the top of `apply.css` (`--color-*`, `--radius-*`, `--control-h`, `--shell`). The
+shell is the same on every step: header (back arrow + centred title on steps, brand on the landing page),
+4 px red/yellow progress line, "Step n of 7" badge, heading, copy, then a bottom action area with one red
+CTA. Back navigation is the header arrow (`#headerBack`, `aria-label="Back"`). The type face is Inter
+from Google Fonts with a system-sans fallback; self-host it if external font requests are unwanted.
+`body[data-screen]` is `landing`, `step` or `status`. Flow:
 
 | Screen | Saves | Notes |
 |---|---|---|
