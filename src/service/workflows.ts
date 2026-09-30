@@ -36,6 +36,9 @@ export class WorkflowRegistry {
   }
 
   setSender(fn: (msg: ServerMsg) => void): void { this.send = fn; }
+  /** Told after a successful run whether the account's refreshed session was persisted (never the session itself). */
+  setSessionHandler(fn: (workflowId: string, profileId: string, result: 'refreshed' | 'failed') => void): void { this.onSession = fn; }
+  private onSession: (workflowId: string, profileId: string, result: 'refreshed' | 'failed') => void = () => {};
 
   start(): void {
     const { leaseMs, cooldownMs } = this.settings;
@@ -193,6 +196,14 @@ export class WorkflowRegistry {
 
   get(workflowId: string): Workflow | undefined { return this.live.get(workflowId); }
 
+  /** Workflows that hold or are about to hold a browser context (live, preparing or queued). */
+  activeCount(): number { return this.live.size + this.early.size; }
+
+  /** Development: save what the page rendered when a step failed (no-op without a live context). */
+  captureFailure(workflowId: string, stage: string, code: string, message: string): void {
+    if (this.live.has(workflowId)) this.browser.captureFailure(workflowId, stage, code, message);
+  }
+
   /** True for ids that were accepted and have not ended (live, queued, or preparing). */
   isKnown(workflowId: string): boolean { return this.live.has(workflowId) || this.early.has(workflowId); }
 
@@ -226,10 +237,18 @@ export class WorkflowRegistry {
       outcome === 'completed' ? 'completed' : outcome === 'abandoned' ? 'abandoned' : outcome === 'auth_expired' ? 'auth_expired'
       : outcome === 'browser_lost' ? 'lost' : outcome === 'uncertain' ? 'uncertain' : 'failed';
     const a = this.store.getAssignment(workflowId);
-    // Keep the profile's rolling session fresh after a good run.
-    if (outcome === 'completed' && a) {
+    // A good run (verified, or the URL was captured and only the verification wait ended) leaves the context with
+    // the account's newest cookies / storage: persist them on the SAME account before the context is closed.
+    const successful = !!a && (outcome === 'completed' || (outcome === 'abandoned' && a.submit_state === 'succeeded'));
+    if (successful && a) {
       const fresh = await this.browser.exportStorageState(workflowId);
-      if (fresh) this.store.refreshStorageState(a.profile_id, fresh);
+      let saved = false;
+      if (fresh) {
+        try { this.store.refreshStorageState(a.profile_id, fresh, workflowId); saved = true; } catch (e) { this.tl.child(workflowId).mark('session persist failed', e instanceof Error ? e.message.split('\n')[0] : String(e)); }
+      }
+      if (saved) this.tl.child(workflowId).mark('session refreshed from the workflow context', 'saved encrypted on the same account');
+      else { this.store.markSessionPersistFailed(a.profile_id, workflowId, fresh ? 'encrypt/save failed' : 'storageState export failed'); this.tl.child(workflowId).mark('SESSION_PERSIST_FAILED', 'account flagged for attention'); }
+      this.onSession(workflowId, a.profile_id, saved ? 'refreshed' : 'failed');
     }
     await this.browser.closeContext(workflowId);
     this.store.release(workflowId, release, this.settings.cooldownMs, { outcomeCode: code, reason: outcome });

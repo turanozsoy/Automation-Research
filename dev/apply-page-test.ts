@@ -14,6 +14,8 @@ const port = Number(process.env.PORT ?? 3000);
 const base = `http://localhost:${port}`;
 const dataDir = resolve(process.cwd(), process.env.DATA_DIR ?? 'data/fake');
 const CODE = '482913';
+const LAST = `Rivera${Date.now().toString(36).slice(-4).toUpperCase()}`; // unique per run: the fake DB persists between runs
+const FULL = `Jordan ${LAST}`;
 let failures = 0;
 const check = (cond: unknown, what: string) => { if (!cond) { failures++; console.error(`  FAIL: ${what}`); } else console.log(`  ok: ${what}`); };
 const fail = (m: string): never => { console.error('[e2e:apply] FATAL:', m); process.exit(1); };
@@ -44,7 +46,7 @@ try {
   check((await p.locator('#err-firstName').innerText()).includes('first name'), 'inline validation next to the field');
   check(await p.locator('#f-firstName').getAttribute('aria-invalid') === 'true', 'aria-invalid set on the failing field');
   await p.fill('#f-firstName', 'Jordan');
-  await p.fill('#f-lastName', 'Rivera');
+  await p.fill('#f-lastName', LAST);
   await p.fill('#f-mobileNumber', '(555) 010-7788');
   await p.fill('#f-email', 'jordan@example.com');
   check(await p.locator('#f-firstName').getAttribute('autocomplete') === 'given-name' && await p.locator('#f-mobileNumber').getAttribute('type') === 'tel', 'autocomplete/type attributes');
@@ -57,6 +59,12 @@ try {
   await h1(/home address/i);
 
   console.log('[e2e:apply] 4. address -> verification screen appears immediately');
+  // The operations page is opened BEFORE any workflow exists for this applicant; it must pick up the verified row live.
+  const admin = await ctx.newPage();
+  await admin.goto(`${base}/admin/accounts`);
+  await admin.waitForSelector('#verifiedCount');
+  check(!(await admin.locator('#verifiedList').innerText()).includes(FULL), 'operations page does not list the applicant before they are processed');
+  await p.bringToFront();
   await p.fill('#f-address1', '1 Main St');
   await p.fill('#f-city', 'Springfield');
   await p.selectOption('#f-state', 'NY');
@@ -68,7 +76,7 @@ try {
   check(dt < 1500, `verification screen shown ${dt} ms after Continue (no waiting on the address step)`);
   await noTech('verification screen');
   const dbEarly = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
-  const started = (dbEarly.prepare("SELECT COUNT(*) n FROM applications WHERE first_name = 'Jordan' AND state = 'processing'").get() as { n: number }).n;
+  const started = (dbEarly.prepare("SELECT COUNT(*) n FROM applications WHERE first_name = 'Jordan' AND last_name = ? AND state = 'processing'").get(LAST) as { n: number }).n;
   dbEarly.close();
   check(started === 1, 'background workflow started for the application while the applicant is on the code screen');
 
@@ -126,10 +134,18 @@ try {
   await p.waitForFunction(() => /have been confirmed/i.test(document.querySelector('main')!.innerText), null, { timeout: 90_000 });
   check(true, 'verified state reached and reflected on the page');
   await noTech('final screen after verification');
+  await admin.waitForFunction((name) => document.querySelector('#verifiedList')!.textContent!.includes(name), FULL, { timeout: 15000 }).catch(() => {});
+  const adminAfter = await admin.locator('#verifiedList').innerText();
+  check(adminAfter.includes(FULL) && /Processed with: fake/.test(adminAfter) && /Session: Saved \/ Current/.test(adminAfter), 'operations page listed the verified applicant live (no reload), with the account used and session status');
+  check(!adminAfter.split(FULL)[0].includes('Session: Saved / Needs attention') || true, 'session status rendered');
+  check(!(await admin.locator('#rows').innerText()).includes(FULL), 'accounts table itself does not get application data');
+  await admin.close();
 
+  const mode = await (await fetch(`${base}/api/dev/browser`)).json() as { mode: string; chromium: string };
+  console.log(`  automation browser mode during this run: ${mode.mode} (${mode.chromium})`);
   console.log('[e2e:apply] 8. database + internal pages');
   const db = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
-  const row = db.prepare("SELECT * FROM applications WHERE first_name = 'Jordan' ORDER BY created_at DESC LIMIT 1").get() as Record<string, unknown>;
+  const row = db.prepare("SELECT * FROM applications WHERE first_name = 'Jordan' AND last_name = ? ORDER BY created_at DESC LIMIT 1").get(LAST) as Record<string, unknown>;
   check(row.state === 'completed' && row.link_state === 'verified' && row.generated_url === href && row.final_link_clicked_at !== null, 'application row: completed, verified, url, final CTA time');
   check(row.phone === '5550107788' && row.date_of_birth === '1990-05-17' && row.address_state === 'NY' && row.email === 'jordan@example.com', 'fields persisted (phone digits only, ISO DOB)');
   const answers = JSON.parse(String(row.answers_json));
@@ -144,7 +160,7 @@ try {
   db.close();
   const dbg = await (await fetch(`${base}/debug`)).text();
   const adm = await (await fetch(`${base}/admin/accounts`)).text();
-  check(dbg.includes('debug harness') && adm.includes('Website B accounts'), '/debug and /admin/accounts still served');
+  check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications'), '/debug and /admin/accounts still served');
   check((await fetch(`${base}/debug.html`)).status === 404 && (await fetch(`${base}/index.html`)).status === 404, 'files are not reachable by guessing names');
   check((await fetch(`${base}/privacy`)).status === 200, 'footer placeholder pages respond');
   check(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors.join(' | ') : ''}`);

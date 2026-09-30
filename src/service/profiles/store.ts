@@ -11,7 +11,7 @@ export interface ProfileRow {
   storage_state_enc: Buffer; nonce: Buffer; data_key_enc: Buffer; key_version: number;
   needs_verify: number; cooldown_until: number | null; last_verified_at: number | null; last_used_at: number | null;
   use_count: number; consecutive_failures: number; state_reason: string | null; created_at: number; updated_at: number;
-  session_saved_at: number | null; proxy_json: string | null;
+  session_saved_at: number | null; proxy_json: string | null; session_note: string | null;
 }
 
 /** Safe, cookie-free view of an account for Website A's management page. */
@@ -20,6 +20,12 @@ export interface AccountMeta {
   createdAt: number; sessionSavedAt: number | null; lastUsedAt: number | null; lastVerifiedAt: number | null;
   /** Business status: 'expired' (session dead) or the latest workflow's link state, else 'none'. */
   status: 'expired' | 'visited' | 'verified' | 'none';
+  /**
+   * Saved-session health, never the session itself: none (no session), current (saved and not flagged),
+   * attention (a run ended uncertain / lost or the refreshed session could not be persisted), expired (Website B rejected it).
+   */
+  sessionStatus: 'none' | 'current' | 'attention' | 'expired';
+  sessionNote: string | null;
   lastWorkflowAt: number | null; lastUrl: string | null; stateReason: string | null;
 }
 export interface AssignmentRow {
@@ -72,7 +78,7 @@ export class ProfileStore {
     const e = this.vault.encrypt(id, storageStateJson);
     const now = Date.now();
     this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?,
-      state=CASE WHEN state='disabled' THEN 'disabled' ELSE 'available' END, state_reason=NULL, consecutive_failures=0, needs_verify=0, cooldown_until=NULL, updated_at=? WHERE id=?`)
+      state=CASE WHEN state='disabled' THEN 'disabled' ELSE 'available' END, state_reason=NULL, session_note=NULL, consecutive_failures=0, needs_verify=0, cooldown_until=NULL, updated_at=? WHERE id=?`)
       .run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id);
     this.event(id, p.state, this.get(id)!.state, 'session saved from manual login');
   }
@@ -86,12 +92,19 @@ export class ProfileStore {
         SELECT workflow_id FROM assignments WHERE profile_id = p.id ORDER BY created_at DESC LIMIT 1
       )
       ORDER BY p.created_at`).all() as (ProfileRow & { link_state: string | null; wf_at: number | null; wf_url: string | null })[];
-    return rows.map((r) => ({
+    return rows.map((r) => this.accountMeta(r, r.link_state, r.wf_at, r.wf_url));
+  }
+
+  /** Safe metadata for one account (cookie-free). */
+  accountMeta(r: ProfileRow, linkState: string | null = null, wfAt: number | null = null, wfUrl: string | null = null): AccountMeta {
+    return {
       id: r.id, name: r.label, email: r.account_key, hasSession: r.session_saved_at !== null,
       createdAt: r.created_at, sessionSavedAt: r.session_saved_at, lastUsedAt: r.last_used_at, lastVerifiedAt: r.last_verified_at,
-      status: r.state === 'expired' || r.state === 'invalid' ? 'expired' : r.link_state === 'verified' ? 'verified' : r.link_state === 'visited' ? 'visited' : 'none',
-      lastWorkflowAt: r.wf_at, lastUrl: r.wf_url, stateReason: r.state_reason,
-    }));
+      status: r.state === 'expired' || r.state === 'invalid' ? 'expired' : linkState === 'verified' ? 'verified' : linkState === 'visited' ? 'visited' : 'none',
+      sessionStatus: r.session_saved_at === null ? 'none' : r.state === 'expired' || r.state === 'invalid' ? 'expired' : r.needs_verify || r.session_note ? 'attention' : 'current',
+      sessionNote: r.session_note,
+      lastWorkflowAt: wfAt, lastUrl: wfUrl, stateReason: r.state_reason,
+    };
   }
 
   /** Replace the storageState of an existing profile (re-seed) and put it back into rotation. */
@@ -122,11 +135,23 @@ export class ProfileStore {
     return this.vault.decrypt(p.id, { ciphertext: p.storage_state_enc, nonce: p.nonce, dataKeyEnc: p.data_key_enc, keyVersion: p.key_version });
   }
 
-  /** Store a fresh storageState exported after a successful workflow (keeps rolling sessions alive). */
-  refreshStorageState(id: string, storageStateJson: string): void {
+  /**
+   * Replace the saved session with the storageState exported from a workflow's context after a
+   * successful run (rotated cookies, new expiries, storage): same account, same record, re-encrypted.
+   * Marks the session current and clears any persist-failure note.
+   */
+  refreshStorageState(id: string, storageStateJson: string, workflowId?: string): void {
     const e = this.vault.encrypt(id, storageStateJson);
-    this.db.prepare('UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, updated_at=? WHERE id=?')
-      .run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, Date.now(), id);
+    const now = Date.now();
+    this.db.prepare(`UPDATE profiles SET storage_state_enc=?, nonce=?, data_key_enc=?, key_version=?, session_saved_at=?, last_verified_at=?, session_note=NULL, updated_at=? WHERE id=?`)
+      .run(e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, id);
+    this.event(id, null, 'session_refreshed', 'session exported from the workflow context after a successful run', workflowId);
+  }
+
+  /** The refreshed session could not be exported/persisted: flag the account so an operator checks it. */
+  markSessionPersistFailed(id: string, workflowId?: string, why?: string): void {
+    this.db.prepare("UPDATE profiles SET session_note='SESSION_PERSIST_FAILED', needs_verify=1, updated_at=? WHERE id=?").run(Date.now(), id);
+    this.event(id, null, 'session_persist_failed', why ?? 'storageState export failed after a successful run', workflowId);
   }
 
   /** Operator state changes (disable / enable / mark). */

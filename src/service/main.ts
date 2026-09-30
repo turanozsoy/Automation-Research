@@ -6,6 +6,7 @@ import { openDb } from './db.js';
 import { LoginSessionManager } from './accounts/login-sessions.js';
 import { ApplicationService } from './applications/service.js';
 import { ApplicationStore } from './applications/store.js';
+import { BrowserModeControl } from './dev/browser-mode.js';
 import { ProfileStore } from './profiles/store.js';
 import { loadSettings } from './settings.js';
 import { Timeline } from './timeline.js';
@@ -28,15 +29,16 @@ async function main(): Promise<void> {
   if (status.total === 0) console.warn(`\n  No accounts yet. Add one at http://localhost:${settings.port}/admin/accounts\n`);
 
   const browser = new BrowserManager(settings, tl);
-  await browser.launch();
-
   const registry = new WorkflowRegistry(settings, cfg, store, browser, tl);
+  const browserMode = new BrowserModeControl(settings, browser, registry, tl);
+  browser.setMode(browserMode.initialMode());
+  await browser.launch();
   registry.start();
   const logins = new LoginSessionManager(settings, cfg, store, tl);
-  const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl);
+  const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl, store);
   const interrupted = apps.recoverOnBoot();
   if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
-  await startServer({ cfg, registry, store, logins, apps, settings, tl });
+  await startServer({ cfg, registry, store, logins, apps, browserMode, settings, tl });
   tl.mark('server listening', `http://localhost:${settings.port}`);
 
   console.log('\n────────────────────────────────────────────────────────────');

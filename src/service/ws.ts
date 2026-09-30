@@ -6,6 +6,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { AppClientMsg, AppServerMsg, ApplicationEventType, ApplicationView, ClientMsg, ServerMsg } from '../shared/messages.js';
 import type { LoginSessionManager } from './accounts/login-sessions.js';
 import type { ApplicationService } from './applications/service.js';
+import type { BrowserModeControl } from './dev/browser-mode.js';
 import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
@@ -34,8 +35,11 @@ export interface ServerDeps {
   store: ProfileStore;
   logins: LoginSessionManager;
   apps: ApplicationService;
+  browserMode: BrowserModeControl;
   settings: Settings;
   tl: Timeline;
+  /** Set by startServer: nudge the operations page. */
+  notifyAdmin?: (what: 'verified' | 'accounts') => void;
 }
 
 /**
@@ -56,9 +60,18 @@ export function startServer(deps: ServerDeps): Promise<void> {
   const server = createServer((req, res) => void handleHttp(req, res, deps));
   const devWss = new WebSocketServer({ noServer: true });
   const appWss = new WebSocketServer({ noServer: true });
+  const adminWss = new WebSocketServer({ noServer: true });
 
   // ---- routing ----
   const devClients = new Set<WebSocket>();
+  const adminClients = new Set<WebSocket>();
+  // Internal operations page: a data-free nudge; the page re-fetches what changed over the admin API.
+  const notifyAdmin = (what: 'verified' | 'accounts') => {
+    const data = JSON.stringify({ type: 'admin.changed', what, ts: Date.now() });
+    for (const c of adminClients) if (c.readyState === WebSocket.OPEN) c.send(data);
+  };
+  apps.setAdminNotifier(notifyAdmin);
+  deps.notifyAdmin = notifyAdmin;
   const appSockets = new Map<string, Set<WebSocket>>();
   const sendApp = (applicationId: string, m: AppServerMsg) => {
     const set = appSockets.get(applicationId);
@@ -69,7 +82,12 @@ export function startServer(deps: ServerDeps): Promise<void> {
   const route = (m: ServerMsg) => {
     const data = JSON.stringify(m);
     for (const c of devClients) if (c.readyState === WebSocket.OPEN) c.send(data);
-    if ('workflowId' in m && m.workflowId) apps.onWorkflowMessage(m.workflowId, m);
+    if ('workflowId' in m && m.workflowId) {
+      // Development artifacts: what the page looked like when a step failed (before the context is closed).
+      if (m.type === 'paused') deps.registry.captureFailure(m.workflowId, m.step, m.code, m.message);
+      else if (m.type === 'error' && m.fatal) deps.registry.captureFailure(m.workflowId, 'fatal', m.code, m.message);
+      apps.onWorkflowMessage(m.workflowId, m);
+    }
   };
   tl.onEvent(route);
   registry.setSender(route);
@@ -81,6 +99,10 @@ export function startServer(deps: ServerDeps): Promise<void> {
     const path = (req.url ?? '').split('?')[0];
     if (path === '/ws') {
       devWss.handleUpgrade(req, socket, head, (ws) => devWss.emit('connection', ws, req));
+      return;
+    }
+    if (path === '/ws/admin') {
+      adminWss.handleUpgrade(req, socket, head, (ws) => adminWss.emit('connection', ws, req));
       return;
     }
     if (path === '/ws/app') {
@@ -139,6 +161,13 @@ export function startServer(deps: ServerDeps): Promise<void> {
     });
     // Harness semantics: a workflow started from a developer socket ends with that socket.
     socket.on('close', () => { devClients.delete(socket); for (const id of own) registry.end(id, 'debug client disconnected'); });
+  });
+
+  // ---- internal operations page channel (nudges only) ----
+  adminWss.on('connection', (socket: WebSocket) => {
+    adminClients.add(socket);
+    socket.on('message', () => { /* nothing to receive */ });
+    socket.on('close', () => adminClients.delete(socket));
   });
 
   // ---- applicant channel ----
@@ -200,6 +229,12 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
     if (method === 'GET' && url.startsWith('/apply/')) return serveFile(APPLY_DIR, url.slice('/apply/'.length), res);
     if (method === 'GET' && PLACEHOLDER_PAGES[url]) return placeholderPage(PLACEHOLDER_PAGES[url], res);
+    // ---- development: automation browser mode (internal, /debug) ----
+    if (url === '/api/dev/browser' && method === 'GET') return json(200, deps.browserMode.status());
+    if (url === '/api/dev/browser' && method === 'POST') {
+      const body = await readJson(req);
+      try { return json(200, await deps.browserMode.request(body.mode as never)); } catch (e) { return json(400, { error: e instanceof Error ? e.message : String(e) }); }
+    }
     if (method === 'GET' && url === '/api/apply/config') { res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(readFileSync(APPLY_CONFIG)); return; }
 
     // ---- applicant session ----
@@ -214,8 +249,14 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       return json(200, { application: deps.apps.view(row) });
     }
 
-    // ---- accounts (internal) ----
+    // ---- operations page (internal) ----
     if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
+    if (url === '/api/admin/applications/verified' && method === 'GET') {
+      const qs = new URL(req.url ?? '/', 'http://x').searchParams;
+      const limit = Math.min(100, Math.max(1, Number(qs.get('limit') ?? 25) || 25));
+      const offset = Math.max(0, Number(qs.get('offset') ?? 0) || 0);
+      return json(200, deps.apps.verifiedList(qs.get('q') ?? '', offset, limit));
+    }
 
     if (url === '/api/accounts' && method === 'POST') {
       const body = await readJson(req);
@@ -225,6 +266,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       if (deps.store.byLabelOrId(email)) return json(409, { error: 'an account with this email already exists' });
       const row = deps.store.createAccount(name, email);
       deps.tl.mark('account created', `${name} (${email})`);
+      deps.notifyAdmin?.('accounts');
       return json(201, { id: row.id });
     }
 
@@ -239,12 +281,14 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
         await deps.logins.cancel(id);
         deps.store.remove(id);
         deps.tl.mark('account removed', account.label);
+        deps.notifyAdmin?.('accounts');
         return json(200, { ok: true });
       }
       if (action === 'login/start' && method === 'POST') return json(200, await deps.logins.start(id));
       if (action === 'login/status' && method === 'GET') return json(200, deps.logins.status(id));
       if (action === 'login/done' && method === 'POST') {
         const r = await deps.logins.done(id);
+        if (r.saved) deps.notifyAdmin?.('accounts');
         return json(r.saved ? 200 : 409, r);
       }
       if (action === 'login/cancel' && method === 'POST') { await deps.logins.cancel(id); return json(200, { ok: true }); }

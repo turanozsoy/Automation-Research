@@ -22,11 +22,29 @@
   .err { color: #b00; }
   small { color: #777; }
   a { color: #36c; }
+  h2 { margin: 0 0 18px; font-size: 20px; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
+  .vlist { display: grid; gap: 8px; }
+  .vrow { border: 1px solid #ddd; border-radius: 4px; background: #fff; }
+  .vrow summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; grid-template-columns: 1.4fr 1fr 1.2fr 1.6fr; gap: 12px; align-items: center; font-size: 13px; }
+  .vrow summary::-webkit-details-marker { display: none; }
+  .vrow summary:hover { background: #f8f8f8; }
+  .vrow .name { font-weight: 600; font-size: 14px; }
+  .vrow .appid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #555; display: inline-flex; gap: 6px; align-items: center; }
+  .vrow .copy { padding: 2px 6px; font-size: 11px; margin: 0; }
+  .vrow .detail { padding: 6px 12px 12px; border-top: 1px solid #eee; font-size: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; }
+  .vrow .detail div span:first-child { color: #777; display: inline-block; min-width: 150px; }
+  .attention { background: #fff3cd; } .current { background: #d4edda; }
+  .acct-link { background: none; border: 0; padding: 0; color: #36c; text-decoration: underline; cursor: pointer; font: inherit; }
+  tr.highlight td { background: #fff8d6; }
+  .empty { color: #777; padding: 12px; }
 </style>
 </head>
 <body>
-  <h3>Website B accounts <small>· <a href="/">← test form</a></small></h3>
-  <p><small>Each account holds one saved, encrypted Website B session. Workflows use these sessions automatically. Cookie values are never shown here.</small></p>
+  <h2>Operations <small>· internal · <a href="/debug">debug harness</a></small></h2>
+
+  <h3 id="accountsSection">Account &amp; session management</h3>
+  <p><small>Each account holds one saved, encrypted Website B session. Workflows use these sessions automatically and save the refreshed session back on the same account after a successful run. Cookie values are never shown here.</small></p>
 
   <button id="btnAdd">Add Account</button>
   <button id="btnReload">Reload</button>
@@ -53,6 +71,15 @@
     </tr></thead>
     <tbody id="rows"><tr><td colspan="8">loading…</td></tr></tbody>
   </table>
+
+  <h3 id="verifiedSection" style="margin-top:32px">Verified applications <span class="badge verified" id="verifiedCount">…</span></h3>
+  <p><small>Applicants whose onboarding reached <b>verified</b> (the success text was seen on Website B after their link was ready). Newest first. Updates live.</small></p>
+  <div class="toolbar">
+    <input id="verifiedSearch" type="search" placeholder="Search by name or application ID" size="40" autocomplete="off">
+    <span id="verifiedMsg"><small></small></span>
+  </div>
+  <div id="verifiedList" class="vlist"></div>
+  <div class="toolbar"><button id="btnMore" style="display:none">Load more</button></div>
   <script src="/admin.js"></script>
 </body>
 </html>

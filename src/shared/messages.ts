@@ -112,7 +112,8 @@ export type LinkState = 'none' | 'visited' | 'verified';
 export type ApplicationEventType =
   | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required' | 'validation_failed' | 'address_completed'
   | 'automation_started' | 'automation_ready' | 'automation_phase_changed' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
-  | 'generated_link_ready' | 'final_step_reached' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted';
+  | 'generated_link_ready' | 'final_step_reached' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted'
+  | 'session_refreshed' | 'session_persist_failed';
 
 /** Everything an applicant is allowed to see about their own application. */
 export interface ApplicationView {

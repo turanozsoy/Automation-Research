@@ -14,12 +14,27 @@
   #log { font-family: monospace; font-size: 12px; white-space: pre-wrap; background: #111; color: #ddd; padding: 8px; height: 75vh; overflow: auto; }
   .err { color: #ff7b7b; } .ack { color: #8fe38f; } .local { color: #9ecbff; } .srv { color: #ddd; } .state { color: #ffd479; }
   .sync { font-size: 11px; color: #777; }
+  #browserPanel { background: #f4f4f4; border: 1px solid #ccc; padding: 10px; margin: 0 0 12px; font-size: 13px; }
+  .bm-mode { display: inline-block; padding: 2px 8px; border-radius: 3px; font-weight: 700; text-transform: uppercase; font-size: 12px; margin-left: 6px; }
+  .bm-mode.visible { background: #d4edda; color: #155724; } .bm-mode.headless { background: #333; color: #fff; } .bm-mode.restarting { background: #fff3cd; color: #6b4a00; }
+  .bm-buttons button { margin-top: 6px; } .bm-buttons button.active { background: #333; color: #fff; border-color: #333; }
+  .bm-status { margin-top: 6px; } .bm-help { display: block; margin-top: 6px; color: #666; }
 </style>
 </head>
 <body>
 <div>
   <h3>Automation debug harness <small style="font-weight:normal;font-size:12px">· internal · <a href="/admin/accounts">accounts</a></small></h3>
   <div id="status">state: <b id="state">connecting</b> <span id="detail"></span><br><small>workflow: <span id="wfid">—</span> · pool: <span id="pool">?</span></small></div>
+
+  <div id="browserPanel">
+    <b>Automation browser</b> <span id="bmMode" class="bm-mode">…</span>
+    <div class="bm-buttons">
+      <button id="bmVisible" type="button">Visible</button>
+      <button id="bmHeadless" type="button">Headless</button>
+    </div>
+    <div class="bm-status"><span id="bmStatus">…</span><br><small>Chromium: <span id="bmChromium">?</span> · Active workflows: <span id="bmActive">?</span></small></div>
+    <small class="bm-help">Same automation either way; only the Chromium launch mode differs. Switching restarts the idle Chromium; with workflows active it waits for them to finish. On a failed step, screenshots and a sanitized page snapshot go to <code>data/debug/failures/</code>.</small>
+  </div>
 
 
   <label>First name <span class="sync" data-sync="firstName"></span></label>

@@ -121,6 +121,17 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX application_events_app ON application_events(application_id, id);
   `,
+  `
+  -- Which account processed an application, kept on the application itself so it survives assignment
+  -- cleanup and account removal (the label is a snapshot). Set when the generated link is captured.
+  ALTER TABLE applications ADD COLUMN processed_workflow_id TEXT;
+  ALTER TABLE applications ADD COLUMN processed_profile_id TEXT;
+  ALTER TABLE applications ADD COLUMN processed_profile_label TEXT;
+  CREATE INDEX applications_verified ON applications(verified_at);
+  CREATE INDEX applications_processed_workflow ON applications(processed_workflow_id);
+  -- Operator-facing note about the saved session (e.g. SESSION_PERSIST_FAILED); cleared when a session is saved.
+  ALTER TABLE profiles ADD COLUMN session_note TEXT;
+  `,
 ];
 
 export function openDb(path: string): Db {

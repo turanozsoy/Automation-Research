@@ -39,6 +39,19 @@ if (store.get(got[1])!.state !== 'available') fail('reseed did not restore avail
 store.release('wf2', 'auth_expired', 1000, { reassign: true });
 if (!store.reserve('wf2', 30000)) fail('could not reserve a new profile for a reassigned workflow');
 
+// session refresh after a successful run updates the SAME account's metadata; a persist failure flags it
+const before = store.get(got[0])!;
+store.refreshStorageState(got[0], JSON.stringify({ cookies: [{ name: 'x', value: 'y' }], origins: [] }), 'wf0');
+const after = store.get(got[0])!;
+if (!(after.session_saved_at! >= before.session_saved_at!) || after.session_note !== null || !after.storage_state_enc.equals(before.storage_state_enc) === false) fail('refreshStorageState did not re-save the session');
+if (store.listAccounts().find((a) => a.id === got[0])!.sessionStatus !== 'current') fail('refreshed session not reported as current');
+store.markSessionPersistFailed(got[0], 'wf0');
+const meta = store.listAccounts().find((a) => a.id === got[0])!;
+if (meta.sessionStatus !== 'attention' || meta.sessionNote !== 'SESSION_PERSIST_FAILED') fail('persist failure not surfaced as attention');
+if (!store.events(got[0]).some((e) => e.to_state === 'session_persist_failed')) fail('persist failure event missing');
+store.saveSession(got[0], JSON.stringify({ cookies: [], origins: [] }));
+if (store.listAccounts().find((a) => a.id === got[0])!.sessionStatus !== 'current') fail('saveSession did not clear the attention flag');
+
 // orphan recovery
 const lost = store.recoverOrphans(1000);
 if (lost.length !== 2) fail(`expected 2 orphans, got ${lost.length}`);

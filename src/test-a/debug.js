@@ -187,4 +187,35 @@
   $('#btnSkip').onclick = () => { log(Date.now(), 'skip step requested (done manually)', 'local'); send({ type: 'resume', ts: Date.now(), workflowId, mode: 'skip' }); };
   $('#btnAbort').onclick = () => { send({ type: 'resume', ts: Date.now(), workflowId, mode: 'abort' }); };
   $('#btnClear').onclick = () => { logEl.innerHTML = ''; lastLogTs = null; };
+
+  // ---- automation browser mode (development control) ----
+  function showBrowserMode(st) {
+    const modeEl = $('#bmMode');
+    modeEl.textContent = st.chromium === 'restarting' ? 'restarting…' : st.mode;
+    modeEl.className = `bm-mode ${st.chromium === 'restarting' ? 'restarting' : st.mode}`;
+    $('#bmStatus').textContent = st.message;
+    $('#bmChromium').textContent = st.chromium;
+    $('#bmActive').textContent = st.activeWorkflows;
+    $('#bmVisible').classList.toggle('active', st.mode === 'visible' && !st.pendingMode);
+    $('#bmHeadless').classList.toggle('active', st.mode === 'headless' && !st.pendingMode);
+    $('#bmVisible').disabled = st.chromium === 'restarting';
+    $('#bmHeadless').disabled = st.chromium === 'restarting';
+  }
+  async function pollBrowserMode() {
+    try { showBrowserMode(await (await fetch('/api/dev/browser')).json()); } catch { /* service restarting */ }
+  }
+  async function requestBrowserMode(mode) {
+    $('#bmStatus').textContent = 'Requesting…';
+    try {
+      const r = await fetch('/api/dev/browser', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }) });
+      const st = await r.json();
+      if (!r.ok) { $('#bmStatus').textContent = st.error || 'request failed'; return; }
+      showBrowserMode(st);
+      log(Date.now(), `browser mode requested: ${mode} — ${st.message}`, 'local');
+    } catch (e) { $('#bmStatus').textContent = String(e); }
+  }
+  $('#bmVisible').onclick = () => requestBrowserMode('visible');
+  $('#bmHeadless').onclick = () => requestBrowserMode('headless');
+  pollBrowserMode();
+  setInterval(pollBrowserMode, 2000);
 })();

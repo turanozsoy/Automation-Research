@@ -67,6 +67,31 @@ Then open <http://localhost:3000/debug> in one tab per workflow you want to driv
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 The debug harness is an internal developer tool; applicants use the application API below.
 
+### Operations page: `/admin/accounts`
+
+One internal page: **Account & session management** (below) and **Verified applications**: every
+application whose link state reached `verified`, newest first, with the total, search by full name or
+application ID (`APP-XXXXXX` or the full id), Copy ID, Load more, and an expandable detail row
+(timestamps, account used, workflow id and outcome, session last saved, job answers). It updates live:
+the service nudges the page over `/ws/admin` (a data-free notification) when an application is
+verified or an account changes, and the page re-fetches `GET /api/admin/applications/verified`.
+"Processed with: <account>" scrolls to and highlights that account in the table. Nothing there ever
+includes cookies, storageState, the verification code, date of birth or address.
+
+Which account processed an application is stored on the application itself
+(`processed_workflow_id`, `processed_profile_id`, `processed_profile_label`, set when the link is
+captured), so it survives assignment cleanup and account removal.
+
+**Session refresh after a successful run.** When a workflow ends verified (or its URL was captured and
+only the verification wait ran out), the context's current storageState is exported, encrypted and
+saved on the **same** account: `session_saved_at` / `last_verified_at` move forward, any
+`SESSION_PERSIST_FAILED` note is cleared, and profile + application events `session_refreshed` are
+recorded. If the export or save fails, the account gets `session_note = SESSION_PERSIST_FAILED` and
+`needs_verify`, the Session column shows "saved · needs attention", and the application event
+`session_persist_failed` is recorded; the applicant is not told (their application is unaffected).
+The accounts table's Session column shows: none / saved · current / saved · needs attention /
+saved · expired.
+
 ### Adding accounts (manual login, no extension)
 
 Open <http://localhost:3000/admin/accounts> while the service runs.
@@ -225,6 +250,24 @@ Field names on the local form (`data-field` attributes in `src/test-a/index.html
 URL detectors, first match wins: frame navigation, newly attached iframe, top-level navigation,
 popup/new tab, visible anchor `href`, navigation request.
 
+## Development: automation browser mode (visible / headless)
+
+The `/debug` page has an **Automation browser** panel: **Visible** / **Headless**, with the current mode,
+`Chromium: running | restarting`, and the number of active workflows. Same automation either way;
+only Playwright's launch `headless` differs. Playwright chooses headless at launch, so switching
+closes the idle Chromium and launches a new one ("Restarting Chromium…" → "Headless ready"). With
+workflows active the request is kept ("Will switch to headless after N active workflow(s) finish")
+and applied automatically once they end; no workflow is interrupted. The choice is persisted in
+`<DATA_DIR>/dev-settings.json` (gitignored) and used at the next start; without that file `HEADLESS=1`
+still selects headless, otherwise visible. API: `GET/POST /api/dev/browser` (internal).
+
+**Failure artifacts.** When a step fails (a paused step or a fatal error), the service saves, in either
+mode, to `<DATA_DIR>/debug/failures/` (gitignored, `FAILURE_ARTIFACTS=0` disables):
+`<timestamp>-<workflow8>-<stage>.png` (full-page screenshot of every page in that context),
+`.html` (sanitized snapshot: no scripts, no input values, no `data-*` attributes) and `.json`
+(stage, error code, message, browser mode, page URLs, frame count and frame URLs). Never cookies,
+storageState, or the verification code.
+
 ## Developing without the real Website B
 
 `dev/fake-b/` is a throwaway local imitation of Website B with the same selectors
@@ -273,6 +316,7 @@ src/service/ws.ts           HTTP (static, applicant session API, accounts API) +
 src/service/applications/store.ts    applications + application_events persistence, session token hash lookup
 src/service/applications/service.ts  application ⇄ workflow bridge: start when complete, seed, submit, map results, problems, restart recovery
 src/service/applications/session.ts  opaque session token, hashing, cookie helpers
+src/service/dev/browser-mode.ts      development control: visible / headless switch, deferred while workflows run, persisted preference
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
 src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session

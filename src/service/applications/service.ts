@@ -1,5 +1,6 @@
 import type { ApplicantErrorCode, ApplicationEventType, ApplicationView, ServerMsg } from '../../shared/messages.js';
 import type { SiteBConfig } from '../config.js';
+import type { ProfileStore } from '../profiles/store.js';
 import type { Settings } from '../settings.js';
 import type { Timeline } from '../timeline.js';
 import type { WorkflowRegistry } from '../workflows.js';
@@ -27,6 +28,16 @@ interface Runtime {
 }
 
 export type Result = { ok: true } | { ok: false; code: ApplicantErrorCode; message: string; missingFields?: string[] };
+
+/** One row of the operations page's Verified Applications list. Internal only. */
+export interface VerifiedApplicationItem {
+  id: string; displayId: string; fullName: string; email: string | null;
+  createdAt: number; generatedUrlReadyAt: number | null; finalLinkClickedAt: number | null; visitedAt: number | null; verifiedAt: number | null;
+  workflowId: string | null; workflowOutcome: string | null;
+  processedWith: { profileId: string; label: string; exists: boolean; sessionStatus: 'none' | 'current' | 'attention' | 'expired'; sessionNote: string | null; sessionSavedAt: number | null; lastUsedAt: number | null } | null;
+  sessionResult: 'refreshed' | 'failed' | null;
+  answers: Record<string, unknown>;
+}
 
 const MAX_FIELD_LEN = 200;
 const MAX_CODE_LEN = 64;
@@ -67,7 +78,14 @@ export class ApplicationService {
     private store: ApplicationStore,
     private registry: WorkflowRegistry,
     private tl: Timeline,
-  ) {}
+    private profiles: ProfileStore,
+  ) {
+    registry.setSessionHandler((workflowId, profileId, result) => this.onSessionResult(workflowId, profileId, result));
+  }
+
+  /** Internal (admin) notifications: something on the operations page changed. Carries no data, the page re-fetches. */
+  private adminNotify: (what: 'verified' | 'accounts') => void = () => {};
+  setAdminNotifier(fn: (what: 'verified' | 'accounts') => void): void { this.adminNotify = fn; }
 
   /** Called after every change with the fresh safe view (the WebSocket layer pushes it to that application's sockets only). */
   setNotifier(fn: (applicationId: string, view: ApplicationView) => void): void { this.notify = fn; }
@@ -388,9 +406,12 @@ export class ApplicationService {
       case 'result': {
         const row = this.store.get(id);
         if (!row) break;
+        const asg = this.profiles.getAssignment(workflowId);
+        const prof = asg ? this.profiles.get(asg.profile_id) : undefined;
         this.store.patch(id, {
           state: 'link_ready', generated_url: m.url, generated_url_ready_at: row.generated_url_ready_at ?? m.ts,
           verification_step: 'completed', problem_code: null, problem_message: null, problem_at: null,
+          processed_workflow_id: workflowId, processed_profile_id: asg?.profile_id ?? null, processed_profile_label: prof?.label ?? null,
         });
         this.store.event(id, 'generated_link_ready', { workflowId });
         this.progress(id, 'generated_link_ready');
@@ -434,6 +455,48 @@ export class ApplicationService {
     this.store.event(rt.applicationId, 'verified', { workflowId });
     this.progress(rt.applicationId, 'verified');
     this.emit(rt.applicationId);
+    this.adminNotify('verified');
+  }
+
+  /** After a successful run: was the account's refreshed session persisted? Internal event only; never shown to the applicant. */
+  private onSessionResult(workflowId: string, profileId: string, result: 'refreshed' | 'failed'): void {
+    const row = this.store.byProcessedWorkflow(workflowId);
+    const label = this.profiles.get(profileId)?.label ?? row?.processed_profile_label ?? profileId;
+    if (row) this.store.event(row.id, result === 'refreshed' ? 'session_refreshed' : 'session_persist_failed', { workflowId, code: result === 'failed' ? 'SESSION_PERSIST_FAILED' : undefined, detail: `account ${label}` });
+    this.adminNotify('accounts');
+  }
+
+  // ---------- admin (internal) ----------
+
+  /** Verified applications for the operations page: safe fields, the account that processed each one, session health. Never the session itself. */
+  verifiedList(q: string, offset: number, limit: number): { total: number; items: VerifiedApplicationItem[] } {
+    const { total, rows } = this.store.listVerified(q, offset, limit);
+    return { total, items: rows.map((r) => this.verifiedItem(r)) };
+  }
+
+  private verifiedItem(r: ApplicationRow): VerifiedApplicationItem {
+    const profile = r.processed_profile_id ? this.profiles.get(r.processed_profile_id) : undefined;
+    const asg = r.processed_workflow_id ? this.profiles.getAssignment(r.processed_workflow_id) : undefined;
+    const meta = profile ? this.profiles.accountMeta(profile) : null;
+    let answers: Record<string, unknown> = {};
+    try { answers = JSON.parse(r.answers_json) ?? {}; } catch { answers = {}; }
+    const events = this.store.events(r.id, 200);
+    const sessionEvent = events.find((e) => e.type === 'session_refreshed' || e.type === 'session_persist_failed');
+    return {
+      id: r.id,
+      displayId: `APP-${r.id.slice(0, 6).toUpperCase()}`,
+      fullName: [r.first_name, r.last_name].filter(Boolean).join(' ') || '(no name)',
+      email: r.email,
+      createdAt: r.created_at, generatedUrlReadyAt: r.generated_url_ready_at, finalLinkClickedAt: r.final_link_clicked_at, visitedAt: r.visited_at, verifiedAt: r.verified_at,
+      workflowId: r.processed_workflow_id,
+      workflowOutcome: asg ? `${asg.state}${asg.outcome_code ? ' (' + asg.outcome_code + ')' : ''}` : null,
+      processedWith: r.processed_profile_id
+        ? { profileId: r.processed_profile_id, label: profile?.label ?? r.processed_profile_label ?? '(removed account)', exists: !!profile,
+            sessionStatus: meta?.sessionStatus ?? 'none', sessionNote: meta?.sessionNote ?? null, sessionSavedAt: meta?.sessionSavedAt ?? null, lastUsedAt: meta?.lastUsedAt ?? null }
+        : null,
+      sessionResult: sessionEvent ? (sessionEvent.type === 'session_refreshed' ? 'refreshed' : 'failed') : null,
+      answers,
+    };
   }
 
   /** The workflow ended without verification. Before the link: a problem the applicant can retry. After it: the link stands. */

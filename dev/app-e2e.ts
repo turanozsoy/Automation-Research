@@ -215,6 +215,16 @@ console.log('[e2e:app] 8. database: persistence, mapping, and no secret');
   const bWf = (db.prepare("SELECT workflow_id FROM application_events WHERE application_id = ? AND type = 'automation_started'").get(B.id) as { workflow_id: string }).workflow_id;
   check(bRow.workflow_count === 1 && bWf !== wfId, 'B used a different workflow');
 
+  // Which account processed it must survive without the assignment row; and its session must have been refreshed after the run.
+  const proc = db.prepare('SELECT processed_workflow_id, processed_profile_id, processed_profile_label FROM applications WHERE id = ?').get(A.id) as Record<string, string | null>;
+  check(proc.processed_workflow_id === wfId && !!proc.processed_profile_id && !!proc.processed_profile_label, 'processed workflow / account persisted on the application');
+  const prof = db.prepare('SELECT session_saved_at, last_verified_at, session_note, needs_verify FROM profiles WHERE id = ?').get(proc.processed_profile_id) as Record<string, number | string | null>;
+  const startedEv = db.prepare("SELECT at FROM application_events WHERE application_id = ? AND type = 'automation_started'").get(A.id) as { at: number };
+  check(typeof prof.session_saved_at === 'number' && prof.session_saved_at > startedEv.at && prof.session_note === null && prof.needs_verify === 0, 'account session re-saved (encrypted) after the successful run, marked current');
+  check(db.prepare("SELECT COUNT(*) n FROM profile_events WHERE profile_id = ? AND to_state = 'session_refreshed' AND workflow_id = ?").get(proc.processed_profile_id, wfId) !== undefined
+    && (db.prepare("SELECT COUNT(*) n FROM profile_events WHERE profile_id = ? AND to_state = 'session_refreshed' AND workflow_id = ?").get(proc.processed_profile_id, wfId) as { n: number }).n === 1, 'profile event session_refreshed recorded for this workflow');
+  check(types.includes('session_refreshed'), 'application event session_refreshed recorded');
+
   // The secret must not be anywhere: not in any text column of any table, not in the raw database bytes.
   const needles = [CODE, CODE.replace(/\D/g, '')];
   const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((t) => t.name);
@@ -232,6 +242,25 @@ console.log('[e2e:app] 8. database: persistence, mapping, and no secret');
     const bytes = readFileSync(p);
     check(!needles.some((n) => bytes.includes(n)), `verification code absent from raw ${f}`);
   }
+}
+
+console.log('[e2e:app] 9. operations page: verified applications API');
+{
+  const all = await (await fetch(`${base}/api/admin/applications/verified?limit=50`)).json() as { total: number; items: { id: string; fullName: string; processedWith: { label: string; sessionStatus: string } | null; verifiedAt: number | null }[] };
+  const ia = all.items.find((i) => i.id === A.id), ib = all.items.find((i) => i.id === B.id);
+  check(!!ia && !!ib, 'A and B listed as verified');
+  check(!all.items.some((i) => i.id === C.id), 'C (never processed) is not listed');
+  check(ia?.fullName === 'John Doe' && ib?.fullName === 'Jane Roe', 'full names from first + last');
+  check(!!ia?.processedWith && /fake/.test(ia.processedWith.label) && ia.processedWith.sessionStatus === 'current', `A: processed with ${ia?.processedWith?.label}, session current`);
+  check(all.items.every((i, k) => k === 0 || (all.items[k - 1].verifiedAt ?? 0) >= (i.verifiedAt ?? 0)), 'newest first');
+  const byName = await (await fetch(`${base}/api/admin/applications/verified?q=${encodeURIComponent('jane ro')}&limit=100`)).json() as { total: number; items: { id: string; fullName: string }[] };
+  check(byName.items.some((i) => i.id === B.id) && byName.items.every((i) => /jane ro/i.test(i.fullName)), 'search by name');
+  const byId = await (await fetch(`${base}/api/admin/applications/verified?q=APP-${A.id.slice(0, 6)}`)).json() as { items: { id: string }[] };
+  check(byId.items.length === 1 && byId.items[0].id === A.id, 'search by display application id');
+  const paged = await (await fetch(`${base}/api/admin/applications/verified?limit=1&offset=1`)).json() as { total: number; items: unknown[] };
+  check(paged.items.length === 1 && paged.total === all.total, 'pagination');
+  const dump = JSON.stringify(all);
+  check(!dump.includes('storage_state') && !dump.includes('cookies') && !dump.includes(CODE) && !/date_of_birth|dateOfBirth|address1/.test(dump), 'admin list carries no session data, code, DOB or address');
 }
 
 await sa.close(); await sb.close();

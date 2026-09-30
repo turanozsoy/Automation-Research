@@ -23,6 +23,9 @@ export interface ApplicationRow {
   problem_code: string | null;
   problem_message: string | null;
   problem_at: number | null;
+  processed_workflow_id: string | null;
+  processed_profile_id: string | null;
+  processed_profile_label: string | null;
   created_at: number;
   updated_at: number;
   last_activity_at: number;
@@ -56,6 +59,7 @@ export type StorableField = keyof typeof FIELD_COLUMNS;
 const PATCHABLE = new Set<keyof ApplicationRow>([
   'state', 'current_step', 'verification_step', 'workflow_id', 'workflow_count', 'generated_url', 'generated_url_ready_at',
   'final_link_clicked_at', 'link_state', 'visited_at', 'verified_at', 'problem_code', 'problem_message', 'problem_at', 'answers_json', 'last_activity_at',
+  'processed_workflow_id', 'processed_profile_id', 'processed_profile_label',
 ]);
 
 /**
@@ -87,6 +91,22 @@ export class ApplicationStore {
 
   byWorkflow(workflowId: string): ApplicationRow | undefined {
     return this.db.prepare('SELECT * FROM applications WHERE workflow_id = ?').get(workflowId) as ApplicationRow | undefined;
+  }
+
+  byProcessedWorkflow(workflowId: string): ApplicationRow | undefined {
+    return this.db.prepare('SELECT * FROM applications WHERE processed_workflow_id = ?').get(workflowId) as ApplicationRow | undefined;
+  }
+
+  /** Verified applications, newest first, optional search on full name or application id (prefix / substring). */
+  listVerified(q: string, offset: number, limit: number): { total: number; rows: ApplicationRow[] } {
+    const needle = q.trim().toLowerCase().replace(/^app-/, '');
+    const where = needle
+      ? "link_state = 'verified' AND (lower(coalesce(first_name,'') || ' ' || coalesce(last_name,'')) LIKE ? OR lower(id) LIKE ?)"
+      : "link_state = 'verified'";
+    const params = needle ? [`%${needle}%`, `${needle}%`] : [];
+    const total = (this.db.prepare(`SELECT COUNT(*) n FROM applications WHERE ${where}`).get(...params) as { n: number }).n;
+    const rows = this.db.prepare(`SELECT * FROM applications WHERE ${where} ORDER BY verified_at DESC, created_at DESC LIMIT ? OFFSET ?`).all(...params, limit, offset) as ApplicationRow[];
+    return { total, rows };
   }
 
   listRecent(limit = 30): ApplicationRow[] {
