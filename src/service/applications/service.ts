@@ -284,6 +284,7 @@ export class ApplicationService {
       problem_code: null, problem_message: null, problem_at: null,
     });
     this.store.event(id, 'automation_started', { workflowId, step: row.current_step, retryCount: attempts - 1, detail: queuePosition ? `queued at position ${queuePosition}` : 'profile reserved' });
+    if (queuePosition) this.store.event(id, 'automation_waiting_for_capacity', { workflowId, detail: `queue position ${queuePosition}` });
     this.tl.child(workflowId).mark('application automation started', `application ${id.slice(0, 8)}, attempt ${attempts}${queuePosition ? `, queued #${queuePosition}` : ''}`);
 
     const rt: Runtime = {

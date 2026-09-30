@@ -51,6 +51,9 @@ export class BrowserManager {
       headless,
       executablePath: chromiumPath,
       args: headless ? [] : ['--window-size=1280,900', '--window-position=40,40'],
+      // The service's own shutdown ends workflows, exports their sessions, then closes Chromium.
+      // Playwright's default signal handlers would kill Chromium the instant SIGTERM/SIGINT arrives.
+      handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
     });
     this.browser = browser;
     browser.on('disconnected', () => {
@@ -175,8 +178,10 @@ export class BrowserManager {
   }
 
   async close(): Promise<void> {
-    await this.browser?.close().catch(() => {});
-    this.browser = null;
+    this.closingIntentionally = true;
+    const b = this.browser;
+    this.browser = null; // the 'disconnected' handler sees a replaced browser and stays quiet
+    await b?.close().catch(() => {});
     this.contexts.clear();
   }
 }

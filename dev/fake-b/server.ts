@@ -106,12 +106,17 @@ createServer((req, res) => {
           if (${cityError} && submits === 1) { cityEl.value = ''; wrap.setAttribute('data-accent-color', 'red'); cityEl.setAttribute('data-accent-color', 'red'); return; }
           if (!cityEl.value.trim()) { wrap.setAttribute('data-accent-color', 'red'); cityEl.setAttribute('data-accent-color', 'red'); return; }
           wrap.removeAttribute('data-accent-color'); cityEl.removeAttribute('data-accent-color');
+          // Test hooks: the session remembers who used it (proves which context a re-saved session came from);
+          // a last name containing NOIFRAME makes the checkout iframe never appear (per-applicant failure injection).
+          document.cookie = 'lastApplicant=' + encodeURIComponent(document.getElementById('first-name').value) + '; Path=/';
+          const noIframe = /NOIFRAME/.test(document.getElementById('last-name').value);
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
           setTimeout(() => {
             document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
             document.getElementById('agree').onclick = () => {
               document.getElementById('checkout').innerHTML = '<p>Loading checkout…</p>';
+              if (noIframe) return; // test hook: the checkout iframe never appears for this applicant
               setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900);
             };
           }, 600);

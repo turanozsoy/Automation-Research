@@ -57,11 +57,21 @@ export class WorkflowRegistry {
     }, 5000));
   }
 
+  /**
+   * Shutdown: end every live workflow and WAIT for their terminal handling (session export on a
+   * successful run, context close, release) before the caller closes Chromium. Bounded so a hung
+   * export cannot block the process exit.
+   */
   async stop(): Promise<void> {
     for (const t of this.timers) clearInterval(t);
     for (const q of this.queue) clearTimeout(q.timer);
+    this.stopping = true;
     for (const wf of this.live.values()) wf.end('service shutting down');
+    const pending = [...this.terminals.values()];
+    if (pending.length) await Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, 15_000))]);
   }
+  private stopping = false;
+  private terminals = new Map<string, Promise<void>>();
 
   poolStatus(): PoolStatus {
     return { ...this.store.status(), queued: this.queue.length, maxWorkflows: this.settings.maxWorkflows };
@@ -134,7 +144,10 @@ export class WorkflowRegistry {
       const bundle = await this.browser.createContext(workflowId, storageState);
       wf = new Workflow(workflowId, bundle, this.cfg, tl, this.send);
       this.live.set(workflowId, wf);
-      wf.setTerminalHandler((outcome, code) => void this.onTerminal(workflowId, outcome, code));
+      wf.setTerminalHandler((outcome, code) => {
+        const p = this.onTerminal(workflowId, outcome, code).finally(() => { if (this.terminals.get(workflowId) === p) this.terminals.delete(workflowId); });
+        this.terminals.set(workflowId, p);
+      });
       wf.setLinkStateHandler((state) => { this.store.setLinkState(workflowId, state); this.tl.child(workflowId).mark(`link state stored: ${state}`); });
       wf.setSubmitStateHandler((state, url) => this.store.recordSubmit(workflowId, state, url ? { resultUrl: url } : {}));
       // Values that arrived before this runtime existed: previous profile's snapshot, then early updates.
@@ -260,6 +273,7 @@ export class WorkflowRegistry {
   }
 
   private async onBrowserLost(): Promise<void> {
+    if (this.stopping) return; // Chromium is being closed on purpose
     this.tl.mark('browser lost, failing all live workflows');
     for (const wf of [...this.live.values()]) wf.fail(new AutomationError('BROWSER_CLOSED', 'Chromium disconnected'));
     try {

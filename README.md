@@ -187,6 +187,10 @@ Routing is server-side: a socket is bound to one application at upgrade time and
 application's view. Raw workflow messages, timeline events, pool status and account metadata go only
 to `/ws` (the `/debug` harness and e2e scripts). Closing an applicant socket never ends a workflow.
 
+**Capacity note.** After the link is captured a workflow keeps its context and profile while it watches
+Website B for the success text (`verification.timeoutMs`, default 10 minutes), so an applicant who never
+opens their link holds a profile for that long. The concurrency test's NO_VERIFY scenario shows this.
+
 **Restart.** Live workflows do not survive a restart; applications that were `processing` become
 `problem` (`SERVICE_RESTARTED`) on boot. Applications at `link_ready` keep their link.
 
@@ -287,10 +291,18 @@ E2E_PARALLEL=3 npm run e2e         # terminal 3 (optional): 3 simultaneous scrip
 npm run e2e:page                   # drives the /debug harness in a headless browser (Start, type, Submit, Open link, verified)
 npm run e2e:app                    # applicant foundation: session, resume, reconnect, isolation, workflow mapping, URL, visited/verified, no secret in the DB
 npm run e2e:apply                  # drives the public application at / on a phone viewport: start → steps → code → questions → refresh/resume → role details → visited → verified
+CONCURRENCY=5 npm run e2e:concurrency   # N applicants at once (headless): isolation of data, contexts, URLs, sockets, codes, session write-back; queue; admin live; DB consistency; resources
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 npm run test:app                   # application store + session helpers (throwaway DB)
 npm run typecheck
 
+# concurrency scenarios (service started with MAX_WORKFLOWS=10; K imported fake accounts):
+#   CONCURRENCY=8 EXPECT_PROFILES=5   more applicants than profiles: at most 5 live, FIFO queue, everyone completes
+#   CONCURRENCY=3 FAIL_ONE=1          applicant #1's checkout iframe never appears (fake: last name contains NOIFRAME) -> problem, others unaffected
+#   CONCURRENCY=3 DROP_ONE=1          applicant #1 drops and resumes its socket mid-automation
+#   CONCURRENCY=3 EXPIRE_ONE=1        an expired profile is inserted; the workflow that draws it is reassigned, profile leaves rotation
+#   CONCURRENCY=3 SKIP_CTA=1          applicant #1 never clicks View Role Details: verified without visited
+#   CONCURRENCY=3 SKIP_CTA=1 NO_VERIFY=1  with FAKE_B_GOOD_TO_GO_MS=600000 npm run fake-b: nobody verifies; workflows keep monitoring and hold their profiles
 # failure path: run the fake WITHOUT its Agree button, the applicant workflow pauses -> is aborted -> retryable problem
 FAKE_B_NO_AGREE=1 npm run fake-b   &&   npm run e2e:app:problem
 # restart recovery: start an applicant workflow, kill -9 the service, start it again -> the application is a SERVICE_RESTARTED problem
@@ -332,6 +344,7 @@ dev/fake-b/                 local fake Website B (testing only)
 dev/e2e-client.ts           scripted end-to-end run over /ws
 dev/app-e2e.ts, app-problem-e2e.ts, app-start.ts   applicant foundation tests / helper
 dev/apply-page-test.ts      public application driven like an applicant (phone viewport)
+dev/concurrency-e2e.ts      N concurrent synthetic applicants with overlapping stages; isolation, queue, failure, resume, admin, DB, resources
 ```
 
 ## Error codes
