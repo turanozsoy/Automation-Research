@@ -13,7 +13,7 @@ import { chromium, type Page } from 'playwright';
 const port = Number(process.env.PORT ?? 3000);
 const base = `http://localhost:${port}`;
 const dataDir = resolve(process.cwd(), process.env.DATA_DIR ?? 'data/fake');
-const CODE = '482913';
+const CODE = '482913756';
 const LAST = `Rivera${Date.now().toString(36).slice(-4).toUpperCase()}`; // unique per run: the fake DB persists between runs
 const FULL = `Jordan ${LAST}`;
 let failures = 0;
