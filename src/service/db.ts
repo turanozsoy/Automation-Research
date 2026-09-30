@@ -70,6 +70,57 @@ const MIGRATIONS: string[] = [
   ALTER TABLE profiles ADD COLUMN proxy_json TEXT;
   UPDATE profiles SET session_saved_at = updated_at;
   `,
+  `
+  -- Shipzora applications: the applicant's persistent record. Independent of workflows (automation runs)
+  -- and profiles (Website B accounts). workflow_id is the CURRENT automation run, if any; history lives
+  -- in application_events. The verification code is never stored: only verification_step metadata.
+  CREATE TABLE applications (
+    id                     TEXT PRIMARY KEY,
+    session_token_hash     TEXT NOT NULL UNIQUE,   -- sha256 of the applicant's opaque session token; the token itself is never stored
+    state                  TEXT NOT NULL,          -- started | processing | link_ready | completed | problem
+    current_step           TEXT NOT NULL,
+    first_name             TEXT,
+    last_name              TEXT,
+    email                  TEXT,
+    phone                  TEXT,
+    date_of_birth          TEXT,
+    address1               TEXT,
+    city                   TEXT,
+    address_state          TEXT,
+    zip                    TEXT,
+    answers_json           TEXT NOT NULL DEFAULT '{}',
+    verification_step      TEXT NOT NULL DEFAULT 'required',   -- required | completed | failed
+    workflow_id            TEXT,
+    workflow_count         INTEGER NOT NULL DEFAULT 0,
+    generated_url          TEXT,
+    generated_url_ready_at INTEGER,
+    final_link_clicked_at  INTEGER,
+    link_state             TEXT NOT NULL DEFAULT 'none',       -- none | visited | verified
+    visited_at             INTEGER,
+    verified_at            INTEGER,
+    problem_code           TEXT,
+    problem_message        TEXT,
+    problem_at             INTEGER,
+    created_at             INTEGER NOT NULL,
+    updated_at             INTEGER NOT NULL,
+    last_activity_at       INTEGER NOT NULL
+  );
+  CREATE INDEX applications_workflow ON applications(workflow_id);
+  CREATE TABLE application_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    workflow_id    TEXT,
+    type           TEXT NOT NULL,
+    step           TEXT,
+    stage          TEXT,
+    code           TEXT,
+    message        TEXT,
+    detail         TEXT,
+    retry_count    INTEGER,
+    at             INTEGER NOT NULL
+  );
+  CREATE INDEX application_events_app ON application_events(application_id, id);
+  `,
 ];
 
 export function openDb(path: string): Db {

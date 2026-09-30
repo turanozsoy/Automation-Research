@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import type { Duplex } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { ClientMsg, ServerMsg } from '../shared/messages.js';
+import type { AppClientMsg, AppServerMsg, ApplicationEventType, ApplicationView, ClientMsg, ServerMsg } from '../shared/messages.js';
 import type { LoginSessionManager } from './accounts/login-sessions.js';
-import { scanLicense } from './scan/license.js';
+import type { ApplicationService } from './applications/service.js';
+import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
 import type { Settings } from './settings.js';
@@ -13,38 +15,83 @@ import type { WorkflowRegistry } from './workflows.js';
 
 const STATIC_DIR = resolve(process.cwd(), 'src/test-a');
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8' };
-const SCAN_MAX_BYTES = 6 * 1024 * 1024;
 
 export interface ServerDeps {
   cfg: SiteBConfig;
   registry: WorkflowRegistry;
   store: ProfileStore;
   logins: LoginSessionManager;
+  apps: ApplicationService;
   settings: Settings;
   tl: Timeline;
 }
 
-/** Serves the test page, the accounts admin page + JSON API, and the workflow WebSocket. */
+/**
+ * HTTP + two WebSocket endpoints:
+ *
+ *   /ws      developer channel (the /debug harness, e2e scripts): raw workflow protocol, pool status,
+ *            timeline events. Workflows started here belong to the socket and end with it.
+ *   /ws/app  applicant channel: authenticated by the session cookie, bound to ONE application.
+ *            Receives only that application's view / progress / errors. Closing it never touches
+ *            a workflow: the automation runs in the background and the applicant reconnects.
+ *
+ * Service messages are routed server-side: everything goes to developer sockets; messages that
+ * carry a workflowId are also handed to the ApplicationService, which updates the owning
+ * application and pushes the new view to that application's sockets only.
+ */
 export function startServer(deps: ServerDeps): Promise<void> {
-  const { cfg, registry, settings, tl } = deps;
+  const { cfg, registry, apps, settings, tl } = deps;
   const server = createServer((req, res) => void handleHttp(req, res, deps));
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const devWss = new WebSocketServer({ noServer: true });
+  const appWss = new WebSocketServer({ noServer: true });
 
-  const broadcast = (m: ServerMsg) => {
+  // ---- routing ----
+  const devClients = new Set<WebSocket>();
+  const appSockets = new Map<string, Set<WebSocket>>();
+  const sendApp = (applicationId: string, m: AppServerMsg) => {
+    const set = appSockets.get(applicationId);
+    if (!set) return;
     const data = JSON.stringify(m);
-    for (const c of wss.clients) if (c.readyState === WebSocket.OPEN) c.send(data);
+    for (const s of set) if (s.readyState === WebSocket.OPEN) s.send(data);
   };
-  tl.onEvent(broadcast);
-  registry.setSender(broadcast);
+  const route = (m: ServerMsg) => {
+    const data = JSON.stringify(m);
+    for (const c of devClients) if (c.readyState === WebSocket.OPEN) c.send(data);
+    if ('workflowId' in m && m.workflowId) apps.onWorkflowMessage(m.workflowId, m);
+  };
+  tl.onEvent(route);
+  registry.setSender(route);
+  apps.setNotifier((id: string, application: ApplicationView) => sendApp(id, { type: 'app.state', ts: Date.now(), application }));
+  apps.setProgressNotifier((id: string, event: ApplicationEventType, step?: string) => sendApp(id, { type: 'app.progress', ts: Date.now(), event, step }));
 
+  // ---- upgrade: pick the endpoint, authenticate applicants before the socket exists ----
+  server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const path = (req.url ?? '').split('?')[0];
+    if (path === '/ws') {
+      devWss.handleUpgrade(req, socket, head, (ws) => devWss.emit('connection', ws, req));
+      return;
+    }
+    if (path === '/ws/app') {
+      const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      const app = looksLikeToken(token) ? apps.authenticate(token) : undefined;
+      if (!app) { socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); socket.destroy(); return; }
+      appWss.handleUpgrade(req, socket, head, (ws) => appWss.emit('connection', ws, req, app.id));
+      return;
+    }
+    socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+  });
+
+  // ---- developer channel (unchanged protocol) ----
   const fields = Object.keys(cfg.fields);
   const writeOnlyFields = fields.filter((n) => cfg.fields[n].writeOnly);
   const deferredFields = fields.filter((n) => cfg.fields[n].syncMode === 'deferred');
 
-  wss.on('connection', (socket, req) => {
-    const clientIp = (req.socket.remoteAddress ?? '').replace('::ffff:', '');
+  devWss.on('connection', (socket: WebSocket, req: IncomingMessage) => {
+    const clientIp = remoteIp(req);
+    devClients.add(socket);
     socket.send(JSON.stringify({ type: 'hello', ts: Date.now(), debounceMs: cfg.debounceMs, fields, targetUrl: cfg.targetUrl, writeOnlyFields, deferredFields, pool: registry.poolStatus() } satisfies ServerMsg));
-    tl.mark('client connected', clientIp);
+    tl.mark('debug client connected', clientIp);
 
     const own = new Set<string>();
     socket.on('message', (raw) => {
@@ -78,36 +125,82 @@ export function startServer(deps: ServerDeps): Promise<void> {
         case 'ping': reply({ type: 'pong', ts: Date.now(), echo: m.ts }); break;
       }
     });
-    socket.on('close', () => { for (const id of own) registry.end(id, 'client disconnected'); });
+    // Harness semantics: a workflow started from a developer socket ends with that socket.
+    socket.on('close', () => { devClients.delete(socket); for (const id of own) registry.end(id, 'debug client disconnected'); });
+  });
+
+  // ---- applicant channel ----
+  appWss.on('connection', (socket: WebSocket, req: IncomingMessage, applicationId: string) => {
+    const clientIp = remoteIp(req);
+    let set = appSockets.get(applicationId);
+    if (!set) { set = new Set(); appSockets.set(applicationId, set); }
+    set.add(socket);
+    tl.mark('applicant connected', `application ${applicationId.slice(0, 8)}, ${set.size} socket(s)`);
+    const reply = (r: AppServerMsg) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(r)); };
+    const row = apps.get(applicationId);
+    if (row) reply({ type: 'app.state', ts: Date.now(), application: apps.view(row) });
+
+    socket.on('message', (raw) => {
+      let m: AppClientMsg;
+      try { m = JSON.parse(raw.toString()); } catch { reply({ type: 'app.error', ts: Date.now(), code: 'BAD_REQUEST', message: 'invalid JSON' }); return; }
+      // Message bodies are never logged: app.verify carries the verification code.
+      let r;
+      switch (m?.type) {
+        case 'app.update': r = apps.updateFields(applicationId, m.fields); break;
+        case 'app.answers': r = apps.mergeAnswers(applicationId, m.answers); break;
+        case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep); break;
+        case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
+        case 'app.link_opened': r = apps.linkOpened(applicationId); break;
+        case 'ping': reply({ type: 'pong', ts: Date.now(), echo: m.ts }); return;
+        default: reply({ type: 'app.error', ts: Date.now(), code: 'BAD_REQUEST', message: 'unknown message type' }); return;
+      }
+      if (!r.ok) reply({ type: 'app.error', ts: Date.now(), code: r.code, message: r.message, missingFields: r.missingFields });
+    });
+    // Closing the applicant's socket never ends a workflow: the automation continues and the applicant resumes later.
+    socket.on('close', () => {
+      const s = appSockets.get(applicationId);
+      if (s) { s.delete(socket); if (!s.size) appSockets.delete(applicationId); }
+    });
   });
 
   return new Promise((res) => server.listen(settings.port, () => res()));
 }
 
+function remoteIp(req: IncomingMessage): string {
+  return (req.socket.remoteAddress ?? '').replace('::ffff:', '');
+}
+
 // ---------------------------------------------------------------------------
-// HTTP: static pages + accounts API (metadata only, never cookies)
+// HTTP: static pages, applicant session API, accounts API (metadata only, never cookies)
 // ---------------------------------------------------------------------------
 
 async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: ServerDeps): Promise<void> {
   const url = (req.url ?? '/').split('?')[0];
   const method = req.method ?? 'GET';
-  const json = (code: number, body: object) => { res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store' }); res.end(JSON.stringify(body)); };
+  const json = (code: number, body: object, headers: Record<string, string> = {}) => {
+    res.writeHead(code, { 'content-type': 'application/json', 'cache-control': 'no-store', ...headers });
+    res.end(JSON.stringify(body));
+  };
 
   try {
+    if (url === '/' && method === 'GET') return serveStatic('/index.html', res);
+    if (url === '/debug' && method === 'GET') return serveStatic('/debug.html', res);
     if (url === '/admin/accounts' && method === 'GET') return serveStatic('/admin.html', res);
 
-    if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
-
-    // Driver's-license autofill: the image is decoded in memory and dropped; only the needed fields are returned.
-    // Nothing about the image or the decoded record is logged.
-    if (url === '/api/scan/license' && method === 'POST') {
-      const image = await readBytes(req, SCAN_MAX_BYTES);
-      if (!image) return json(413, { ok: false, error: 'IMAGE_TOO_LARGE' });
-      const t0 = Date.now();
-      const r = await scanLicense(image);
-      deps.tl.mark('license scan', `${r.ok ? `decoded, ${7 - r.missing.length}/7 fields` : r.error} in ${Date.now() - t0} ms, ${Math.round(image.length / 1024)} KB`);
-      return json(r.ok ? 200 : 422, r);
+    // ---- applicant session ----
+    if (url === '/api/applications' && method === 'POST') {
+      const { row, token } = deps.apps.create();
+      return json(201, { application: deps.apps.view(row) }, { 'set-cookie': sessionCookie(token, { secure: deps.settings.secureCookies, maxAgeMs: deps.settings.sessionTtlMs }) });
     }
+    if (url === '/api/applications/me' && method === 'GET') {
+      const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      const row = looksLikeToken(token) ? deps.apps.authenticate(token) : undefined;
+      if (!row) return json(401, { error: 'UNAUTHENTICATED' });
+      return json(200, { application: deps.apps.view(row) });
+    }
+
+    // ---- accounts (internal) ----
+    if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
 
     if (url === '/api/accounts' && method === 'POST') {
       const body = await readJson(req);
@@ -157,17 +250,6 @@ function activeLogins(deps: ServerDeps): Record<string, ReturnType<LoginSessionM
   return out;
 }
 
-/** Raw request body up to `max` bytes; null when exceeded. */
-function readBytes(req: IncomingMessage, max: number): Promise<Buffer | null> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    req.on('data', (c: Buffer) => { size += c.length; if (size > max) { req.destroy(); resolve(null); return; } chunks.push(c); });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let body = '';
@@ -178,11 +260,10 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
 }
 
 function serveStatic(path: string, res: ServerResponse): void {
-  const rel = path === '/' ? '/index.html' : path;
-  if (rel.includes('..')) { res.writeHead(400); res.end(); return; }
+  if (path.includes('..')) { res.writeHead(400); res.end(); return; }
   try {
-    const body = readFileSync(resolve(STATIC_DIR, `.${rel}`));
-    res.writeHead(200, { 'content-type': MIME[extname(rel)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    const body = readFileSync(resolve(STATIC_DIR, `.${path}`));
+    res.writeHead(200, { 'content-type': MIME[extname(path)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
     res.end(body);
   } catch {
     res.writeHead(404);

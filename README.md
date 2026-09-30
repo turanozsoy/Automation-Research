@@ -1,12 +1,23 @@
-# Automation Research — local prototype with a profile pool
+# Shipzora application service (Automation Research)
+
+The job-application system for Shipzora. Website A (the applicant site, apply.shipzora.com in the
+future) collects the application; when everything Website B needs is present, the service runs the
+Website B flow in the background with a pooled account and hands the generated link back.
 
 ```
-localhost test form(s)  →  WebSocket  →  Node automation service  →  Playwright
-   one workflow per tab                    profile pool (SQLite, encrypted)      one isolated Chromium context per workflow
-                                                                                 →  Website B (real, online)  →  generated URL back
+applicant page  →  /ws/app (session cookie)  →  application (SQLite)  →  workflow  →  isolated Chromium context
+/debug harness  →  /ws (raw workflow protocol)                            profile pool (SQLite, encrypted)  →  Website B  →  generated URL
 ```
+
+Development runs against the local fake Website B (`dev/fake-b`); nothing here talks to a real
+third-party service unless `config/site-b.local.json` says so.
 
 What exists now:
+
+- **Applications.** A persistent applicant record (`applications` + `application_events`), independent
+  of any workflow: it survives refreshes, reconnects, automation failures and service restarts. Owned
+  through an opaque session token in an HttpOnly cookie (only its hash is stored). See
+  [Applications](#applications-shipzora-foundation).
 
 - **Profile pool.** Authenticated Website B sessions (Playwright storageState) stored encrypted in
   SQLite. Each workflow atomically reserves one profile; a profile is never held by two live workflows
@@ -26,10 +37,11 @@ What exists now:
   (`verification.successTexts`, default "You're good to go"); when it appears the record becomes
   *verified*, the workflow closes and its profile is released. `npm run profile -- workflows` lists
   recent workflows with their link state and URL.
-- Everything from the earlier phase: debounced live sync, masked authentication code, keyboard-driven
+- Everything from the earlier phase: debounced live sync, masked verification code, keyboard-driven
   Google address autocomplete, pausable submit steps with manual retry/skip, final-URL capture.
 
-Not yet: headless by default, process sharding, warm pool, IP handling, deployment.
+Not yet: the public applicant UI (`/` is a placeholder), admin authentication, headless by default,
+process sharding, warm pool, IP handling, deployment. The driver's-license autofill experiment was removed.
 
 ## Run it
 
@@ -45,24 +57,10 @@ npm run profile -- list
 npm start
 ```
 
-Then open <http://localhost:3000> in one tab per user you want to simulate. Each tab:
+Then open <http://localhost:3000/debug> in one tab per workflow you want to drive by hand. Each tab:
 **Start workflow** (a profile is reserved and Website B opens in its own context, already logged in),
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
-
-### Optional: driver's-license autofill (test form)
-
-The test form has a "Scan driver's license to autofill" box. It takes a photo of the **back** of a
-U.S. license (camera capture on phones, or upload; live camera on localhost/HTTPS), downsizes it in
-the page, and posts it to `POST /api/scan/license`. The service decodes the PDF417 barcode in memory
-(ZXing WebAssembly, no network), parses the AAMVA record, returns only first name, last name, date of
-birth, address line 1, city, state and ZIP, and drops the image and the record. The page fills those
-inputs, marks them as auto-filled for review, and the values reach the automation through the normal
-field sync as if typed. Nothing about the image is stored or logged; the log line says only
-"decoded, n/7 fields in N ms". "Clear fields" and "Scan another ID" reset the form for the next card.
-
-Testing without a real card: `npm run scan:fixture -- license.png` writes a barcode with fictional
-data, and `npm run e2e:scan -- license.png` uploads it through the real page and checks the fields.
-A front-side OCR fallback (specialised ID API) is planned for cards whose barcode cannot be read.
+The debug harness is an internal developer tool; applicants use the application API below.
 
 ### Adding accounts (manual login, no extension)
 
@@ -98,6 +96,61 @@ Service settings are environment variables (see `.env.example`): `MAX_WORKFLOWS`
 storageState blobs are encrypted with AES-256-GCM under a random per-profile data key, which is itself
 wrapped by a 32-byte master key (`PROFILE_MASTER_KEY`, base64). For development a key is generated once
 into `data/master.key` (gitignored). Rotating the master key only re-wraps the small data keys.
+
+## Applications (Shipzora foundation)
+
+Three kinds of state stay separate:
+
+| | Belongs to | Values |
+|---|---|---|
+| Profile / account | Website B account pool | available, reserved, starting, active, cooldown, expired, invalid, disabled |
+| Workflow | one automation run | allocating, preparing, ready, submitting, paused, link_ready, visited, completed, failed, abandoned |
+| Application | the applicant | `started`, `processing`, `link_ready`, `completed`, `problem` (+ `current_step`, `verification_step`, `link_state`) |
+
+`applicationId` is the applicant's identity. `workflow_id` on the application is the *current* run and
+is `NULL` when none is running; every run is in `application_events` (`automation_started` carries its
+workflow id). One application may go through several workflows.
+
+**When the automation starts.** Never while the applicant is typing: no profile is reserved until the
+verification code arrives *and* every Website B field (`config.fields` minus the write-only code:
+firstName, lastName, dateOfBirth, mobileNumber, address1, city, state, zip) is present. Then one
+workflow is started, all fields are seeded at once, and the existing sequence runs to the generated
+URL in the background while the applicant continues with later questions. Once every seeded field is
+acknowledged by Website B (or `APPLICANT_SUBMIT_FALLBACK_MS` after READY), the bridge submits. A workflow
+that pauses (a step failed) is aborted rather than held: the profile is released and the application
+becomes a `problem` the applicant can retry (the code must be entered again). Applicant activity never
+extends a workflow's life.
+
+**Verification code.** Never persisted, logged, or echoed: frontend → authenticated socket →
+`ApplicationService.provideVerification` → workflow snapshot → Website B. The application records only
+`verification_step` = required / completed / failed. `app.update` refuses the field.
+
+**Session.** `POST /api/applications` creates an application and sets `shipzora_session` (256-bit
+random token, HttpOnly, SameSite=Lax, `Secure` with `SECURE_COOKIES=1`, lifetime `SESSION_TTL_DAYS`).
+The server stores the token's SHA-256 only. `GET /api/applications/me` and the `/ws/app` upgrade
+authenticate with the cookie; an applicationId alone opens nothing.
+
+**Applicant WebSocket `/ws/app`** (types in `src/shared/messages.ts`, applicant section):
+
+| Client → service | Service → applicant |
+|---|---|
+| `app.update { fields }` save Website B fields + `email` | `app.state { application }` full safe view, on connect and after every change |
+| `app.answers { answers }` merge job answers (JSON) | `app.progress { event }` automation_started / automation_ready / automation_submitting / generated_link_ready / visited / verified / problem |
+| `app.step { step, completedStep? }` | `app.error { code, message, missingFields? }` UNAUTHENTICATED, INVALID_FIELD, INFORMATION_REQUIRED, INVALID_STATE, BAD_REQUEST |
+| `app.verify { code }` start the automation | |
+| `app.link_opened` final call to action clicked → visited | |
+
+Routing is server-side: a socket is bound to one application at upgrade time and receives only that
+application's view. Raw workflow messages, timeline events, pool status and account metadata go only
+to `/ws` (the `/debug` harness and e2e scripts). Closing an applicant socket never ends a workflow.
+
+**Restart.** Live workflows do not survive a restart; applications that were `processing` become
+`problem` (`SERVICE_RESTARTED`) on boot. Applications at `link_ready` keep their link.
+
+**Events** (`application_events`): application_started, step_viewed, step_completed, fields_updated,
+information_required, automation_started, automation_ready, automation_submitting, generated_link_ready,
+problem (code, stage, safe message, bounded internal detail, retry count), final_cta_clicked, visited,
+verified, automation_ended, service_restarted.
 
 ## Configuration (`config/site-b.json`)
 
@@ -151,8 +204,16 @@ npm run profile:fake -- import --label fake1 --account a1 --file dev/fake-b/prof
 npm run profile:fake -- import --label fake2 --account a2 --file dev/fake-b/profile.storage-state.json
 npm run start:fake                 # terminal 2: service using config/site-b.fake.json and data/fake
 E2E_PARALLEL=3 npm run e2e         # terminal 3 (optional): 3 simultaneous scripted workflows (2 profiles + 1 queued)
-npm run e2e:page                   # drives the real test page in a headless browser (Start, type, Submit, Open link, verified)
+npm run e2e:page                   # drives the /debug harness in a headless browser (Start, type, Submit, Open link, verified)
+npm run e2e:app                    # applicant foundation: session, resume, reconnect, isolation, workflow mapping, URL, visited/verified, no secret in the DB
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
+npm run test:app                   # application store + session helpers (throwaway DB)
+npm run typecheck
+
+# failure path: run the fake WITHOUT its Agree button, the applicant workflow pauses -> is aborted -> retryable problem
+FAKE_B_NO_AGREE=1 npm run fake-b   &&   npm run e2e:app:problem
+# restart recovery: start an applicant workflow, kill -9 the service, start it again -> the application is a SERVICE_RESTARTED problem
+npm run app:start
 ```
 
 `HEADLESS=1` and `CHROMIUM_PATH=…` exist only for automated testing in containers. On your machine leave them unset so the browser is visible.
@@ -174,16 +235,19 @@ src/service/workflows.ts    registry: allocation, queue, prepare, reassignment, 
 src/service/workflow.ts     one workflow runtime: snapshot, coalescing queue, pausable submit steps
 src/service/site-b.ts       everything that touches Website B's UI
 src/service/url-capture.ts  generated-URL detectors (+ settle on the final URL)
-src/service/ws.ts           static test page + WebSocket server, routing by workflow id
+src/service/ws.ts           HTTP (static, applicant session API, accounts API) + /ws (developer) and /ws/app (applicant) with server-side routing
+src/service/applications/store.ts    applications + application_events persistence, session token hash lookup
+src/service/applications/service.ts  application ⇄ workflow bridge: start when complete, seed, submit, map results, problems, restart recovery
+src/service/applications/session.ts  opaque session token, hashing, cookie helpers
 src/service/timeline.ts     timestamped event log (per-workflow children)
 scripts/profile.ts          profile CLI
 src/service/accounts/login-sessions.ts  per-account visible Chromium for manual login; Done exports + saves the session
-src/service/scan/license.ts             server-side PDF417 decode + AAMVA parse, returns only the needed fields
-src/test-a/scan.js                      license scan UI: camera / upload, downsize, post, fill, clear
-src/test-a/admin.html, admin.js         the accounts management page (Website A side)
-src/test-a/                 the local Website A stand-in (index.html + client.js)
+src/test-a/admin.html, admin.js         the accounts management page (internal)
+src/test-a/debug.html, debug.js         the developer harness served at /debug (raw workflow protocol)
+src/test-a/index.html                   placeholder for the applicant site (the real UI comes next)
 dev/fake-b/                 local fake Website B (testing only)
-dev/e2e-client.ts           scripted end-to-end run
+dev/e2e-client.ts           scripted end-to-end run over /ws
+dev/app-e2e.ts, app-problem-e2e.ts, app-start.ts   applicant foundation tests / helper
 ```
 
 ## Error codes
@@ -192,3 +256,4 @@ dev/e2e-client.ts           scripted end-to-end run
 `RECONCILE_MISMATCH`, `SUBMIT_BUTTON_NOT_FOUND`, `IFRAME_NOT_FOUND`, `TOGGLE_NOT_FOUND`, `TOGGLE_STATE_FAILED`,
 `PRIMARY_NOT_FOUND`, `SECONDARY_NOT_FOUND`, `URL_TIMEOUT`, `BROWSER_CLOSED`, `INVALID_STATE`, `INTERNAL`.
 A fatal error moves the workflow to `failed`; use Reset (or restart the service if the browser was closed).
+For an applicant workflow the failure becomes an application `problem` with a safe message; the applicant retries.

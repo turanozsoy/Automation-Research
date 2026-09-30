@@ -1,4 +1,4 @@
-/* Local Website A stand-in. One workflow per page; talks to the automation service over one WebSocket. */
+/* Developer debug harness (/debug). One workflow per page; talks to the automation service over the raw workflow WebSocket (/ws). Not an applicant page. */
 (() => {
   const $ = (s) => document.querySelector(s);
   const logEl = $('#log');
@@ -159,7 +159,6 @@
   for (const f of fields) {
     const name = f.dataset.field;
     f.addEventListener('input', (ev) => {
-      if (ev.isTrusted) f.classList.remove('autofilled');
       // The authentication code triggers the address finalisation on the service: make sure every
       // other field's pending (debounced) value is sent BEFORE the first code update.
       if (writeOnly.includes(name)) for (const o of fields) if (o !== f && timers[o.dataset.field]) sendField(o);

@@ -4,6 +4,8 @@ import { loadConfig } from './config.js';
 import { Vault } from './crypto.js';
 import { openDb } from './db.js';
 import { LoginSessionManager } from './accounts/login-sessions.js';
+import { ApplicationService } from './applications/service.js';
+import { ApplicationStore } from './applications/store.js';
 import { ProfileStore } from './profiles/store.js';
 import { loadSettings } from './settings.js';
 import { Timeline } from './timeline.js';
@@ -31,12 +33,16 @@ async function main(): Promise<void> {
   const registry = new WorkflowRegistry(settings, cfg, store, browser, tl);
   registry.start();
   const logins = new LoginSessionManager(settings, cfg, store, tl);
-  await startServer({ cfg, registry, store, logins, settings, tl });
-  tl.mark('test page available', `http://localhost:${settings.port}`);
+  const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl);
+  const interrupted = apps.recoverOnBoot();
+  if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
+  await startServer({ cfg, registry, store, logins, apps, settings, tl });
+  tl.mark('server listening', `http://localhost:${settings.port}`);
 
   console.log('\n────────────────────────────────────────────────────────────');
   console.log(`  Accounts:   http://localhost:${settings.port}/admin/accounts   (add accounts, Get / Refresh Cookies)`);
-  console.log(`  Test page:  http://localhost:${settings.port}   (open it in several tabs for several workflows)`);
+  console.log(`  Applicant:  http://localhost:${settings.port}   (placeholder; API: POST /api/applications, GET /api/applications/me, WS /ws/app)`);
+  console.log(`  Debug:      http://localhost:${settings.port}/debug   (raw workflow harness, one workflow per tab)`);
   console.log(`  CLI:        npm run profile -- list | workflows`);
   console.log(`  Settings:   maxWorkflows=${settings.maxWorkflows} cooldown=${settings.cooldownMs}ms idle=${settings.idleTimeoutMs}ms lease=${settings.leaseMs}ms`);
   console.log('────────────────────────────────────────────────────────────\n');

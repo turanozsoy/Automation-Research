@@ -1,5 +1,5 @@
 /**
- * Drives the REAL test page (src/test-a) in a headless browser exactly like a person:
+ * Drives the debug harness page (/debug, src/test-a/debug.html) in a headless browser exactly like a person:
  * Start workflow, type into the inputs, Submit, Open link, wait for verification.
  * Complements dev/e2e-client.ts, which talks to the WebSocket directly.
  *   npm run fake-b  +  npm run start:fake  (with a saved fake account), then: npm run e2e:page
@@ -11,7 +11,7 @@ const b = await chromium.launch({ headless: true, executablePath: process.env.CH
 const p = await b.newPage();
 const fail = (m: string) => { console.error('[page-test] FAIL:', m); process.exit(1); };
 try {
-  await p.goto(`http://localhost:${port}`);
+  await p.goto(`http://localhost:${port}/debug`);
   await p.waitForFunction(() => document.querySelector('#state')!.textContent === 'idle', null, { timeout: 15000 });
   await p.click('#btnStart');
   await p.waitForFunction(() => document.querySelector('#state')!.textContent === 'ready', null, { timeout: 60000 });

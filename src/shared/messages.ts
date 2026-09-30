@@ -91,3 +91,70 @@ export interface PoolStatusMsg { type: 'pool.status'; ts: number; pool: PoolStat
 export interface PongMsg { type: 'pong'; ts: number; echo: number }
 
 export type ServerMsg = HelloMsg | WorkflowAcceptedMsg | StateMsg | EventMsg | FieldAckMsg | FieldDeferredMsg | FieldErrorMsg | ResultMsg | ErrorMsg | PausedMsg | PoolStatusMsg | PongMsg;
+
+// ===========================================================================
+// Applicant protocol (/ws/app). Authenticated by the first-party session cookie.
+// An applicant socket only ever receives its own application; nothing about
+// workflows, profiles, the pool or Website B internals crosses this boundary.
+// ===========================================================================
+
+/** Shipzora application state (distinct from workflow state and profile state). */
+export type ApplicationState =
+  | 'started'      // applicant is filling in the application; no automation, no profile reserved
+  | 'processing'   // all Website B information is available; a workflow is running (or queued) in the background
+  | 'link_ready'   // the generated link is available to the applicant
+  | 'completed'    // Website B confirmed success (verified)
+  | 'problem';     // the automation could not finish; the applicant may retry (verification code required again)
+
+export type VerificationStep = 'required' | 'completed' | 'failed';
+export type LinkState = 'none' | 'visited' | 'verified';
+
+export type ApplicationEventType =
+  | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required'
+  | 'automation_started' | 'automation_ready' | 'automation_submitting' | 'automation_ended'
+  | 'generated_link_ready' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted';
+
+/** Everything an applicant is allowed to see about their own application. */
+export interface ApplicationView {
+  id: string;
+  state: ApplicationState;
+  currentStep: string;
+  fields: Record<string, string>;
+  answers: Record<string, unknown>;
+  verificationStep: VerificationStep;
+  /** Fields still missing before the automation can start (Website B field names). */
+  missingFields: string[];
+  automation: { active: boolean; attempts: number };
+  generatedUrl: string | null;
+  generatedUrlReadyAt: number | null;
+  linkState: LinkState;
+  finalLinkClickedAt: number | null;
+  problem: { code: string; message: string; at: number } | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type ApplicantErrorCode = 'UNAUTHENTICATED' | 'INVALID_FIELD' | 'INFORMATION_REQUIRED' | 'INVALID_STATE' | 'BAD_REQUEST';
+
+// ---- applicant -> service ----
+/** Save non-secret application fields (Website B field names plus `email`). The verification code is refused here. */
+export interface AppUpdateMsg { type: 'app.update'; ts: number; fields: Record<string, string> }
+/** Save job/application answers (free-form JSON, merged). */
+export interface AppAnswersMsg { type: 'app.answers'; ts: number; answers: Record<string, unknown> }
+/** The applicant moved to a step; optionally names the step they just completed. */
+export interface AppStepMsg { type: 'app.step'; ts: number; step: string; completedStep?: string }
+/** The verification code. Held only in memory, handed to the workflow, never persisted or logged. Starts the automation when every required field is present. */
+export interface AppVerifyMsg { type: 'app.verify'; ts: number; code: string }
+/** The applicant clicked the final call to action that opens the generated link. */
+export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
+export interface AppPingMsg { type: 'ping'; ts: number }
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
+
+// ---- service -> applicant ----
+/** Full safe snapshot; sent on connect and after every change. */
+export interface AppStateMsg { type: 'app.state'; ts: number; application: ApplicationView }
+/** Safe progress notification (also reflected in the snapshot). */
+export interface AppProgressMsg { type: 'app.progress'; ts: number; event: ApplicationEventType; step?: string }
+export interface AppErrorMsg { type: 'app.error'; ts: number; code: ApplicantErrorCode; message: string; missingFields?: string[] }
+export interface AppPongMsg { type: 'pong'; ts: number; echo: number }
+export type AppServerMsg = AppStateMsg | AppProgressMsg | AppErrorMsg | AppPongMsg;

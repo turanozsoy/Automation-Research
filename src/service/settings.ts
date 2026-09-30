@@ -22,6 +22,11 @@ export interface Settings {
   queueTimeoutMs: number;
   /** Max automatic profile reassignments per workflow (expired profile discovered during prepare). */
   maxReassign: number;
+  /** Applicant session cookie: Secure flag (set SECURE_COOKIES=1 behind HTTPS) and lifetime. */
+  secureCookies: boolean;
+  sessionTtlMs: number;
+  /** After READY, submit an applicant workflow even if not every seeded field has been acknowledged yet. */
+  applicantSubmitFallbackMs: number;
 }
 
 const num = (name: string, def: number) => {
@@ -43,5 +48,8 @@ export function loadSettings(): Settings {
     leaseMs: num('LEASE_MS', 30_000),
     queueTimeoutMs: num('QUEUE_TIMEOUT_MS', 60_000),
     maxReassign: num('MAX_REASSIGN', 2),
+    secureCookies: process.env.SECURE_COOKIES === '1',
+    sessionTtlMs: num('SESSION_TTL_DAYS', 30) * 24 * 60 * 60_000,
+    applicantSubmitFallbackMs: num('APPLICANT_SUBMIT_FALLBACK_MS', 20_000),
   };
 }

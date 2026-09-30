@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Phase 1 local prototype: localhost form -> automation service -> visible Chromium -> Website B",
+  "description": "Shipzora application service: applicant website -> automation service -> Chromium -> Website B",
   "scripts": {
     "start": "tsx src/service/main.ts",
     "start:fake": "tsx dev/start-fake.ts",
@@ -14,14 +14,15 @@
     "profile:fake": "tsx dev/profile-fake.ts",
     "test:store": "tsx dev/store-test.ts",
     "e2e:page": "tsx dev/page-test.ts",
-    "scan:fixture": "tsx dev/make-license-barcode.ts",
-    "e2e:scan": "tsx dev/scan-test.ts"
+    "test:app": "tsx dev/application-store-test.ts",
+    "e2e:app": "tsx dev/app-e2e.ts",
+    "e2e:app:problem": "tsx dev/app-problem-e2e.ts",
+    "app:start": "tsx dev/app-start.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
     "playwright": "^1.63.0",
-    "ws": "^8.18.0",
-    "zxing-wasm": "^2.2.4"
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
