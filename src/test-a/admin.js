@@ -1,8 +1,14 @@
-/* Accounts management page: add accounts, open a manual-login browser, save the session on Done. */
+/*
+ * Shipzora Operations (/admin/accounts, internal). Same API and live channel as before:
+ *   GET/POST /api/accounts, /api/accounts/:id (DELETE), /api/accounts/:id/login/{start,status,done,cancel}
+ *   GET /api/admin/applications/verified?q&offset&limit
+ *   /ws/admin nudges ({type:'admin.changed', what:'verified'|'accounts'}) -> re-fetch
+ * Never receives or renders cookies, storageState, verification codes or auth secrets.
+ */
 (() => {
-  const $ = (s) => document.querySelector(s);
-  const msg = (t, err) => { const el = $('#msg'); el.textContent = t; el.className = err ? 'err' : ''; };
-  const fmt = (ts) => (ts ? new Date(ts).toLocaleString() : '—');
+  'use strict';
+  const $ = (s, r = document) => r.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const api = async (path, opts) => {
     const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
     const j = await r.json().catch(() => ({}));
@@ -10,117 +16,189 @@
     return j;
   };
 
-  let activeLogin = null;   // { id, name }
-  let pollTimer = null;
+  // ---------- messages ----------
+  let msgTimer = null;
+  function msg(text, err) {
+    const el = $('#msg');
+    clearTimeout(msgTimer);
+    if (!text) { el.hidden = true; return; }
+    el.textContent = text; el.className = `toast${err ? ' err' : ''}`; el.hidden = false;
+    msgTimer = setTimeout(() => { el.hidden = true; }, err ? 7000 : 3500);
+  }
+
+  // ---------- dates ----------
+  const exact = (ts) => (ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '');
+  function human(ts) {
+    if (!ts) return '—';
+    const d = new Date(ts), now = new Date();
+    const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+    if (sameDay(d, now)) return `Today, ${time}`;
+    const y = new Date(now); y.setDate(now.getDate() - 1);
+    if (sameDay(d, y)) return `Yesterday, ${time}`;
+    const opts = d.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' };
+    return `${d.toLocaleDateString(undefined, opts)}, ${time}`;
+  }
+  const ago = (ts) => {
+    if (!ts) return '—';
+    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
+    const h = Math.round(m / 60); if (h < 48) return `${h} h ago`;
+    return `${Math.round(h / 24)} d ago`;
+  };
+  const when = (ts) => (ts ? `<time datetime="${new Date(ts).toISOString()}" title="${esc(exact(ts))}">${esc(human(ts))}</time>` : '<span class="sub">—</span>');
+
+  // ---------- badges ----------
+  const SESSION = {
+    current: ['ok', 'Current'], attention: ['warn', 'Needs attention'], expired: ['danger', 'Expired'], none: ['neutral', 'Not saved'],
+  };
+  const STATUS = { verified: ['ok', 'Verified'], visited: ['brand', 'Visited'], expired: ['danger', 'Expired'], none: ['neutral', 'None'] };
+  const badge = (map, key) => { const [cls, label] = map[key] || ['neutral', key]; return `<span class="badge ${cls}">${esc(label)}</span>`; };
+
+  // =====================================================================
+  // accounts
+  // =====================================================================
   let accounts = [];
+  let logins = {};
+  let accountQuery = '';
+  let accountFilter = 'all';
 
   async function load() {
     const j = await api('/api/accounts');
     accounts = j.accounts;
-    render(j.logins || {});
-    // Resume the panel if a login browser is already open for some account (e.g. after a page reload).
-    const openId = Object.keys(j.logins || {})[0];
-    if (openId && !activeLogin) { const a = accounts.find((x) => x.id === openId); if (a) showLoginPanel(a.id, a.name); }
+    logins = j.logins || {};
+    renderAccounts();
+    renderStats();
+    // Resume the login dialog if a login browser is already open (e.g. after a page reload).
+    const openId = Object.keys(logins)[0];
+    if (openId && !activeLogin) { const a = accounts.find((x) => x.id === openId); if (a) showLogin(a.id, a.name); }
   }
 
-  function render(logins) {
+  function visibleAccounts() {
+    const q = accountQuery.toLowerCase();
+    return accounts.filter((a) => (accountFilter === 'all' || a.sessionStatus === accountFilter) && (!q || a.name.toLowerCase().includes(q) || a.email.toLowerCase().includes(q)));
+  }
+
+  function renderAccounts() {
     const tb = $('#rows');
     tb.innerHTML = '';
-    if (!accounts.length) { tb.innerHTML = '<tr><td colspan="8">No accounts yet. Press "Add Account".</td></tr>'; return; }
-    for (const a of accounts) {
+    const list = visibleAccounts();
+    $('#accountsNote').textContent = accounts.length ? `${list.length} of ${accounts.length} account${accounts.length === 1 ? '' : 's'}` : '';
+    if (!accounts.length) {
+      tb.innerHTML = '<tr><td colspan="8" class="empty"><strong>No onboarding accounts yet.</strong>Add an account to capture its session; workflows will use it automatically.</td></tr>';
+      return;
+    }
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="8" class="empty"><strong>No accounts match.</strong>Try another search or filter.</td></tr>'; return; }
+    for (const a of list) {
       const tr = document.createElement('tr');
-      const loginOpen = !!logins[a.id];
       tr.dataset.accountId = a.id;
-      const sess = a.sessionStatus === 'none' ? '<span class="badge no">none</span>'
-        : a.sessionStatus === 'current' ? '<span class="badge current">saved · current</span>'
-        : a.sessionStatus === 'attention' ? `<span class="badge attention">saved · needs attention</span>${a.sessionNote ? `<br><small>${esc(a.sessionNote)}</small>` : ''}`
-        : '<span class="badge expired">saved · expired</span>';
+      const loginOpen = !!logins[a.id];
+      const sessionSub = a.sessionStatus === 'attention' && a.sessionNote ? `<span class="sub">${esc(a.sessionNote)}</span>`
+        : a.sessionStatus === 'expired' && a.stateReason ? `<span class="sub">${esc(a.stateReason)}</span>`
+        : a.hasSession ? `<span class="sub">Last used ${esc(ago(a.lastUsedAt))}</span>` : '';
       tr.innerHTML = `
-        <td><b>${esc(a.name)}</b></td>
-        <td>${esc(a.email)}</td>
-        <td>${sess}${loginOpen ? ' <small>(login browser open)</small>' : ''}</td>
-        <td><span class="badge ${a.status}">${a.status}</span>${a.status === 'expired' && a.stateReason ? `<br><small>${esc(a.stateReason)}</small>` : ''}</td>
-        <td>${fmt(a.createdAt)}</td>
-        <td>${fmt(a.sessionSavedAt)}</td>
-        <td>${fmt(a.lastWorkflowAt)}${a.lastUrl ? `<br><small>${esc(a.lastUrl)}</small>` : ''}</td>
-        <td></td>`;
+        <td data-label="Account"><span class="acct-name">${esc(a.name)}</span>${loginOpen ? '<span class="sub">Login browser open</span>' : ''}</td>
+        <td data-label="Email">${esc(a.email)}</td>
+        <td data-label="Session">${badge(SESSION, a.sessionStatus)}${sessionSub}</td>
+        <td data-label="Status">${badge(STATUS, a.status)}</td>
+        <td data-label="Created">${when(a.createdAt)}</td>
+        <td data-label="Last session update">${when(a.sessionSavedAt)}</td>
+        <td data-label="Last workflow">${when(a.lastWorkflowAt)}</td>
+        <td data-label="Actions" class="td-actions"></td>`;
       const actions = tr.lastElementChild;
       const b1 = document.createElement('button');
-      b1.textContent = a.hasSession ? 'Refresh Cookies' : 'Get Cookies';
+      b1.type = 'button'; b1.className = 'btn btn-secondary btn-sm';
+      b1.textContent = a.hasSession ? 'Refresh cookies' : 'Get cookies';
       b1.onclick = () => startLogin(a.id, a.name);
       const b2 = document.createElement('button');
-      b2.textContent = 'Remove';
-      b2.onclick = async () => {
-        if (!confirm(`Remove account "${a.name}" and its saved session?`)) return;
-        try { await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); msg(`Removed ${a.name}`); await load(); } catch (e) { msg(e.message, true); }
-      };
-      actions.appendChild(b1); actions.appendChild(b2);
+      b2.type = 'button'; b2.className = 'btn-text-danger'; b2.textContent = 'Remove';
+      b2.onclick = () => askRemove(a);
+      actions.append(b1, document.createTextNode(' '), b2);
       tb.appendChild(tr);
     }
   }
 
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function renderStats() {
+    const n = accounts.length;
+    const current = accounts.filter((a) => a.sessionStatus === 'current').length;
+    const attention = accounts.filter((a) => a.sessionStatus === 'attention' || a.sessionStatus === 'expired').length;
+    const notSaved = accounts.filter((a) => a.sessionStatus === 'none').length;
+    $('#statAccounts').textContent = n;
+    $('#statAccountsNote').textContent = notSaved ? `${notSaved} without a saved session` : n ? 'All have a saved session' : 'Add the first account';
+    $('#statCurrent').textContent = current;
+    $('#statCurrentNote').textContent = n ? `of ${n} account${n === 1 ? '' : 's'}` : ' ';
+    $('#statAttention').textContent = attention;
+    $('#statAttentionNote').textContent = attention ? 'Sessions to check or refresh' : 'Nothing needs attention';
+    $('#statAttention').closest('.card').classList.toggle('attention', attention > 0);
+  }
 
-  // ---- add account ----
-  $('#btnAdd').onclick = () => { $('#addForm').style.display = 'block'; $('#newName').focus(); };
-  $('#btnCancelAdd').onclick = () => { $('#addForm').style.display = 'none'; };
-  $('#btnCreate').onclick = async () => {
-    const name = $('#newName').value.trim();
-    const email = $('#newEmail').value.trim();
-    if (!name || !email) { msg('Enter the account name/number and the email.', true); return; }
-    try {
-      const { id } = await api('/api/accounts', { method: 'POST', body: JSON.stringify({ name, email }) });
-      $('#addForm').style.display = 'none';
-      $('#newName').value = ''; $('#newEmail').value = '';
-      await load();
-      await startLogin(id, name);
-    } catch (e) { msg(e.message, true); }
+  $('#accountSearch').addEventListener('input', (ev) => { accountQuery = ev.target.value.trim(); renderAccounts(); });
+  for (const chip of document.querySelectorAll('.chip')) chip.onclick = () => {
+    document.querySelectorAll('.chip').forEach((c) => c.classList.remove('active'));
+    chip.classList.add('active'); accountFilter = chip.dataset.filter; renderAccounts();
   };
 
-  // ---- manual login flow ----
+  // ---------- add account (same create -> login/start flow) ----------
+  $('#btnAdd').onclick = () => { $('#newName').value = ''; $('#newEmail').value = ''; $('#dlgAdd').showModal(); $('#newName').focus(); };
+  $('#btnCancelAdd').onclick = () => $('#dlgAdd').close();
+  $('#addForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const name = $('#newName').value.trim();
+    const email = $('#newEmail').value.trim();
+    if (!name || !email) { msg('Enter the account name and the email.', true); return; }
+    $('#btnCreate').disabled = true;
+    try {
+      const { id } = await api('/api/accounts', { method: 'POST', body: JSON.stringify({ name, email }) });
+      $('#dlgAdd').close();
+      await load();
+      await startLogin(id, name);
+    } catch (e) { msg(e.message, true); } finally { $('#btnCreate').disabled = false; }
+  });
+
+  // ---------- manual login flow (unchanged mechanics: start -> poll status -> done / cancel) ----------
+  let activeLogin = null;
+  let pollTimer = null;
   async function startLogin(id, name) {
     try {
       msg(`Opening a Chromium window for ${name}…`);
       await api(`/api/accounts/${id}/login/start`, { method: 'POST' });
-      showLoginPanel(id, name);
-      msg('');
+      showLogin(id, name);
+      msg(null);
     } catch (e) { msg(e.message, true); }
   }
-
-  function showLoginPanel(id, name) {
+  function showLogin(id, name) {
     activeLogin = { id, name };
     $('#loginName').textContent = name;
-    $('#loginPanel').style.display = 'block';
+    $('#loginUrl').textContent = '…';
     $('#btnDone').disabled = false;
+    if (!$('#dlgLogin').open) $('#dlgLogin').showModal();
     clearInterval(pollTimer);
     pollTimer = setInterval(pollLogin, 1500);
     pollLogin();
   }
-
   async function pollLogin() {
     if (!activeLogin) return;
     try {
       const s = await api(`/api/accounts/${activeLogin.id}/login/status`);
-      if (!s.open) { hideLoginPanel('The login browser was closed. Nothing was saved. Use Get/Refresh Cookies to try again.', true); await load(); return; }
+      if (!s.open) { hideLogin('The login browser was closed. Nothing was saved. Use Get or Refresh cookies to try again.', true); await load(); return; }
       $('#loginUrl').textContent = `${s.currentUrl || '…'}${s.onLoginPage ? '  (still the login page)' : ''}`;
     } catch { /* transient */ }
   }
-
-  function hideLoginPanel(text, err) {
+  function hideLogin(text, err) {
     clearInterval(pollTimer); pollTimer = null;
     activeLogin = null;
-    $('#loginPanel').style.display = 'none';
+    if ($('#dlgLogin').open) $('#dlgLogin').close();
     if (text) msg(text, err);
   }
-
   $('#btnDone').onclick = async () => {
     if (!activeLogin) return;
     $('#btnDone').disabled = true;
     try {
       const r = await api(`/api/accounts/${activeLogin.id}/login/done`, { method: 'POST' });
-      if (r.saved) { hideLoginPanel(`Session saved for ${activeLogin.name}. The login browser was closed.`); await load(); }
+      if (r.saved) { hideLogin(`Session saved for ${activeLogin.name}. The login browser was closed.`); await load(); }
     } catch (e) {
-      // 409: still on the login page, or no cookies yet. Keep the panel open so the user can finish and retry.
+      // 409: still on the login page, or no cookies yet. Keep the dialog open so the user can finish and retry.
       msg(e.message, true);
       $('#btnDone').disabled = false;
     }
@@ -128,105 +206,152 @@
   $('#btnCancelLogin').onclick = async () => {
     if (!activeLogin) return;
     try { await api(`/api/accounts/${activeLogin.id}/login/cancel`, { method: 'POST' }); } catch { /* ignore */ }
-    hideLoginPanel('Login cancelled. Nothing was saved.');
+    hideLogin('Login cancelled. Nothing was saved.');
     await load();
   };
+  $('#dlgLogin').addEventListener('cancel', (ev) => { ev.preventDefault(); }); // Esc must not silently drop the flow
 
-  $('#btnReload').onclick = () => { load().catch((e) => msg(e.message, true)); loadVerified(true); };
-  load().catch((e) => msg(e.message, true));
-
-  // ---- verified applications ----
-  const PAGE = 25;
-  let vq = '';
-  let vloaded = 0;
-  let vtotal = 0;
-  const ago = (ts) => {
-    if (!ts) return '—';
-    const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-    if (s < 60) return `${s} s ago`;
-    const m = Math.round(s / 60); if (m < 60) return `${m} min ago`;
-    const h = Math.round(m / 60); if (h < 48) return `${h} h ago`;
-    return `${Math.round(h / 24)} d ago`;
+  // ---------- remove (confirmation dialog, destructive styling) ----------
+  let removing = null;
+  function askRemove(a) { removing = a; $('#removeName').textContent = a.name; $('#dlgRemove').showModal(); $('#btnCancelRemove').focus(); }
+  $('#btnCancelRemove').onclick = () => { removing = null; $('#dlgRemove').close(); };
+  $('#btnConfirmRemove').onclick = async () => {
+    if (!removing) return;
+    const a = removing; removing = null;
+    $('#dlgRemove').close();
+    try { await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); msg(`Removed ${a.name}.`); await load(); loadVerified(false); } catch (e) { msg(e.message, true); }
   };
-  const sessionLabel = (p) => !p ? '—' : p.sessionStatus === 'current' ? 'Saved / Current' : p.sessionStatus === 'attention' ? `Saved / Needs attention${p.sessionNote ? ' (' + p.sessionNote + ')' : ''}` : p.sessionStatus === 'expired' ? 'Saved / Expired' : 'None';
-
-  async function loadVerified(reset, extra) {
-    if (reset) { vloaded = 0; $('#verifiedList').innerHTML = ''; }
-    const limit = extra ? PAGE : Math.max(PAGE, vloaded);
-    const offset = extra ? vloaded : 0;
-    let j;
-    try { j = await api(`/api/admin/applications/verified?q=${encodeURIComponent(vq)}&offset=${offset}&limit=${limit}`); } catch (e) { $('#verifiedMsg').innerHTML = `<small class="err">${esc(e.message)}</small>`; return; }
-    if (!extra) { $('#verifiedList').innerHTML = ''; vloaded = 0; }
-    vtotal = j.total;
-    $('#verifiedCount').textContent = `${j.total} verified`;
-    for (const it of j.items) $('#verifiedList').appendChild(renderVerified(it));
-    vloaded += j.items.length;
-    if (!vloaded) $('#verifiedList').innerHTML = `<div class="empty">${vq ? 'No verified applications match that search.' : 'No verified applications yet.'}</div>`;
-    $('#btnMore').style.display = vloaded < vtotal ? '' : 'none';
-    $('#verifiedMsg').innerHTML = `<small>Showing ${vloaded} of ${vtotal}</small>`;
-  }
-
-  function renderVerified(it) {
-    const d = document.createElement('details');
-    d.className = 'vrow';
-    d.dataset.appId = it.id;
-    const p = it.processedWith;
-    const answers = Object.entries(it.answers || {}).map(([k, v]) => `${esc(k)}: ${esc(String(v))}`).join(', ') || '—';
-    d.innerHTML = `
-      <summary>
-        <div><div class="name">${esc(it.fullName)}</div><div class="appid">${esc(it.displayId)} <button class="copy" type="button" title="Copy full application ID">Copy ID</button></div></div>
-        <div>Verified ${ago(it.verifiedAt)}</div>
-        <div>Processed with: ${p ? `<button class="acct-link" type="button" data-account="${esc(p.profileId)}" ${p.exists ? '' : 'disabled title="account removed"'}>${esc(p.label)}</button>` : '—'}</div>
-        <div>Session: ${esc(sessionLabel(p))}<br><small>Session updated: ${ago(p && p.sessionSavedAt)}</small></div>
-      </summary>
-      <div class="detail">
-        <div><span>Full name</span>${esc(it.fullName)}</div>
-        <div><span>Application ID</span><code>${esc(it.id)}</code></div>
-        <div><span>Email</span>${esc(it.email || '—')}</div>
-        <div><span>Created</span>${fmt(it.createdAt)}</div>
-        <div><span>Link ready</span>${fmt(it.generatedUrlReadyAt)}</div>
-        <div><span>Final CTA clicked</span>${fmt(it.finalLinkClickedAt)}</div>
-        <div><span>Visited</span>${fmt(it.visitedAt)}</div>
-        <div><span>Verified</span>${fmt(it.verifiedAt)}</div>
-        <div><span>Account used</span>${p ? esc(p.label) + (p.exists ? '' : ' (removed)') : '—'}</div>
-        <div><span>Session last saved</span>${fmt(p && p.sessionSavedAt)}${it.sessionResult === 'failed' ? ' <span class="badge attention">SESSION_PERSIST_FAILED</span>' : it.sessionResult === 'refreshed' ? ' <span class="badge current">refreshed after this run</span>' : ''}</div>
-        <div><span>Workflow ID</span><code>${esc(it.workflowId || '—')}</code></div>
-        <div><span>Workflow outcome</span>${esc(it.workflowOutcome || '—')}</div>
-        <div style="grid-column:1/-1"><span>Answers</span>${answers}</div>
-      </div>`;
-    d.querySelector('.copy').onclick = async (ev) => {
-      ev.preventDefault(); ev.stopPropagation();
-      try { await navigator.clipboard.writeText(it.id); ev.target.textContent = 'Copied'; setTimeout(() => { ev.target.textContent = 'Copy ID'; }, 1500); } catch { prompt('Application ID', it.id); }
-    };
-    const acct = d.querySelector('.acct-link');
-    if (acct) acct.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); focusAccount(acct.dataset.account); };
-    return d;
-  }
 
   function focusAccount(id) {
     const tr = document.querySelector(`tr[data-account-id="${CSS.escape(id)}"]`);
-    if (!tr) { msg('That account is no longer in the list.', true); return; }
+    if (!tr) { msg('That account is no longer in the list, or is hidden by the current filter.', true); return; }
     document.querySelectorAll('tr.highlight').forEach((r) => r.classList.remove('highlight'));
     tr.classList.add('highlight');
     tr.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setTimeout(() => tr.classList.remove('highlight'), 4000);
   }
 
+  // =====================================================================
+  // verified applications
+  // =====================================================================
+  const PAGE = 25;
+  let vq = '';
+  let vloaded = 0;
+  let vtotal = 0;
+  let known = new Set();
+
+  async function loadVerified(reset, extra) {
+    if (reset) { vloaded = 0; $('#verifiedList').innerHTML = ''; }
+    const limit = extra ? PAGE : Math.max(PAGE, vloaded);
+    const offset = extra ? vloaded : 0;
+    let j;
+    try { j = await api(`/api/admin/applications/verified?q=${encodeURIComponent(vq)}&offset=${offset}&limit=${limit}`); }
+    catch (e) { $('#verifiedMsg').textContent = e.message; return; }
+    if (!extra) { $('#verifiedList').innerHTML = ''; vloaded = 0; }
+    vtotal = j.total;
+    $('#verifiedCount').textContent = `${j.total} verified`;
+    $('#statVerified').textContent = vq ? vtotal : j.total;
+    $('#statVerifiedNote').textContent = j.items[0] ? `Latest ${human(j.items[0].verifiedAt).toLowerCase()}` : 'None yet';
+    const fresh = new Set();
+    for (const it of j.items) { fresh.add(it.id); $('#verifiedList').appendChild(renderVerified(it, known.size > 0 && !known.has(it.id))); }
+    for (const id of fresh) known.add(id);
+    vloaded += j.items.length;
+    if (!vloaded) {
+      $('#verifiedList').innerHTML = vq
+        ? '<div class="vempty"><strong>No verified applications match.</strong>Search by the applicant’s full name or their application ID.</div>'
+        : '<div class="vempty"><strong>No verified applications yet.</strong>Verified applicants will appear here automatically once onboarding is completed.</div>';
+    }
+    $('#btnMore').hidden = !(vloaded < vtotal);
+    $('#verifiedMsg').textContent = vloaded ? `Showing ${vloaded} of ${vtotal}` : '';
+  }
+
+  function renderVerified(it, isNew) {
+    const p = it.processedWith;
+    const d = document.createElement('article');
+    d.className = `vrow${isNew ? ' new' : ''}`;
+    d.dataset.appId = it.id;
+    d.innerHTML = `
+      <div><div class="name">${esc(it.fullName)}</div><div class="appid"><code>${esc(it.displayId)}</code><button class="copy" type="button" title="Copy full application ID">Copy ID</button></div></div>
+      <div><span class="label">Verified</span>${when(it.verifiedAt)}</div>
+      <div><span class="label">Processed with</span>${p ? `<button class="link-btn acct-link" type="button" data-account="${esc(p.profileId)}" ${p.exists ? '' : 'disabled title="account removed"'}>${esc(p.label)}</button>` : '—'}</div>
+      <div><span class="label">Session</span>${p ? badge(SESSION, p.sessionStatus) : '—'}<span class="sub">Updated ${esc(ago(p && p.sessionSavedAt))}</span></div>
+      <div class="actions"><button class="btn btn-secondary btn-sm details" type="button">View details</button></div>`;
+    d.querySelector('.copy').onclick = async (ev) => {
+      try { await navigator.clipboard.writeText(it.id); ev.target.textContent = 'Copied'; setTimeout(() => { ev.target.textContent = 'Copy ID'; }, 1500); } catch { prompt('Application ID', it.id); }
+    };
+    const acct = d.querySelector('.acct-link');
+    if (acct) acct.onclick = () => focusAccount(acct.dataset.account);
+    d.querySelector('.details').onclick = () => showDetails(it);
+    return d;
+  }
+
+  function showDetails(it) {
+    const p = it.processedWith;
+    $('#detName').textContent = it.fullName;
+    const rows = [];
+    const row = (k, v) => rows.push(`<dt>${esc(k)}</dt><dd>${v}</dd>`);
+    const group = (t) => rows.push(`<dd class="group">${esc(t)}</dd>`);
+    group('Application');
+    row('Application ID', `<code>${esc(it.id)}</code>`);
+    row('Email', esc(it.email || '—'));
+    row('Created', when(it.createdAt));
+    row('Link ready', when(it.generatedUrlReadyAt));
+    row('Final CTA clicked', when(it.finalLinkClickedAt));
+    row('Visited', when(it.visitedAt));
+    row('Verified', when(it.verifiedAt));
+    group('Processing');
+    row('Account used', p ? `${esc(p.label)}${p.exists ? '' : ' <span class="sub">(removed)</span>'}` : '—');
+    row('Session', p ? `${badge(SESSION, p.sessionStatus)} <span class="sub">last saved ${esc(human(p.sessionSavedAt))}</span>` : '—');
+    row('Session after this run', it.sessionResult === 'failed' ? badge({ f: ['warn', 'SESSION_PERSIST_FAILED'] }, 'f') : it.sessionResult === 'refreshed' ? badge({ r: ['ok', 'Refreshed'] }, 'r') : '—');
+    row('Workflow ID', `<code>${esc(it.workflowId || '—')}</code>`);
+    row('Workflow outcome', esc(it.workflowOutcome || '—'));
+    group('Answers');
+    const answers = Object.entries(it.answers || {});
+    if (!answers.length) row('Answers', '<span class="sub">None recorded</span>');
+    for (const [k, v] of answers) {
+      const q = questionLabels[k];
+      row(q ? q.label : k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()), esc(q && q.options[String(v)] ? q.options[String(v)] : String(v)));
+    }
+    $('#detList').innerHTML = rows.join('');
+    $('#dlgDetails').showModal();
+  }
+  $('#btnCloseDetails').onclick = () => $('#dlgDetails').close();
+  for (const dlg of document.querySelectorAll('dialog')) dlg.addEventListener('click', (ev) => { if (ev.target === dlg && dlg.id !== 'dlgLogin') dlg.close(); });
+
   let searchTimer = null;
   $('#verifiedSearch').addEventListener('input', (ev) => { clearTimeout(searchTimer); searchTimer = setTimeout(() => { vq = ev.target.value.trim(); loadVerified(true); }, 250); });
   $('#btnMore').onclick = () => loadVerified(false, true);
-  loadVerified(true);
 
-  // Live updates: the service nudges this page (no data on the wire); re-fetch what changed.
+  // =====================================================================
+  // live updates + boot
+  // =====================================================================
   function connectAdmin() {
     const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/admin`);
+    ws.onopen = () => $('#liveDot').classList.add('on');
     ws.onmessage = (ev) => {
       let m; try { m = JSON.parse(ev.data); } catch { return; }
       if (m.type !== 'admin.changed') return;
       if (m.what === 'verified') loadVerified(false);
       if (m.what === 'accounts') { load().catch(() => {}); loadVerified(false); }
     };
-    ws.onclose = () => setTimeout(connectAdmin, 3000);
+    ws.onclose = () => { $('#liveDot').classList.remove('on'); setTimeout(connectAdmin, 3000); };
   }
+  async function pollMode() {
+    try { const s = await (await fetch('/api/dev/browser')).json(); $('#automationMode').textContent = `Automation: ${s.mode === 'headless' ? 'Headless' : 'Visible'}${s.chromium === 'restarting' ? ' (restarting)' : ''}`; } catch { /* ignore */ }
+  }
+
+  // Question labels for the details drawer come from the same config the applicant site uses.
+  let questionLabels = {};
+  fetch('/api/apply/config').then((r) => r.json()).then((cfg) => {
+    for (const screen of cfg.screens || []) for (const q of screen.questions || []) {
+      questionLabels[q.key] = { label: q.label, options: Object.fromEntries((q.options || []).map((o) => [o.value, o.label])) };
+    }
+  }).catch(() => {});
+
+  load().catch((e) => msg(e.message, true));
+  loadVerified(true);
   connectAdmin();
+  pollMode();
+  setInterval(pollMode, 15000);
+  setInterval(() => { renderAccounts(); }, 60000); // keep relative times fresh
 })();

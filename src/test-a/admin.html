@@ -2,84 +2,146 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Website A — Accounts</title>
-<style>
-  body { font-family: system-ui, sans-serif; margin: 16px; max-width: 1100px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-  th { background: #f4f4f4; }
-  button { padding: 6px 10px; font-size: 13px; margin-right: 4px; cursor: pointer; }
-  button:disabled { opacity: .5; cursor: default; }
-  input { padding: 6px; font-size: 13px; }
-  #addForm { display: none; background: #f8f8f8; border: 1px solid #ddd; padding: 10px; margin: 10px 0; }
-  #addForm label { display: inline-block; width: 160px; }
-  #addForm div { margin: 6px 0; }
-  .badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 12px; }
-  .yes { background: #e6ffe6; } .no { background: #eee; color: #777; }
-  .expired { background: #ffe6e6; } .visited { background: #fff3cd; } .verified { background: #d4edda; } .none { background: #eee; color: #777; }
-  #loginPanel { display: none; background: #fff3cd; border: 1px solid #d9a400; padding: 10px; margin: 10px 0; }
-  #msg { margin: 8px 0; color: #444; min-height: 1.2em; }
-  .err { color: #b00; }
-  small { color: #777; }
-  a { color: #36c; }
-  h2 { margin: 0 0 18px; font-size: 20px; }
-  .toolbar { display: flex; gap: 10px; align-items: center; margin: 10px 0; }
-  .vlist { display: grid; gap: 8px; }
-  .vrow { border: 1px solid #ddd; border-radius: 4px; background: #fff; }
-  .vrow summary { list-style: none; cursor: pointer; padding: 10px 12px; display: grid; grid-template-columns: 1.4fr 1fr 1.2fr 1.6fr; gap: 12px; align-items: center; font-size: 13px; }
-  .vrow summary::-webkit-details-marker { display: none; }
-  .vrow summary:hover { background: #f8f8f8; }
-  .vrow .name { font-weight: 600; font-size: 14px; }
-  .vrow .appid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: #555; display: inline-flex; gap: 6px; align-items: center; }
-  .vrow .copy { padding: 2px 6px; font-size: 11px; margin: 0; }
-  .vrow .detail { padding: 6px 12px 12px; border-top: 1px solid #eee; font-size: 13px; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 18px; }
-  .vrow .detail div span:first-child { color: #777; display: inline-block; min-width: 150px; }
-  .attention { background: #fff3cd; } .current { background: #d4edda; }
-  .acct-link { background: none; border: 0; padding: 0; color: #36c; text-decoration: underline; cursor: pointer; font: inherit; }
-  tr.highlight td { background: #fff8d6; }
-  .empty { color: #777; padding: 12px; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Shipzora Operations</title>
+<link rel="stylesheet" href="/admin.css">
 </head>
 <body>
-  <h2>Operations <small>· internal · <a href="/debug">debug harness</a></small></h2>
-
-  <h3 id="accountsSection">Account &amp; session management</h3>
-  <p><small>Each account holds one saved, encrypted Website B session. Workflows use these sessions automatically and save the refreshed session back on the same account after a successful run. Cookie values are never shown here.</small></p>
-
-  <button id="btnAdd">Add Account</button>
-  <button id="btnReload">Reload</button>
-
-  <div id="addForm">
-    <div><label>Account name / number</label><input id="newName" placeholder="Account 01" size="30"></div>
-    <div><label>Email</label><input id="newEmail" placeholder="example@email.com" size="30"></div>
-    <div><button id="btnCreate">Get Cookies</button> <button id="btnCancelAdd">Cancel</button></div>
-    <small>Creates the account, then opens a visible Chromium on Website B for you to log in.</small>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="/admin/accounts" aria-label="Shipzora Operations">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="24" height="24" focusable="false"><rect x="3" y="9" width="18" height="14" rx="2" fill="currentColor"/><path d="M21 13h5l3 4v6h-8z" fill="currentColor" opacity=".72"/><circle cx="9" cy="24.5" r="2.6" fill="#fff"/><circle cx="24" cy="24.5" r="2.6" fill="#fff"/><path d="M6 13h9" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9"/></svg>
+      </span>
+      <span class="brand-text"><span class="brand-name">Shipzora</span><span class="brand-sub">Operations</span></span>
+    </a>
+    <nav class="topnav" aria-label="Sections">
+      <a href="#overview">Overview</a>
+      <a href="#accounts">Accounts &amp; Sessions</a>
+      <a href="#verified">Verified Applications</a>
+    </nav>
+    <div class="topbar-right">
+      <span class="meta-pill" id="automationMode" title="Automation browser launch mode (developer setting)">Automation: …</span>
+      <span class="live-dot" id="liveDot" title="Live updates">Live</span>
+    </div>
   </div>
+</header>
 
-  <div id="loginPanel">
-    <b>Waiting for login...</b> — account <span id="loginName"></span><br>
-    <small>Log in to Website B in the Chromium window that opened, make sure the page is fully authenticated, then press Done.</small><br>
-    <small>Browser is on: <span id="loginUrl">…</span></small><br>
-    <button id="btnDone">Done</button> <button id="btnCancelLogin">Cancel</button>
+<main class="page">
+  <div class="toast" id="msg" role="status" aria-live="polite" hidden></div>
+
+  <!-- ===== Overview ===== -->
+  <section id="overview" class="section">
+    <div class="section-head">
+      <div><h1>Overview</h1><p class="section-sub">Onboarding accounts and completed applications, updated live.</p></div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Accounts</div><div class="card-value" id="statAccounts">–</div><div class="card-note" id="statAccountsNote">&nbsp;</div></div>
+      <div class="card"><div class="card-label">Sessions current</div><div class="card-value" id="statCurrent">–</div><div class="card-note" id="statCurrentNote">&nbsp;</div></div>
+      <div class="card"><div class="card-label">Needs attention</div><div class="card-value" id="statAttention">–</div><div class="card-note" id="statAttentionNote">&nbsp;</div></div>
+      <div class="card"><div class="card-label">Verified applicants</div><div class="card-value" id="statVerified">–</div><div class="card-note" id="statVerifiedNote">&nbsp;</div></div>
+    </div>
+  </section>
+
+  <!-- ===== Accounts & sessions ===== -->
+  <section id="accounts" class="section">
+    <div class="section-head">
+      <div><h2>Account &amp; session management</h2><p class="section-sub">Each account holds one saved, encrypted onboarding session. Workflows use these sessions and save the refreshed session back on the same account after a successful run. Cookie values are never shown.</p></div>
+      <div class="section-actions">
+        <button class="btn btn-primary" id="btnAdd" type="button">Add account</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <label class="search"><span class="visually-hidden">Search accounts</span><input id="accountSearch" type="search" placeholder="Search by account name or email" autocomplete="off"></label>
+      <div class="chips" role="group" aria-label="Filter by session">
+        <button type="button" class="chip active" data-filter="all">All</button>
+        <button type="button" class="chip" data-filter="current">Current</button>
+        <button type="button" class="chip" data-filter="attention">Needs attention</button>
+        <button type="button" class="chip" data-filter="expired">Expired</button>
+        <button type="button" class="chip" data-filter="none">Not saved</button>
+      </div>
+      <span class="toolbar-note" id="accountsNote"></span>
+    </div>
+    <div class="table-wrap">
+      <table class="table" id="accountsTable">
+        <thead><tr>
+          <th>Account</th><th>Email</th><th>Session</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th class="th-actions">Actions</th>
+        </tr></thead>
+        <tbody id="rows"><tr><td colspan="8" class="empty">Loading accounts…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== Verified applications ===== -->
+  <section id="verified" class="section">
+    <div class="section-head">
+      <div><h2>Verified applications <span class="count" id="verifiedCount">…</span></h2><p class="section-sub">Applicants whose onboarding reached <strong>verified</strong>. Newest first.</p></div>
+    </div>
+    <div class="toolbar">
+      <label class="search"><span class="visually-hidden">Search verified applications</span><input id="verifiedSearch" type="search" placeholder="Search by name or application ID" autocomplete="off"></label>
+      <span class="toolbar-note" id="verifiedMsg"></span>
+    </div>
+    <div class="vlist" id="verifiedList"></div>
+    <div class="load-more"><button class="btn btn-secondary" id="btnMore" type="button" hidden>Load more</button></div>
+  </section>
+
+  <footer class="page-foot">
+    <span>Shipzora Operations · internal</span>
+    <a class="dev-link" href="/debug">Developer harness</a>
+  </footer>
+</main>
+
+<!-- ===== Add account ===== -->
+<dialog id="dlgAdd" class="dialog">
+  <form method="dialog" class="dialog-body" id="addForm">
+    <h3>Add account</h3>
+    <p class="dialog-sub">Creates the account, then opens a Chromium window on the onboarding site for you to log in. The session is captured when you press Done.</p>
+    <label class="field"><span>Account name or number</span><input id="newName" placeholder="Account 01" autocomplete="off" required></label>
+    <label class="field"><span>Email</span><input id="newEmail" type="email" placeholder="name@example.com" autocomplete="off" required></label>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" id="btnCancelAdd">Cancel</button>
+      <button type="submit" class="btn btn-primary" id="btnCreate">Create and get cookies</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===== Login in progress ===== -->
+<dialog id="dlgLogin" class="dialog">
+  <div class="dialog-body">
+    <h3>Waiting for login</h3>
+    <p class="dialog-sub">Log in to the onboarding site in the Chromium window that opened for <strong id="loginName"></strong>. When the page is fully signed in, press Done to save the session.</p>
+    <div class="login-url"><span>Browser is on</span><code id="loginUrl">…</code></div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" id="btnCancelLogin">Cancel</button>
+      <button type="button" class="btn btn-primary" id="btnDone">Done</button>
+    </div>
   </div>
+</dialog>
 
-  <div id="msg"></div>
-
-  <table>
-    <thead><tr>
-      <th>Account</th><th>Email</th><th>Session</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th>Actions</th>
-    </tr></thead>
-    <tbody id="rows"><tr><td colspan="8">loading…</td></tr></tbody>
-  </table>
-
-  <h3 id="verifiedSection" style="margin-top:32px">Verified applications <span class="badge verified" id="verifiedCount">…</span></h3>
-  <p><small>Applicants whose onboarding reached <b>verified</b> (the success text was seen on Website B after their link was ready). Newest first. Updates live.</small></p>
-  <div class="toolbar">
-    <input id="verifiedSearch" type="search" placeholder="Search by name or application ID" size="40" autocomplete="off">
-    <span id="verifiedMsg"><small></small></span>
+<!-- ===== Remove confirmation ===== -->
+<dialog id="dlgRemove" class="dialog">
+  <div class="dialog-body">
+    <h3>Remove account?</h3>
+    <p class="dialog-sub">This deletes <strong id="removeName"></strong> and its saved session. Verified applications processed with it keep their history.</p>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-secondary" id="btnCancelRemove">Keep account</button>
+      <button type="button" class="btn btn-danger" id="btnConfirmRemove">Remove account</button>
+    </div>
   </div>
-  <div id="verifiedList" class="vlist"></div>
-  <div class="toolbar"><button id="btnMore" style="display:none">Load more</button></div>
-  <script src="/admin.js"></script>
+</dialog>
+
+<!-- ===== Application details ===== -->
+<dialog id="dlgDetails" class="drawer">
+  <div class="drawer-body">
+    <div class="drawer-head">
+      <div><p class="eyebrow">Verified application</p><h3 id="detName"></h3></div>
+      <button type="button" class="icon-btn" id="btnCloseDetails" aria-label="Close">×</button>
+    </div>
+    <dl class="kv" id="detList"></dl>
+  </div>
+</dialog>
+
+<script src="/admin.js"></script>
 </body>
 </html>

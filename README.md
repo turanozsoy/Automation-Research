@@ -69,7 +69,11 @@ The debug harness is an internal developer tool; applicants use the application 
 
 ### Operations page: `/admin/accounts`
 
-One internal page: **Account & session management** (below) and **Verified applications**: every
+Internal page for HR / operations staff (`src/test-a/admin.html`, `admin.css`, `admin.js`; the `/debug`
+harness keeps its plain developer look). Top bar with section links and a small "Automation: Visible |
+Headless" pill; **Overview** cards (accounts, sessions current, needs attention, verified applicants);
+**Account & session management** (search by name or email, session filter chips, Add account in a
+dialog, Refresh / Get cookies, Remove behind a confirmation); and **Verified applications**: every
 application whose link state reached `verified`, newest first, with the total, search by full name or
 application ID (`APP-XXXXXX` or the full id), Copy ID, Load more, and an expandable detail row
 (timestamps, account used, workflow id and outcome, session last saved, job answers). It updates live:

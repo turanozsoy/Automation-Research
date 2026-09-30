@@ -136,8 +136,15 @@ try {
   await noTech('final screen after verification');
   await admin.waitForFunction((name) => document.querySelector('#verifiedList')!.textContent!.includes(name), FULL, { timeout: 15000 }).catch(() => {});
   const adminAfter = await admin.locator('#verifiedList').innerText();
-  check(adminAfter.includes(FULL) && /Processed with: fake/.test(adminAfter) && /Session: Saved \/ Current/.test(adminAfter), 'operations page listed the verified applicant live (no reload), with the account used and session status');
-  check(!adminAfter.split(FULL)[0].includes('Session: Saved / Needs attention') || true, 'session status rendered');
+  const rowText = await admin.locator(`.vrow:has-text("${FULL}")`).first().innerText().catch(() => '');
+  check(adminAfter.includes(FULL) && /Processed with\s*fake/i.test(rowText) && /Session\s*Current/i.test(rowText), 'operations page listed the verified applicant live (no reload), with the account used and session status');
+  await admin.locator(`.vrow:has-text("${FULL}") .details`).first().click();
+  await admin.waitForSelector('#dlgDetails[open]');
+  const det = await admin.locator('#detList').innerText();
+  check(det.includes('Workflow ID') && /Refreshed/.test(det) && !/cookie|storage|482913756|1990/.test(det), 'details drawer shows workflow and session result, no secrets or DOB');
+  await admin.locator('#btnCloseDetails').click();
+  const adminHtml = await admin.content();
+  check(!/482913756|storage_state|"cookies"/.test(adminHtml), 'no secrets in the operations page DOM');
   check(!(await admin.locator('#rows').innerText()).includes(FULL), 'accounts table itself does not get application data');
   await admin.close();
 
@@ -160,7 +167,7 @@ try {
   db.close();
   const dbg = await (await fetch(`${base}/debug`)).text();
   const adm = await (await fetch(`${base}/admin/accounts`)).text();
-  check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications'), '/debug and /admin/accounts still served');
+  check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications') && (await fetch(`${base}/admin.css`)).status === 200, '/debug and /admin/accounts still served');
   check((await fetch(`${base}/debug.html`)).status === 404 && (await fetch(`${base}/index.html`)).status === 404, 'files are not reachable by guessing names');
   check((await fetch(`${base}/privacy`)).status === 200, 'footer placeholder pages respond');
   check(consoleErrors.length === 0, `no page errors${consoleErrors.length ? ': ' + consoleErrors.join(' | ') : ''}`);

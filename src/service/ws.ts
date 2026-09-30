@@ -26,6 +26,7 @@ const PAGES: Record<string, [string, string]> = {
   '/debug.js': [INTERNAL_DIR, 'debug.js'],
   '/admin/accounts': [INTERNAL_DIR, 'admin.html'],
   '/admin.js': [INTERNAL_DIR, 'admin.js'],
+  '/admin.css': [INTERNAL_DIR, 'admin.css'],
 };
 const PLACEHOLDER_PAGES: Record<string, string> = { '/privacy': 'Privacy', '/terms': 'Terms', '/contact': 'Contact' };
 
