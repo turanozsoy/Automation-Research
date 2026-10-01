@@ -34,12 +34,13 @@ const f = (key: string, group: string, label: string, def: string, max = 120, ex
 export const STATIC_FIELDS: ContentField[] = [
   // Landing
   f('landing.pill', 'Landing', 'Earnings pill', 'Earn up to $1,800 / week', 40),
-  f('landing.title', 'Landing', 'Hero headline (one line per row)', 'Drive with Shipzora.\nDeliver Success.', 80, { multiline: true }),
+  f('landing.title', 'Landing', 'Hero headline (one line per row; the word “Shipzora” is shown in yellow)', 'Drive with Shipzora.\nDeliver Success.', 80, { multiline: true }),
   f('landing.subtitle', 'Landing', 'Hero supporting sentence', 'Flexible schedules: Full-time, Part-time, or Students.', 140),
-  f('landing.fact1', 'Landing', 'What you will need — item 1', 'Your contact details and home address.', 100),
-  f('landing.fact2', 'Landing', 'What you will need — item 2', 'Your {n}-digit verification code.', 100, { vars: ['{n}'] }),
-  f('landing.fact3', 'Landing', 'What you will need — item 3', 'A few short questions about your experience and schedule.', 100),
-  f('landing.cta', 'Landing', 'Start button', 'Start Driving With Us', 40),
+  f('landing.trust1', 'Landing', 'Trust row — item 1 (check icon)', 'Progress saved', 24),
+  f('landing.trust2', 'Landing', 'Trust row — item 2 (lock icon)', 'Secure', 24),
+  f('landing.trust3', 'Landing', 'Trust row — item 3 (clock icon)', '5 min', 24),
+  f('landing.cta', 'Landing', 'Start button', 'Start Driving Today', 40),
+  f('landing.copyright', 'Landing', 'Copyright line under the button ({year} = current year)', '© {year} Shipzora', 60, { vars: ['{year}'] }),
   f('landing.welcome.eyebrow', 'Landing', 'Saved application — small label', 'Saved application', 40),
   f('landing.welcome.title', 'Landing', 'Saved application — title (name is appended when known)', 'Welcome back', 40),
   f('landing.welcome.inProgress', 'Landing', 'Saved application — in progress text', 'You have an application in progress. Pick up where you left off.', 160),

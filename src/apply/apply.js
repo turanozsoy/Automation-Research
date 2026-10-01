@@ -28,6 +28,10 @@
     key: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="9" width="18" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 15h.5M12 15h.5M16 15h.5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M8 9V6.5a4 4 0 0 1 8 0V9" fill="none" stroke="currentColor" stroke-width="2"/></svg>',
     list: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7h12M8 12h12M8 17h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M4 7h.5M4 12h.5M4 17h.5" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></svg>',
     save: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 4v5h7V4M8 20v-6h8v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>',
+    cash: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="2"/><path d="M6 12h.5M17.5 12h.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l8 3v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10v-6z" fill="currentColor"/><path d="M8.5 12l2.3 2.3L15.5 9.5" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    lockFill: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2.5" fill="currentColor"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10" fill="none" stroke="currentColor" stroke-width="2.2"/><circle cx="12" cy="15.5" r="1.6" fill="#fff"/></svg>',
+    clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.5" fill="currentColor"/><path d="M12 7v5.5l3.5 2" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
   const US_STATES = [['AL','Alabama'],['AK','Alaska'],['AZ','Arizona'],['AR','Arkansas'],['CA','California'],['CO','Colorado'],['CT','Connecticut'],['DE','Delaware'],['DC','District of Columbia'],['FL','Florida'],['GA','Georgia'],['HI','Hawaii'],['ID','Idaho'],['IL','Illinois'],['IN','Indiana'],['IA','Iowa'],['KS','Kansas'],['KY','Kentucky'],['LA','Louisiana'],['ME','Maine'],['MD','Maryland'],['MA','Massachusetts'],['MI','Michigan'],['MN','Minnesota'],['MS','Mississippi'],['MO','Missouri'],['MT','Montana'],['NE','Nebraska'],['NV','Nevada'],['NH','New Hampshire'],['NJ','New Jersey'],['NM','New Mexico'],['NY','New York'],['NC','North Carolina'],['ND','North Dakota'],['OH','Ohio'],['OK','Oklahoma'],['OR','Oregon'],['PA','Pennsylvania'],['RI','Rhode Island'],['SC','South Carolina'],['SD','South Dakota'],['TN','Tennessee'],['TX','Texas'],['UT','Utah'],['VT','Vermont'],['VA','Virginia'],['WA','Washington'],['WV','West Virginia'],['WI','Wisconsin'],['WY','Wyoming']];
 
@@ -40,8 +44,14 @@
     let s = (config.content && typeof config.content[key] === 'string') ? config.content[key] : '';
     s = s.replace(/\{n\}/g, String(config.verificationCode.length));
     s = s.replace(/\{name\}/g, vars.name !== undefined ? vars.name : '');
+    s = s.replace(/\{year\}/g, String(new Date().getFullYear()));
     return s;
   };
+  /** Hero headline: text nodes per line, with the brand word highlighted (no HTML from the content). */
+  const heroTitle = (text) => text.split('\n').flatMap((line, i) => {
+    const parts = line.split(/(Shipzora\.?)/i).filter(Boolean).map((part) => (/^shipzora\.?$/i.test(part) ? el('span', { class: 'accent', text: part }) : part));
+    return i ? [el('br'), ...parts] : parts;
+  });
   /** Text with line breaks (multiline copy such as the hero headline), built from text nodes. */
   const lines = (text) => text.split('\n').flatMap((l, i) => (i ? [el('br'), l] : [l]));
   let app = null;          // latest ApplicationView from the server
@@ -334,14 +344,14 @@
   function renderLanding(existing) {
     const s = el('section', { class: 'landing' });
     const hero = document.importNode($('#tpl-hero').content, true);
-    hero.querySelector('.hero-pill').textContent = t('landing.pill');
-    hero.querySelector('.hero-title').replaceChildren(...lines(t('landing.title')));
+    hero.querySelector('.hero-pill').append(el('span', { class: 'hero-pill-icon', html: ICON.cash, 'aria-hidden': 'true' }), el('span', { text: t('landing.pill') }));
+    hero.querySelector('.hero-title').replaceChildren(...heroTitle(t('landing.title')));
     hero.querySelector('.hero-sub').textContent = t('landing.subtitle');
-    s.append(hero,
-      el('ul', { class: 'facts', 'aria-label': 'What you will need' },
-        fact(ICON.user, t('landing.fact1')),
-        fact(ICON.key, t('landing.fact2')),
-        fact(ICON.list, t('landing.fact3'))));
+    const trust = (icon, text) => el('li', {}, el('span', { class: 'trust-icon', html: icon, 'aria-hidden': 'true' }), el('span', { text }));
+    s.append(hero, el('ul', { class: 'trust', 'aria-label': 'About this application' }, trust(ICON.shield, t('landing.trust1')), trust(ICON.lockFill, t('landing.trust2')), trust(ICON.clock, t('landing.trust3'))));
+    const legal = () => el('div', { class: 'legal' },
+      el('p', { class: 'copyright', text: t('landing.copyright') }),
+      el('nav', { class: 'legal-links', 'aria-label': 'Legal' }, el('a', { href: '/privacy', text: 'Privacy' }), el('a', { href: '/terms', text: 'Terms' }), el('a', { href: '/contact', text: 'Contact' })));
     const resumable = existing && existing.state !== 'completed';
     if (resumable) {
       const name = existing.fields && existing.fields.firstName;
@@ -351,14 +361,15 @@
         el('p', { text: existing.state === 'link_ready' ? t('landing.welcome.ready') : t('landing.welcome.inProgress') }),
         el('button', { type: 'button', class: 'btn-link', text: t('landing.welcome.new'), onclick: () => startNew().catch(startFailed) })));
       s.append(el('div', { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? t('landing.welcome.view') : t('landing.welcome.resume'), onclick: () => resumeFrom(existing) })));
+        el('button', { type: 'button', class: 'btn btn-primary', text: existing.state === 'link_ready' ? t('landing.welcome.view') : t('landing.welcome.resume'), onclick: () => resumeFrom(existing) }),
+        legal()));
     } else {
       s.append(el('div', { class: 'actions' },
-        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: t('landing.cta'), onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } })));
+        el('button', { type: 'button', class: 'btn btn-primary', id: 'btnStart', text: t('landing.cta'), onclick: (ev) => { ev.target.disabled = true; startNew().catch((e) => { ev.target.disabled = false; startFailed(e); }); } }),
+        legal()));
     }
     return s;
   }
-  const fact = (icon, text) => el('li', {}, el('span', { class: 'fact-icon', html: icon, 'aria-hidden': 'true' }), el('span', { text }));
   const startFailed = () => setNotice(t('notice.startFailed'), 'error');
 
   function renderContact() {
@@ -543,7 +554,7 @@
     root.replaceChildren();
     setProgress();
     document.body.dataset.screen = step === 'landing' ? 'landing' : step === FINAL ? 'status' : 'step';
-    $('#headerContext').textContent = step === 'landing' ? 'Shipzora Careers' : 'Shipzora Application';
+    $('#headerContext').replaceChildren(el('span', { class: 'brand-word', text: 'Shipzora' }), ' ', step === 'landing' ? 'Careers' : 'Application');
     $('#headerBack').hidden = step === 'landing' || step === FINAL || !prevStep(step);
     if (step === 'landing') root.append(renderLanding(landingExisting));
     else if (step === 'contact') root.append(renderContact());
@@ -557,7 +568,6 @@
   async function init() {
     $('#headerBack').addEventListener('click', back);
     window.addEventListener('popstate', onPopState);
-    const y = $('#footerYear'); if (y) y.textContent = String(new Date().getFullYear());
     try { config = await (await fetch('/api/apply/config')).json(); } catch { /* defaults */ }
     landingExisting = await loadExisting();
     const wanted = stepFromPath(location.pathname);

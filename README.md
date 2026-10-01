@@ -263,8 +263,8 @@ verified, automation_ended, service_restarted.
 `src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`; footer
 links `/privacy`, `/terms`, `/contact` are honest placeholders until real pages exist.
 
-Design: mobile-first, 540 px container, white background, black type, red primary action, warm yellow
-accent; tokens live at the top of `apply.css` (`--color-*`, `--radius-*`, `--control-h`, `--shell`). The
+Design: mobile is the authoritative layout (QA at 375, 390 and 430 px wide; desktop only centres the same
+540 px shell), white background, black type, red primary action, warm yellow accent; tokens live at the top of `apply.css` (`--color-*`, `--radius-*`, `--control-h`, `--shell`). The
 shell is the same on every step: header (back arrow + centred title on steps, brand on the landing page),
 4 px red/yellow progress line, "Step n of 7" badge, heading, copy, then a bottom action area with one red
 CTA. Back navigation is the header arrow (`#headerBack`, `aria-label="Back"`). The type face is Inter
@@ -282,7 +282,7 @@ about the application is in the URL. Flow:
 
 | Screen | Saves | Notes |
 |---|---|---|
-| Landing | — | hero (image placeholder: see the comment in `index.html`), earnings pill, Start Driving With Us → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the sticky CTA resumes. |
+| Landing | — | one mobile screen: red/black `SHIPZORA CAREERS` header with a short red/yellow accent, full-width hero image placeholder (see the comment in `index.html`) with a gradient, cash pill, headline with the brand word in yellow, trust row, red CTA with a small copyright line and the legal links beneath it → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the CTA resumes. |
 | 1 About you | firstName, lastName, mobileNumber (digits), email | `autocomplete` given-name / family-name / tel / email |
 | 2 Date of birth | dateOfBirth (ISO) | month / day / year inputs (`bday-*`); copy says it sets up the onboarding record and is not used to evaluate the application |
 | 3 Address | address1, city, state, zip | "Street address" (as on the driver’s license), City, State + ZIP; separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |

@@ -41,7 +41,7 @@ try {
   await h1(/Drive with Shipzora/);
   atPath('/', 'a step URL without an application shows the landing page');
   check((await ctx.cookies(base)).every((c) => c.name !== 'shipzora_session'), 'no application was created by opening a step URL');
-  await p.getByRole('button', { name: 'Start Driving With Us' }).click();
+  await p.getByRole('button', { name: 'Start Driving Today' }).click();
   await h1(/Tell us about yourself/);
   atPath('/step-2', 'first step');
   check((await ctx.cookies(base)).some((c) => c.name === 'shipzora_session' && c.httpOnly), 'HttpOnly session cookie set on start');
