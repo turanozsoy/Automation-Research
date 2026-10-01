@@ -21,7 +21,7 @@ const INTERNAL_DIR = resolve(process.cwd(), 'src/test-a');   // /debug harness +
 const APPLY_DIR = resolve(process.cwd(), 'src/apply');       // the public Shipzora application
 export const APPLY_CONFIG_PATH = resolve(process.cwd(), process.env.APPLY_CONFIG ?? 'config/apply-questions.json');
 const APPLY_CONFIG = APPLY_CONFIG_PATH;
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json' };
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json' };
 
 /** Explicit routes only: nothing under src/ is reachable by guessing a file name. */
 const PAGES: Record<string, [string, string]> = {
