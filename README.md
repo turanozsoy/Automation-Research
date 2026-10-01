@@ -282,7 +282,7 @@ about the application is in the URL. Flow:
 
 | Screen | Saves | Notes |
 |---|---|---|
-| Landing | — | one mobile screen: red/black `SHIPZORA CAREERS` header with a short red/yellow accent, full-width hero image placeholder (see the comment in `index.html`) with a gradient, cash pill, headline with the brand word in yellow, trust row, red CTA with a small copyright line and the legal links beneath it → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the CTA resumes. |
+| Landing | — | one mobile screen: red/black `SHIPZORA CAREERS` header with a short red/yellow accent, full-width hero photo (`src/apply/hero.png` or `hero.jpg`, picked up automatically; dark placeholder until then) with a gradient, cash pill, headline with the brand word in yellow, trust row, red CTA with a small copyright line and the legal links beneath it → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the CTA resumes. |
 | 1 About you | firstName, lastName, mobileNumber (digits), email | `autocomplete` given-name / family-name / tel / email |
 | 2 Date of birth | dateOfBirth (ISO) | month / day / year inputs (`bday-*`); copy says it sets up the onboarding record and is not used to evaluate the application |
 | 3 Address | address1, city, state, zip | "Street address" (as on the driver’s license), City, State + ZIP; separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |

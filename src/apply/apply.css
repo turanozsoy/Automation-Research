@@ -238,12 +238,13 @@ fieldset .error-text { margin-top: 10px; }
   min-height: clamp(380px, calc(100dvh - 282px - env(safe-area-inset-top) - env(safe-area-inset-bottom)), 720px);
   background: #1a1b1e; color: #fff; overflow: hidden; display: flex; align-items: flex-end;
 }
-/* Placeholder surface until the approved image is set: --hero-image: url("/apply/hero.jpg") */
+/* Hero photo: drop the approved image at src/apply/hero.png (or hero.jpg). Layers: the png on top, then the jpg,
+   then the dark placeholder gradient, so a missing file simply falls through to the next layer. */
 .hero-media {
   position: absolute; inset: 0;
   background-color: #2b2d31;
-  background-image: var(--hero-image, linear-gradient(160deg, #3a3c41 0%, #26282c 55%, #1a1b1e 100%));
-  background-size: cover; background-position: center;
+  background-image: url("/apply/hero.png"), url("/apply/hero.jpg"), linear-gradient(160deg, #3a3c41 0%, #26282c 55%, #1a1b1e 100%);
+  background-size: cover; background-position: center top; background-repeat: no-repeat;
 }
 .hero-overlay { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0, 0, 0, 0) 28%, rgba(0, 0, 0, .35) 55%, rgba(0, 0, 0, .82) 100%); }
 .hero-content { position: relative; z-index: 1; padding: 0 var(--gutter) 24px; width: 100%; }
