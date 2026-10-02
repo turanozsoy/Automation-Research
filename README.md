@@ -362,6 +362,16 @@ mode, to `<DATA_DIR>/debug/failures/` (gitignored, `FAILURE_ARTIFACTS=0` disable
 (stage, error code, message, browser mode, page URLs, frame count and frame URLs). Never cookies,
 storageState, or the verification code.
 
+## Reading a run on /debug
+
+`/debug` has a **Live timeline** of every workflow, including ones started by applicants on the public
+site (the harness's own log below it covers only the workflow started from that page). Each submit step is
+announced with `▶ step n/8 "name"` and what it does, and closed with `✓ … done` and its duration. While a
+step waits, a line every ~3 s says how long it has waited, which frames the page has and whether a
+selector exists but is hidden; when a control appears it says in which frame, then `clicking … "button
+text"` and `click done`. Filter by workflow id, step name or text. The same lines are printed by the
+service in its terminal.
+
 ## Developing without the real Website B
 
 `dev/fake-b/` is a throwaway local imitation of Website B with the same selectors

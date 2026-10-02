@@ -31,6 +31,48 @@
 
   window.__pageLog = (text) => log(Date.now(), text, 'local');
 
+  // ---- live timeline of EVERY workflow (applicant-driven ones included); the dev channel broadcasts all of them ----
+  const allEl = $('#all');
+  const allLines = []; // { ts, wf, text, cls }
+  const lastTsByWf = {};
+  let allShown = 0;
+  const allFilter = () => $('#allFilter').value.trim().toLowerCase();
+  const matches = (l) => { const q = allFilter(); return !q || `${l.wf} ${l.text}`.toLowerCase().includes(q); };
+  function renderAllLine(l) {
+    const line = document.createElement('div');
+    line.className = l.cls;
+    const d = lastTsByWf[l.wf] === undefined ? '' : ` (+${l.ts - lastTsByWf[l.wf]} ms)`;
+    lastTsByWf[l.wf] = l.ts;
+    line.innerHTML = `<span class="wf">[${l.wf.slice(0, 8)}]</span> ${fmt(l.ts)} — ${escapeHtml(l.text)}${d}`;
+    allEl.appendChild(line);
+  }
+  const escapeHtml = (t) => String(t).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  function allLog(ts, wf, text, cls = 'srv') {
+    const l = { ts, wf: wf || 'service', text, cls };
+    allLines.push(l);
+    if (allLines.length > 3000) allLines.shift();
+    if (matches(l)) { renderAllLine(l); allShown++; }
+    $('#allCount').textContent = `${allShown} line${allShown === 1 ? '' : 's'}`;
+    if ($('#allFollow').checked) allEl.scrollTop = allEl.scrollHeight;
+  }
+  function allRerender() {
+    allEl.innerHTML = ''; allShown = 0; for (const k of Object.keys(lastTsByWf)) delete lastTsByWf[k];
+    for (const l of allLines) if (matches(l)) { renderAllLine(l); allShown++; }
+    $('#allCount').textContent = `${allShown} line${allShown === 1 ? '' : 's'}`;
+    allEl.scrollTop = allEl.scrollHeight;
+  }
+  $('#allFilter').addEventListener('input', allRerender);
+  $('#allClear').onclick = () => { allLines.length = 0; allRerender(); };
+  function allFromMessage(m) {
+    if (m.type === 'event') { if (m.name.startsWith('state →')) return; const step = /^[▶✓] /.test(m.name); allLog(m.ts, m.workflowId, `${m.name}${m.detail ? ` — ${m.detail}` : ''}`, step ? 'step' : /still waiting|still on the form/.test(m.name) ? 'warn' : /failed|error/i.test(m.name) ? 'err' : 'srv'); }
+    else if (m.type === 'state') allLog(m.ts, m.workflowId, `state → ${m.state}${m.detail ? ` — ${m.detail}` : ''}`, 'state');
+    else if (m.type === 'paused') allLog(m.ts, m.workflowId, `PAUSED at step "${m.step}": ${m.code} — ${m.message}`, 'err');
+    else if (m.type === 'error') allLog(m.ts, m.workflowId, `ERROR ${m.code}: ${m.message}`, 'err');
+    else if (m.type === 'result') allLog(m.ts, m.workflowId, `RESULT ${m.url} (via ${m.source})`, 'ack');
+    else if (m.type === 'field.ack') allLog(m.ts, m.workflowId, `Website B ${m.field} updated (${m.filledAt - m.sentAt} ms)`, 'ack');
+    else if (m.type === 'field.error') allLog(m.ts, m.workflowId, `field ${m.field} error: ${m.code} — ${m.message}`, 'err');
+  }
+
   function setState(s, detail) {
     state = s;
     $('#state').textContent = s;
@@ -59,6 +101,7 @@
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.type === 'pool.status') { showPool(m.pool); return; }
+    allFromMessage(m);
     // The acceptance is the message that tells this page its workflow id, so it must pass before the ownership filter.
     if (m.type === 'workflow.accepted' && !workflowId) { /* handled below */ }
     else if (!mine(m)) return;
