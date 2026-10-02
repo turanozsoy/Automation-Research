@@ -233,15 +233,16 @@ export class Workflow {
   private submitCtx: { snapshot: Record<string, string>; requestedAt: number } | null = null;
   private stepIndex = 0;
   /**
-   * Which checkout path the race in 'checkout-route' chose:
-   * 'agree' = 4 → optional 5 → 6 → 7; 'secondary' = 7 only (previously-used account: 4, 5 and 6 never appear);
-   * 'direct' = 6 → 7 (fallback: the primary button showed up before Step 4 or Step 7).
+   * Which checkout path the race in 'checkout-route' chose (priority 4, 7, 5, 6):
+   * 'agree' = 4 → optional 5 → 6 → 7; 'secondary' = 7 only (4, 5 and 6 never appear);
+   * 'toggle' = 5 → 6 → 7 (the toggle screen opened without an Agree button);
+   * 'direct' = 6 → 7 (the primary button showed up without Agree, secondary or toggle).
    */
-  private checkoutPath: 'agree' | 'secondary' | 'direct' | null = null;
+  private checkoutPath: 'agree' | 'secondary' | 'toggle' | 'direct' | null = null;
   private stepNames(): string[] {
-    // Checkout after the submit click (Step 3): Step 4 (Agree) and Step 7 (secondary button) are raced in
-    // 'checkout-route'; a previously-used account skips Steps 4, 5 and 6 and lands on Step 7 directly. When
-    // Step 7 wins there it is clicked at once and 'checkout-toggle', 'primary' and 'secondary' are no-ops.
+    // Checkout after the submit click (Step 3): 'checkout-route' races Steps 4, 7, 5 and 6 (in that priority) in
+    // every frame; whichever is visible first decides the path. A previously-used account may land on Step 7
+    // directly (then 4/5/6 are skipped) or on the toggle / primary screen (then 4 is skipped).
     return ['reconcile', 'address', 'submit-click', 'checkout-route', 'checkout-toggle', 'primary', 'secondary', 'capture-url'];
   }
 
@@ -287,7 +288,7 @@ export class Workflow {
     'reconcile': 'compare every Website B field with the final snapshot and re-fill any that differ',
     'address': 'verify the finalised address (and repair it if Website B changed it)',
     'submit-click': 'Step 3: click the submit button, then watch for field errors or the next screen',
-    'checkout-route': 'Step 4 vs Step 7: search every frame for the Agree button and the secondary button at the same time; click whichever shows first (primary button is the fallback)',
+    'checkout-route': 'race Steps 4, 7, 5 and 6 (priority in that order): search every frame for the Agree button, the secondary button, the toggle and the primary button at the same time; whichever is visible first decides the path',
     'checkout-toggle': 'Step 5: look for the toggle and the primary button together; turn the toggle OFF if it is on',
     'primary': 'Step 6: click the primary button',
     'secondary': 'Step 7: click the secondary button',
@@ -368,17 +369,19 @@ export class Workflow {
         throw new AutomationError('FIELD_FILL_FAILED', `Website B still reports field errors after ${fe.maxRetries + 1} submit attempt(s)`);
       }
       case 'checkout-route': {
-        // Step 3 is done. A previously-used account never shows Steps 4 (Agree), 5 (toggle) or 6 (primary): it
-        // lands on Step 7 (secondary button) directly. So this is a race between Step 4 and Step 7, searching
-        // every frame: whichever is visible first decides the path. There is no wait for Step 4 followed by a
-        // fallback. The primary button is a third, lower-priority candidate so a checkout that opens on Step 6
-        // without an Agree screen is still handled (6 → 7) instead of timing out.
+        // Step 3 is done. Depending on the account, the checkout may open on Step 4 (Agree), straight on Step 7
+        // (secondary button), or on the toggle / primary screen (Steps 5/6). All four controls are searched in
+        // every frame at the same time; the first one visible decides the path. Priority when several are
+        // visible in the same check: 4, then 7, then 5, then 6. No waiting for one step followed by a fallback.
         const agree = this.cfg.checkout.agreeButton;
+        const toggle = this.cfg.checkout.toggle;
         const primary = this.cfg.checkout.primaryButton;
         const secondary = this.cfg.checkout.secondaryButton;
         if (!agree) { this.checkoutPath = 'agree'; this.tl.mark('no Agree button configured', 'continuing with the toggle and primary steps'); return; }
-        const candidates = this.cfg.checkout.agreeOptional ? [agree, secondary, primary] : [agree];
-        this.tl.mark('racing checkout controls', `Step 4 = ${agree}  |  Step 7 = ${secondary}${this.cfg.checkout.agreeOptional ? `  |  Step 6 = ${primary}` : ' (agreeOptional=false: Step 4 only)'}  —  up to ${this.cfg.timeouts.checkoutStep} ms${this.cfg.checkout.frameUrlIncludes ? `, frames filtered by "${this.cfg.checkout.frameUrlIncludes}"` : ''}`);
+        const candidates = this.cfg.checkout.agreeOptional ? [agree, secondary, toggle, primary] : [agree];
+        this.tl.mark('racing checkout controls', this.cfg.checkout.agreeOptional
+          ? `priority 4, 7, 5, 6 — Step 4 = ${agree}  |  Step 7 = ${secondary}  |  Step 5 = ${toggle}  |  Step 6 = ${primary}  —  up to ${this.cfg.timeouts.checkoutStep} ms${this.cfg.checkout.frameUrlIncludes ? `, frames filtered by "${this.cfg.checkout.frameUrlIncludes}"` : ''}`
+          : `agreeOptional=false: Step 4 only (${agree}) — up to ${this.cfg.timeouts.checkoutStep} ms`);
         const hit = await this.siteB.findFrameWithAny(candidates, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
         if (hit.selector === agree) {
           this.checkoutPath = 'agree';
@@ -387,10 +390,16 @@ export class Workflow {
           return;
         }
         if (hit.selector === secondary) {
-          // Step 7 appeared before Step 4: Steps 4, 5 and 6 are skipped for this account; click Step 7 now.
+          // Step 7 appeared without Step 4: Steps 4, 5 and 6 are skipped for this account; click Step 7 now.
           this.checkoutPath = 'secondary';
           this.tl.mark('Agree and continue not present: secondary button visible first', 'Steps 4, 5 and 6 skipped for this account');
           await this.clickSecondary(hit.frame);
+          return;
+        }
+        if (hit.selector === toggle) {
+          // The toggle screen opened without an Agree button: Step 4 skipped; Step 5 handles the toggle next, then 6, then 7.
+          this.checkoutPath = 'toggle';
+          this.tl.mark('Agree and continue not present: toggle visible first', 'Step 4 skipped for this account; toggle, then primary, then secondary');
           return;
         }
         this.checkoutPath = 'direct';

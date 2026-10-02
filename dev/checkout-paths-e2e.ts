@@ -1,12 +1,13 @@
 /**
- * Checkout navigation after the submit click (Step 3): Step 4 (Agree) and Step 7 (secondary button) are raced.
+ * Checkout navigation after the submit click (Step 3): Steps 4 (Agree), 7 (secondary), 5 (toggle) and 6 (primary) are raced.
  *   Path A (fresh account):            3 → 4 → 5 → 6 → 7
  *   Path B (previously-used account):  3 → 7        (Steps 4, 5 and 6 never appear)
+ *   Toggle first (opens on 5):         3 → 5 → 6 → 7 (no Agree screen, toggle screen first)
  *   Fallback (checkout opens on 6):    3 → 6 → 7    (no Agree screen, primary button first)
- * Path B must prove the automation does not sit waiting for Step 4 while Step 7 is already visible.
- * The fake Website B takes a last name containing RETURNING as "previously-used account" for that applicant
- * only (RETURNING6: the variant whose checkout opens on the primary button).
- *   npm run fake-b   +   npm run start:fake (three imported fake accounts), then:
+ * Race priority is 4, 7, 5, 6. Path B must prove the automation does not sit waiting for Step 4 while Step 7
+ * is already visible. The fake Website B takes a last name containing RETURNING as "previously-used account"
+ * for that applicant only (RETURNING5: opens on the toggle screen; RETURNING6: opens on the primary button).
+ *   npm run fake-b   +   npm run start:fake (four imported fake accounts), then:
  *   npm run e2e:checkout
  */
 import Database from 'better-sqlite3';
@@ -73,9 +74,11 @@ function ordered(a: Applicant, names: string[]): boolean {
 const fresh = await start('Paula', 'Fresh');
 const returning = await start('Rhea', 'RETURNINGaccount');
 const opensOnSix = await start('Sam', 'RETURNING6account');
+const opensOnFive = await start('Tess', 'RETURNING5account');
 const linkA = await waitView(fresh, (v) => v.generatedUrl !== null, 120_000, 'fresh applicant link');
 const linkB = await waitView(returning, (v) => v.generatedUrl !== null, 120_000, 'returning applicant link');
 const linkC = await waitView(opensOnSix, (v) => v.generatedUrl !== null, 120_000, 'opens-on-six applicant link');
+const linkD = await waitView(opensOnFive, (v) => v.generatedUrl !== null, 120_000, 'opens-on-five applicant link');
 await sleep(300);
 
 console.log('[e2e:checkout] Path A (fresh account): 3 → 4 → 5 → 6 → 7');
@@ -97,10 +100,16 @@ check(ordered(opensOnSix, ['Website B submit clicked', 'Agree and continue not p
 check(!has(opensOnSix, 'Agree and continue clicked') && !has(opensOnSix, 'toggle inspected'), 'no Agree click, no toggle inspection on the fallback path');
 const submitToPrimary = tsOf(opensOnSix, 'primary clicked')! - tsOf(opensOnSix, 'Website B submit clicked')!;
 check(submitToPrimary < PROMPT_MS, `Step 6 clicked ${submitToPrimary} ms after the submit click (bound ${PROMPT_MS} ms)`);
-check(!paused.some((p) => [fresh, returning, opensOnSix].some((a) => p.startsWith(workflowOf(a)))), 'no workflow paused');
+console.log('[e2e:checkout] Toggle first (checkout opens on the toggle screen, no Agree): 3 → 5 → 6 → 7');
+check(/\/test\/it-worked\//.test(linkD.generatedUrl!), `opens-on-five applicant got a generated link (${linkD.generatedUrl})`);
+check(ordered(opensOnFive, ['Website B submit clicked', 'Agree and continue not present: toggle visible first', 'checkbox unchecked', 'primary clicked', 'secondary clicked', 'generated URL detected']), 'Step 3, toggle turned off (5), primary (6), secondary (7), URL — Step 4 skipped');
+check(!has(opensOnFive, 'Agree and continue clicked'), 'no Agree click on the toggle-first path');
+const submitToToggle = tsOf(opensOnFive, 'checkbox unchecked')! - tsOf(opensOnFive, 'Website B submit clicked')!;
+check(submitToToggle < PROMPT_MS, `toggle handled ${submitToToggle} ms after the submit click (bound ${PROMPT_MS} ms)`);
+check(!paused.some((p) => [fresh, returning, opensOnSix, opensOnFive].some((a) => p.startsWith(workflowOf(a)))), 'no workflow paused');
 
 console.log('[e2e:checkout] all applicants reach the role details');
-for (const a of [fresh, returning, opensOnSix]) {
+for (const a of [fresh, returning, opensOnSix, opensOnFive]) {
   a.ws.send(JSON.stringify({ ts: Date.now(), type: 'app.link_opened' }));
   const done = await waitView(a, (v) => v.state === 'completed', 90_000, `${a.name} completed`);
   check(done.linkState === 'verified', `${a.name}: link visited and verified`);

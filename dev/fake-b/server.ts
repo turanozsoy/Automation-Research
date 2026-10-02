@@ -117,9 +117,10 @@ createServer((req, res) => {
           const lastName = document.getElementById('last-name').value;
           const returningAccount = ${returning} || /RETURNING/.test(lastName);
           const opensOnPrimary = /RETURNING6/.test(lastName);
+          const opensOnToggle = /RETURNING5/.test(lastName); // toggle + primary screen, no Agree
           document.getElementById('checkout').innerHTML = '<p>Loading terms…</p>';
           if (${noAgree}) { setTimeout(() => { document.getElementById('checkout').innerHTML = '<iframe src="/checkout"></iframe>'; }, 900); return; }
-          if (returningAccount) { setTimeout(() => { document.getElementById('checkout').innerHTML = opensOnPrimary ? '<iframe src="/checkout?returning=1"></iframe>' : '<iframe src="/checkout/step2"></iframe>'; }, 900); return; }
+          if (returningAccount) { setTimeout(() => { document.getElementById('checkout').innerHTML = opensOnToggle ? '<iframe src="/checkout"></iframe>' : opensOnPrimary ? '<iframe src="/checkout?returning=1"></iframe>' : '<iframe src="/checkout/step2"></iframe>'; }, 900); return; }
           setTimeout(() => {
             document.getElementById('checkout').innerHTML = '<p>Terms…</p><button type="button" aria-label="Agree and continue" id="agree">I agree</button>';
             document.getElementById('agree').onclick = () => {
