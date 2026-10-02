@@ -4,11 +4,13 @@ import type { Vault } from '../crypto.js';
 
 /**
  * Egress = where a workflow's traffic leaves from. `direct` (the server's own IP) is the first row and
- * never holds credentials. Proxy rows are exclusive sessions: max_concurrent (1 by default) live
- * workflows at a time, and after use they are HELD until an operator releases them.
+ * never holds credentials. Proxy rows are exclusive sessions bound to ONE account: the first workflow (or
+ * login capture) on an account takes an unused proxy and binds it (profiles.egress_id); every later run on
+ * that account reuses the same proxy, so the provider never sees the account on a new session. After use the
+ * proxy is HELD for its account; only the operator's Release clears the binding and returns it to the pool.
  *
- *   available -> in_use -> held -> (Release) -> available
- *   available/held -> down     (health / workflow network failures; needs Restore)
+ *   available (unbound) -> in_use (bound) -> held (bound) -> in_use (same account) ... -> (Release) -> available (unbound)
+ *   available/held -> down     (health / workflow network failures; keeps its binding; needs Restore)
  *   any (not in_use) -> retired (Retire; needs Reinstate)
  *
  * Credentials are stored with the same envelope encryption as sessions and never leave this module
@@ -31,6 +33,8 @@ export interface EgressRow {
 /** What the operations page may see. Never a username or password. */
 export interface EgressMeta {
   id: string; label: string; kind: EgressKind; host: string | null; port: number | null; hasAuth: boolean;
+  /** The account this proxy is bound to (null for direct and for unbound proxies). */
+  boundTo: { id: string; label: string; since: number | null } | null;
   maxConcurrent: number; holdAfterUse: boolean; state: EgressState; stateReason: string | null;
   health: EgressHealth; lastCheckAt: number | null; lastError: string | null; consecutiveFailures: number;
   useCount: number; lastUsedAt: number | null; heldSince: number | null; releasedAt: number | null;
@@ -136,9 +140,16 @@ export class EgressStore {
     return rows.map((r) => this.meta(r, r.live, r.last_wf, r.last_wf_at));
   }
 
+  /** The account a proxy is bound to, if any. */
+  boundAccount(id: string): { id: string; label: string; since: number | null } | null {
+    const r = this.db.prepare('SELECT id, label, egress_bound_at FROM profiles WHERE egress_id = ?').get(id) as { id: string; label: string; egress_bound_at: number | null } | undefined;
+    return r ? { id: r.id, label: r.label, since: r.egress_bound_at } : null;
+  }
+
   meta(r: EgressRow, live = 0, lastWf: string | null = null, lastWfAt: number | null = null): EgressMeta {
     return {
       id: r.id, label: r.label, kind: r.kind, host: r.host, port: r.port, hasAuth: !!r.has_auth,
+      boundTo: r.kind === 'direct' ? null : this.boundAccount(r.id),
       maxConcurrent: r.max_concurrent, holdAfterUse: !!r.hold_after_use, state: r.state, stateReason: r.state_reason,
       health: r.health, lastCheckAt: r.last_check_at, lastError: r.last_error, consecutiveFailures: r.consecutive_failures,
       useCount: r.use_count, lastUsedAt: r.last_used_at, heldSince: r.held_since, releasedAt: r.released_at,
@@ -158,13 +169,55 @@ export class EgressStore {
 
   // ---------- allocation (called INSIDE ProfileStore.reserve's transaction) ----------
 
-  /** One allocatable egress: available, below its concurrency cap, proxies before direct, least recently used first. */
+  /**
+   * One UNUSED allocatable egress: available, not bound to any account, below its concurrency cap, proxies
+   * before direct, least recently used first. Bound proxies are never handed to another account.
+   */
   pickAvailable(directAllowed: boolean): string | null {
     const row = this.db.prepare(`SELECT e.id FROM egress e
       WHERE e.state = 'available' ${directAllowed ? '' : "AND e.kind != 'direct'"}
+        AND NOT EXISTS (SELECT 1 FROM profiles p WHERE p.egress_id = e.id)
         AND (SELECT COUNT(*) FROM assignments a WHERE a.egress_id = e.id AND a.state IN ${LIVE}) < e.max_concurrent
       ORDER BY CASE WHEN e.kind = 'direct' THEN 1 ELSE 0 END, e.last_used_at ASC NULLS FIRST, e.created_at ASC LIMIT 1`).get() as { id: string } | undefined;
     return row?.id ?? null;
+  }
+
+  /**
+   * The egress an account must use: its bound proxy when it has one (reusable while available or held and not
+   * down / retired / in use), else an unused proxy, which is then bound to the account, else direct when allowed.
+   * `blocked` says why a bound account cannot run right now (its proxy is down, retired or in use) — the caller
+   * must NOT allocate another proxy for it.
+   */
+  pickForAccount(profileId: string, directAllowed: boolean): { id: string; bound: 'reused' | 'new' | 'direct' } | { id: null; blocked: string | null } {
+    const p = this.db.prepare('SELECT egress_id FROM profiles WHERE id = ?').get(profileId) as { egress_id: string | null } | undefined;
+    if (p?.egress_id) {
+      const e = this.get(p.egress_id);
+      if (!e) { this.db.prepare('UPDATE profiles SET egress_id = NULL, egress_bound_at = NULL WHERE id = ?').run(profileId); }
+      else if (e.state === 'available' || e.state === 'held') {
+        const live = (this.db.prepare(`SELECT COUNT(*) n FROM assignments a WHERE a.egress_id = ? AND a.state IN ${LIVE}`).get(e.id) as { n: number }).n;
+        if (live < e.max_concurrent) return { id: e.id, bound: 'reused' };
+        return { id: null, blocked: `its proxy ${e.label} is in use` };
+      } else return { id: null, blocked: `its proxy ${e.label} is ${e.state === 'in_use' ? 'in use' : e.state}` };
+    }
+    const fresh = this.pickAvailable(directAllowed);
+    if (!fresh) return { id: null, blocked: null };
+    if (fresh === DIRECT_ID) return { id: fresh, bound: 'direct' };
+    this.bind(fresh, profileId);
+    return { id: fresh, bound: 'new' };
+  }
+
+  /** Bind a proxy to an account (one proxy per account, one account per proxy; enforced by the unique index). */
+  bind(egressId: string, profileId: string): void {
+    const now = Date.now();
+    this.db.prepare('UPDATE profiles SET egress_id = ?, egress_bound_at = ?, updated_at = ? WHERE id = ?').run(egressId, now, now, profileId);
+    const acct = this.boundAccount(egressId);
+    this.event(egressId, null, 'bound', `bound to account ${acct?.label ?? profileId}`);
+  }
+
+  /** The proxy bound to an account, if any. */
+  boundEgressOf(profileId: string): EgressRow | null {
+    const p = this.db.prepare('SELECT egress_id FROM profiles WHERE id = ?').get(profileId) as { egress_id: string | null } | undefined;
+    return p?.egress_id ? this.get(p.egress_id) ?? null : null;
   }
 
   markInUse(id: string, workflowId: string): void {
@@ -179,15 +232,16 @@ export class EgressStore {
   }
 
   /**
-   * Take one egress exclusively for something that is not a workflow (the manual login capture browser).
-   * Same rules as allocation; the session is in_use until releaseExclusive(), then held.
+   * Take the account's egress exclusively for something that is not a workflow (the manual login capture
+   * browser): the account's bound proxy, else an unused proxy that becomes bound, else direct when allowed.
+   * The session is in_use until releaseExclusive(), then held for the account.
    */
-  acquireExclusive(directAllowed: boolean, tag: string): string | null {
+  acquireExclusive(profileId: string, directAllowed: boolean, tag: string): { id: string } | { id: null; blocked: string | null } {
     return this.db.transaction(() => {
-      const id = this.pickAvailable(directAllowed);
-      if (!id) return null;
-      this.markInUse(id, tag);
-      return id;
+      const pick = this.pickForAccount(profileId, directAllowed);
+      if (!pick.id) return pick;
+      this.markInUse(pick.id, tag);
+      return { id: pick.id };
     })();
   }
 
@@ -195,27 +249,52 @@ export class EgressStore {
     this.markUsed(id, tag, reason);
   }
 
-  /** The workflow that used it ended: a session is HELD until an operator releases it; direct stays available. */
+  /** The workflow that used it ended: the session is HELD for its account (the binding stays); direct stays available. */
   markUsed(id: string, workflowId: string, reason: string): void {
     const r = this.get(id);
     if (!r || !r.hold_after_use || r.state !== 'in_use') return;
     const now = Date.now();
-    this.db.prepare("UPDATE egress SET state='held', held_since=?, state_reason=?, updated_at=? WHERE id=?").run(now, `after workflow (${reason})`, now, id);
+    const acct = this.boundAccount(id);
+    this.db.prepare("UPDATE egress SET state='held', held_since=?, state_reason=?, updated_at=? WHERE id=?").run(now, `held for ${acct ? acct.label : 'its account'} (${reason})`, now, id);
     this.event(id, 'in_use', 'held', reason, workflowId);
   }
 
   // ---------- operator actions ----------
 
-  /** Release (held), Restore (down) or Reinstate (retired): back to available. Never from in_use. */
+  /**
+   * Release (held): clears the account binding and returns the proxy to the unused pool — only after the operator
+   * confirmed with the provider that the session may be reused elsewhere. Restore (down) / Reinstate (retired):
+   * back into rotation, keeping the binding so the account keeps its proxy. Never from in_use.
+   */
   release(id: string, by = 'operator'): EgressMeta {
     const r = this.get(id);
     if (!r) throw new Error('egress not found');
     if (r.state === 'in_use') throw new Error('this egress is attached to a running workflow');
-    if (r.state === 'available') return this.meta(r);
     const now = Date.now();
-    this.db.prepare("UPDATE egress SET state='available', state_reason=NULL, held_since=NULL, released_at=?, consecutive_failures=0, health=CASE WHEN health='down' THEN 'unknown' ELSE health END, updated_at=? WHERE id=?").run(now, now, id);
-    this.event(id, r.state, 'available', `released by ${by}`);
+    const acct = this.boundAccount(id);
+    if (r.state === 'held') {
+      this.db.prepare("UPDATE egress SET state='available', state_reason=NULL, held_since=NULL, released_at=?, updated_at=? WHERE id=?").run(now, now, id);
+      if (acct) {
+        this.db.prepare('UPDATE profiles SET egress_id = NULL, egress_bound_at = NULL, updated_at = ? WHERE id = ?').run(now, acct.id);
+        this.event(id, 'held', 'available', `released by ${by}: unbound from account ${acct.label}`);
+      } else this.event(id, 'held', 'available', `released by ${by}`);
+      return this.meta(this.get(id)!);
+    }
+    if (r.state === 'available') return this.meta(r);
+    // down / retired -> back into rotation: held when bound to an account, available when unbound
+    const next: EgressState = acct && r.kind !== 'direct' ? 'held' : 'available';
+    this.db.prepare("UPDATE egress SET state=?, state_reason=?, held_since=CASE WHEN ?='held' THEN COALESCE(held_since, ?) ELSE NULL END, released_at=?, consecutive_failures=0, health=CASE WHEN health='down' THEN 'unknown' ELSE health END, updated_at=? WHERE id=?")
+      .run(next, next === 'held' ? `held for ${acct!.label}` : null, next, now, now, now, id);
+    this.event(id, r.state, next, `${r.state === 'down' ? 'restored' : 'reinstated'} by ${by}${acct ? ` (still bound to ${acct.label})` : ''}`);
     return this.meta(this.get(id)!);
+  }
+
+  /** Remove the binding without touching the proxy (used when an account is deleted). */
+  unbindAccount(profileId: string, reason: string): void {
+    const e = this.boundEgressOf(profileId);
+    if (!e) return;
+    this.db.prepare('UPDATE profiles SET egress_id = NULL, egress_bound_at = NULL WHERE id = ?').run(profileId);
+    this.event(e.id, null, 'unbound', reason);
   }
 
   retire(id: string, by = 'operator'): EgressMeta {
@@ -233,6 +312,7 @@ export class EgressStore {
     if (!r) throw new Error('egress not found');
     if (r.kind === 'direct') throw new Error('the direct egress cannot be removed; retire it instead');
     if (r.state === 'in_use') throw new Error('this egress is attached to a running workflow');
+    this.db.prepare('UPDATE profiles SET egress_id = NULL, egress_bound_at = NULL WHERE egress_id = ?').run(id);
     this.db.prepare('DELETE FROM egress_events WHERE egress_id = ?').run(id);
     this.db.prepare('DELETE FROM egress WHERE id = ?').run(id);
   }

@@ -69,9 +69,9 @@
     <div class="table-wrap">
       <table class="table" id="accountsTable">
         <thead><tr>
-          <th>Account</th><th>Email</th><th>Session</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th class="th-actions">Actions</th>
+          <th>Account</th><th>Email</th><th>Session</th><th>Proxy</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th class="th-actions">Actions</th>
         </tr></thead>
-        <tbody id="rows"><tr><td colspan="8" class="empty">Loading accounts…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="9" class="empty">Loading accounts…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -79,14 +79,14 @@
   <!-- ===== Proxy egress ===== -->
   <section id="egress" class="section">
     <div class="section-head">
-      <div><h2>Proxy egress <span class="count" id="egressCount">…</span></h2><p class="section-sub">Each proxy session is used by one browser at a time. After a workflow it is <strong>held</strong> until you release it; a session marked down or retired is never allocated until you restore it. Credentials are stored encrypted and never shown.</p></div>
+      <div><h2>Proxy egress <span class="count" id="egressCount">…</span></h2><p class="section-sub">Each proxy is bound to <strong>one account</strong> the first time that account runs (or opens a login browser) and is reused by that account from then on, so the provider never sees the account on a new session. After a run it is <strong>held</strong> for its account. <strong>Release proxy</strong> clears the binding and returns it to the unused pool: do that only after confirming with the provider that the session can be reused. Down or retired proxies keep their account until restored. Credentials are stored encrypted and never shown.</p></div>
       <div class="section-actions"><button class="btn btn-primary" id="btnAddProxies" type="button">Add proxies</button></div>
     </div>
     <div class="toolbar"><span class="toolbar-note" id="egressNote"></span></div>
     <div class="table-wrap">
       <table class="table" id="egressTable">
-        <thead><tr><th>Proxy</th><th>Status</th><th>Health</th><th>Used</th><th class="th-actions">Actions</th></tr></thead>
-        <tbody id="egressRows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+        <thead><tr><th>Proxy</th><th>Account</th><th>Status</th><th>Health</th><th>Used</th><th class="th-actions">Actions</th></tr></thead>
+        <tbody id="egressRows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
       </table>
     </div>
   </section>

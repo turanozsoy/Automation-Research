@@ -37,11 +37,13 @@ export class LoginSessionManager {
     if (existing && !existing.page.isClosed()) return this.status(accountId);
     if (existing) await this.close(accountId);
 
-    // The capture browser leaves through one exclusively held egress, like a workflow: a proxy session if one is
-    // available (held afterwards until released), else direct when allowed. Never silently the server IP otherwise.
+    // The capture browser leaves through the ACCOUNT's egress, like a workflow: its bound proxy (reused), else an
+    // unused proxy that becomes bound to this account (held afterwards), else direct when allowed. Never another
+    // account's proxy, never silently the server IP.
     const tag = `login:${accountId}`;
-    const egressId = this.store.egress.acquireExclusive(this.store.isDirectAllowed(), tag);
-    if (!egressId) throw new Error('No egress available for the login browser: release a proxy session (or reinstate Direct) and try again');
+    const acquired = this.store.egress.acquireExclusive(accountId, this.store.isDirectAllowed(), tag);
+    if (acquired.id === null) throw new Error(acquired.blocked ? `This account cannot open a browser right now: ${acquired.blocked}. Restore or release its proxy first.` : 'No unused proxy for this account: add proxies, release one you have confirmed with the provider, or reinstate Direct');
+    const egressId = acquired.id;
     const proxy = this.store.egress.proxyOptions(egressId);
     // Visible by default; LOGIN_HEADLESS=1 exists only for automated tests.
     const headless = process.env.LOGIN_HEADLESS === '1';

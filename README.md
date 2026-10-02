@@ -116,15 +116,23 @@ saved · expired.
 ### Proxy egress
 
 Where a workflow's traffic leaves from is an **egress**. `Direct (server IP)` is the first row and is
-what every workflow used until now. Proxy rows are **exclusive sessions**: `max_concurrent` (1) live
-workflows at a time, and after a workflow they are **held** until an operator presses *Release proxy*
-on the operations page, after checking with the provider that the session may be reused. Lifecycle:
+shared. Proxy rows are **exclusive sessions bound to one account**: the first workflow (or login
+capture) on an account takes an *unused* proxy and binds it to that account (`profiles.egress_id`,
+migration 8; one proxy per account, one account per proxy); every later run and every login capture on
+that account reuses the same proxy, so the provider never sees the account on a new session. After a
+run the proxy is **held** for its account. Finishing a workflow or closing a browser never clears the
+binding; only *Release proxy* on the operations page does, after checking with the provider that the
+session may be reused elsewhere. Lifecycle:
 
 ```
-available → in_use → held → (Release proxy) → available
-available / held → down            three failed health checks or network failures; needs Restore
-any (not in use) → retired         Retire; needs Reinstate
+available (unused) → in_use (bound to account A) → held (for A) → in_use (A again) … → (Release proxy) → available (unused)
+available / held → down            three failed health checks or network failures; keeps its account; needs Restore
+any (not in use) → retired         Retire; keeps its account; needs Reinstate
 ```
+
+An account whose proxy is down, retired or in use is skipped by the allocator (never handed another
+proxy) until the operator restores or releases that proxy; the operations page shows the proxy on the
+account row and the account on the proxy row.
 
 - **Import** on `/admin/accounts` → *Add proxies*: one per line as `host:port:username:password`
   (the username may carry provider parameters), `host:port`, or `http://user:pass@host:port`.
@@ -132,9 +140,9 @@ any (not in use) → retired         Retire; needs Reinstate
   never stored twice (fingerprint of kind, host, port and credentials).
 - **Credentials** are encrypted with the same envelope encryption as sessions and only ever reach
   Playwright's context options. The API, the page, logs, events and sockets carry host:port only.
-- **Allocation** is one SQLite transaction with the account: an allocatable egress (available, below
-  its cap; proxies before direct, least recently used first) must exist before the account is
-  reserved. Both or neither. The egress is fixed for the workflow's lifetime and recorded on the
+- **Allocation** is one SQLite transaction: accounts are tried bound-first, least recently used; each
+  account gets its own bound proxy, else one unused proxy (bound on the spot), else direct when
+  allowed. Both resources or neither. The egress is fixed for the workflow's lifetime and recorded on the
   assignment (`egress_id`); verified applications show it in their details.
 - **Health**: an active probe through each proxy every `EGRESS_CHECK_INTERVAL_MS` (60 s) against
   `EGRESS_CHECK_URL` (default Website B's base URL), plus passive failures when a workflow cannot open

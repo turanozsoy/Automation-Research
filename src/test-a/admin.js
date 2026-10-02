@@ -86,10 +86,10 @@
     const list = visibleAccounts();
     $('#accountsNote').textContent = accounts.length ? `${list.length} of ${accounts.length} account${accounts.length === 1 ? '' : 's'}` : '';
     if (!accounts.length) {
-      tb.innerHTML = '<tr><td colspan="8" class="empty"><strong>No onboarding accounts yet.</strong>Add an account to capture its session; workflows will use it automatically.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="9" class="empty"><strong>No onboarding accounts yet.</strong>Add an account to capture its session; workflows will use it automatically.</td></tr>';
       return;
     }
-    if (!list.length) { tb.innerHTML = '<tr><td colspan="8" class="empty"><strong>No accounts match.</strong>Try another search or filter.</td></tr>'; return; }
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="9" class="empty"><strong>No accounts match.</strong>Try another search or filter.</td></tr>'; return; }
     for (const a of list) {
       const tr = document.createElement('tr');
       tr.dataset.accountId = a.id;
@@ -101,6 +101,7 @@
         <td data-label="Account"><span class="acct-name">${esc(a.name)}</span>${loginOpen ? '<span class="sub">Login browser open</span>' : ''}</td>
         <td data-label="Email">${esc(a.email)}</td>
         <td data-label="Session">${badge(SESSION, a.sessionStatus)}${sessionSub}</td>
+        <td data-label="Proxy">${a.proxy ? `<span class="mono">${esc(a.proxy.label)}</span><span class="sub">${esc((EGRESS_STATE[a.proxy.state] || [0, a.proxy.state])[1])}${a.proxy.since ? ' · bound ' + esc(ago(a.proxy.since)) : ''}</span>` : '<span class="sub">none yet</span>'}</td>
         <td data-label="Status">${badge(STATUS, a.status)}</td>
         <td data-label="Created">${when(a.createdAt)}</td>
         <td data-label="Last session update">${when(a.sessionSavedAt)}</td>
@@ -265,8 +266,10 @@
       : e.stateReason ? `<span class="sub">${esc(e.stateReason)}</span>` : '';
     const healthBadge = isDirect ? '<span class="sub">—</span>' : badge(EGRESS_HEALTH, e.health);
     const healthSub = isDirect ? '' : `<span class="sub">${e.lastCheckAt ? 'checked ' + esc(ago(e.lastCheckAt)) : 'not checked yet'}${e.lastError ? ' · ' + esc(e.lastError) : ''}</span>`;
+    const bound = isDirect ? '<span class="sub">shared</span>' : e.boundTo ? `<span class="acct-name">${esc(e.boundTo.label)}</span><span class="sub">bound ${esc(e.boundTo.since ? human(e.boundTo.since) : '')}</span>` : '<span class="sub">unused</span>';
     tr.innerHTML = `
       <td data-label="Proxy"><span class="acct-name">${esc(e.label)}</span>${where}</td>
+      <td data-label="Account">${bound}</td>
       <td data-label="Status">${stateBadge}${stateSub}</td>
       <td data-label="Health">${healthBadge}${healthSub}</td>
       <td data-label="Used">${e.useCount} run${e.useCount === 1 ? '' : 's'}<span class="sub">${e.lastUsedAt ? 'last ' + esc(human(e.lastUsedAt)) : 'never'}</span></td>
@@ -274,7 +277,7 @@
     const actions = tr.lastElementChild;
     const btn = (text, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = fn; actions.appendChild(b); return b; };
     const act = async (path, method, okMsg) => { try { await api(path, { method }); if (okMsg) msg(okMsg); await loadEgress(); } catch (err) { msg(err.message, true); } };
-    if (e.state === 'held') btn('Release proxy', 'btn btn-primary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} released to the pool.`));
+    if (e.state === 'held') btn('Release proxy', 'btn btn-primary btn-sm', () => { if (confirm(`Release ${e.label}${e.boundTo ? ` from ${e.boundTo.label}` : ''}?\n\nThis clears the account binding and makes the proxy available to a different account. Only do this after the provider confirms the session can be reused.`)) act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} released${e.boundTo ? ` from ${e.boundTo.label}` : ''} and back in the unused pool.`); });
     if (e.state === 'down') btn('Restore', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} restored.`));
     if (e.state === 'retired') btn('Reinstate', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} reinstated.`));
     if (!isDirect) btn('Check now', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/check`, 'POST'));

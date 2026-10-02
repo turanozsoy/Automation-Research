@@ -13,6 +13,7 @@ export interface ProfileRow {
   needs_verify: number; cooldown_until: number | null; last_verified_at: number | null; last_used_at: number | null;
   use_count: number; consecutive_failures: number; state_reason: string | null; created_at: number; updated_at: number;
   session_saved_at: number | null; proxy_json: string | null; session_note: string | null;
+  egress_id: string | null; egress_bound_at: number | null;
 }
 
 /** Safe, cookie-free view of an account for Website A's management page. */
@@ -28,6 +29,8 @@ export interface AccountMeta {
   sessionStatus: 'none' | 'current' | 'attention' | 'expired';
   sessionNote: string | null;
   lastWorkflowAt: number | null; lastUrl: string | null; stateReason: string | null;
+  /** The proxy this account is bound to (reused for every run and login capture until the operator releases it). */
+  proxy: { id: string; label: string; state: string; since: number | null } | null;
 }
 export interface AssignmentRow {
   workflow_id: string; profile_id: string; state: AssignmentState; instance_id: string; lease_expires_at: number;
@@ -116,6 +119,7 @@ export class ProfileStore {
       sessionStatus: r.session_saved_at === null ? 'none' : r.state === 'expired' || r.state === 'invalid' ? 'expired' : r.needs_verify || r.session_note ? 'attention' : 'current',
       sessionNote: r.session_note,
       lastWorkflowAt: wfAt, lastUrl: wfUrl, stateReason: r.state_reason,
+      proxy: (() => { const e = this.egress.boundEgressOf(r.id); return e ? { id: e.id, label: e.label, state: e.state, since: r.egress_bound_at } : null; })(),
     };
   }
 
@@ -139,6 +143,8 @@ export class ProfileStore {
     return this.db.prepare('SELECT * FROM profiles ORDER BY created_at').all() as ProfileRow[];
   }
   remove(id: string): void {
+    // the account's proxy stays held (the provider may still count the session); the operator releases it explicitly
+    this.egress.unbindAccount(id, 'account removed');
     this.db.prepare('DELETE FROM assignments WHERE profile_id = ?').run(id);
     this.db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
   }
@@ -196,27 +202,30 @@ export class ProfileStore {
       const existing = this.getAssignment(workflowId);
       if (existing && LIVE.includes(existing.state)) return { profile: this.get(existing.profile_id)!, assignment: existing };
 
-      // Both resources or neither: an egress must be allocatable before the account is touched.
-      const egressId = this.egress.pickAvailable(this.directAllowed);
-      if (!egressId) return null;
-
-      const row = this.db.prepare(`
-        UPDATE profiles SET state='reserved', last_used_at=?, use_count=use_count+1, updated_at=?
-        WHERE id = (
-          SELECT id FROM profiles
-          WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)
-          ORDER BY last_used_at ASC NULLS FIRST, created_at ASC
-          LIMIT 1
-        )
-        RETURNING *`).get(now, now, now) as ProfileRow | undefined;
-      if (!row) return null;
-
-      this.db.prepare(`INSERT INTO assignments (workflow_id,profile_id,state,instance_id,lease_expires_at,client_ip,egress_id,application_id,lease_token,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(workflowId, row.id, 'allocating', this.instanceId, now + leaseMs, clientIp ?? null, egressId, applicationId ?? null, randomBytes(16).toString('hex'), now, now);
-      this.egress.markInUse(egressId, workflowId);
-      this.event(row.id, 'available', 'reserved', 'allocated', workflowId);
-      this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}, egress ${this.egress.get(egressId)?.label ?? egressId}`);
-      return { profile: row, assignment: this.getAssignment(workflowId)! };
+      // Account first, then ITS egress: an account bound to a proxy reuses that proxy (never a new one); an unbound
+      // account takes one unused proxy and binds it; direct only when allowed. An account whose proxy is down,
+      // retired or in use is skipped, never given another proxy. Both resources or neither.
+      const candidates = this.db.prepare(`
+        SELECT id FROM profiles
+        WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)
+        ORDER BY CASE WHEN egress_id IS NOT NULL THEN 0 ELSE 1 END, last_used_at ASC NULLS FIRST, created_at ASC`).all(now) as { id: string }[];
+      for (const c of candidates) {
+        const pick = this.egress.pickForAccount(c.id, this.directAllowed);
+        if (pick.id === null) {
+          if (pick.blocked) this.event(c.id, null, 'skipped', `cannot run: ${pick.blocked}`, workflowId);
+          continue;
+        }
+        const row = this.db.prepare(`UPDATE profiles SET state='reserved', last_used_at=?, use_count=use_count+1, updated_at=? WHERE id=? AND state='available' RETURNING *`).get(now, now, c.id) as ProfileRow | undefined;
+        if (!row) continue;
+        this.db.prepare(`INSERT INTO assignments (workflow_id,profile_id,state,instance_id,lease_expires_at,client_ip,egress_id,application_id,lease_token,created_at,updated_at)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(workflowId, row.id, 'allocating', this.instanceId, now + leaseMs, clientIp ?? null, pick.id, applicationId ?? null, randomBytes(16).toString('hex'), now, now);
+        this.egress.markInUse(pick.id, workflowId);
+        this.event(row.id, 'available', 'reserved', 'allocated', workflowId);
+        const egressLabel = this.egress.get(pick.id)?.label ?? pick.id;
+        this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}, egress ${egressLabel} (${pick.bound === 'reused' ? 'the account\'s own proxy, reused' : pick.bound === 'new' ? 'unused proxy, now bound to this account' : 'direct'})`);
+        return { profile: row, assignment: this.getAssignment(workflowId)! };
+      }
+      return null;
     })();
   }
 

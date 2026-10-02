@@ -181,6 +181,12 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  // 8: an account is bound to one proxy egress on first use and keeps it until an operator releases the proxy
+  `
+  ALTER TABLE profiles ADD COLUMN egress_id TEXT;
+  ALTER TABLE profiles ADD COLUMN egress_bound_at INTEGER;
+  CREATE UNIQUE INDEX profiles_egress_binding ON profiles(egress_id) WHERE egress_id IS NOT NULL;
+  `,
 ];
 
 export function openDb(path: string): Db {

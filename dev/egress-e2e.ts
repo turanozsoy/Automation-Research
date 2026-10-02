@@ -122,12 +122,15 @@ console.log('[e2e:egress] 1b. login capture takes a session exclusively');
   check(used > 0, `the capture browser's traffic went through the session (${used} requests)`);
   await api(`/api/accounts/${acct.id}/login/cancel`, { method: 'POST' });
   await sleep(800);
-  const held = await byLabel(st.body.egress);
-  check(held.state === 'held', 'the session is held after the capture, not returned to the pool');
+  const held = (await egressList()).egress.find((e) => e.label === st.body.egress)! as any;
+  check(held.state === 'held' && held.boundTo?.id === acct.id, `the session is held for ${acct.label} (bound to the account), not returned to the pool`);
+  const acctMeta = ((await api('/api/accounts')).body.accounts as any[]).find((a) => a.id === acct.id);
+  check(acctMeta?.proxy?.id === held.id, 'the account lists its proxy');
   await api(`/api/admin/egress/${held.id}/release`, { method: 'POST' });
+  check((await byLabel(st.body.egress) as any).boundTo === null, 'Release clears the binding');
 }
 
-console.log('[e2e:egress] 2. exclusive use, held after use, release serves the queue');
+console.log('[e2e:egress] 2. one proxy per account: bound on first use, reused afterwards, held in between, unbound only by Release');
 const direct = await byLabel('Direct (server IP)');
 await api(`/api/admin/egress/${direct.id}/retire`, { method: 'POST' });
 check((await byLabel('Direct (server IP)')).state === 'retired', 'direct egress retired: every workflow must use a proxy session');
@@ -148,20 +151,28 @@ const s1b = await stats(P1.control), s2b = await stats(P2.control);
 // Chromium answers a proxy's 407 challenge on the first request, so the fake proxy counts one auth failure per session; what matters is that requests then went through.
 check(s1b.requests > s1a.requests && s2b.requests > s2a.requests, `both proxies carried authenticated traffic (${s1b.requests - s1a.requests} and ${s2b.requests - s2a.requests} requests)`);
 check(A.egressUsed() !== B.egressUsed() && A.egressUsed() !== null, `A and B used different sessions`);
-await sleep(1500);
+await sleep(1200);
 {
   const l = await egressList();
-  check(l.egress.filter((e) => e.kind !== 'direct').every((e) => e.state === 'held') && l.counts.available === 0, 'both sessions HELD after use; not returned to the pool');
-  check(C.view?.state === 'processing' && C.view.automation.phase === 'preparing', 'C still waiting: no session is allocatable while held');
+  const proxies = l.egress.filter((e) => e.kind !== 'direct') as any[];
+  check(proxies.every((e) => e.state === 'held' || e.state === 'in_use') && l.counts.available === 0, 'both sessions HELD for their accounts after use; not returned to the pool');
+  const bindings = db.prepare('SELECT id, label, egress_id FROM profiles WHERE egress_id IS NOT NULL').all() as { id: string; label: string; egress_id: string }[];
+  check(bindings.length === 2 && new Set(bindings.map((b) => b.egress_id)).size === 2, 'exactly two accounts are bound, each to its own proxy (the other three accounts got none)');
+  const acctOf = (wf: string | null) => wf ? (db.prepare('SELECT profile_id FROM assignments WHERE workflow_id = ?').get(wf) as { profile_id: string } | undefined)?.profile_id ?? null : null;
+  check(bindings.some((b) => b.id === acctOf(A.workflowId()) && b.egress_id === A.egressUsed()) && bindings.some((b) => b.id === acctOf(B.workflowId()) && b.egress_id === B.egressUsed()), 'A and B each ran on the account their proxy is bound to');
   const waiting = db.prepare("SELECT COUNT(*) n FROM application_events WHERE application_id = ? AND type = 'automation_waiting_for_capacity'").get(C.id) as { n: number };
-  check(waiting.n >= 1, 'C recorded as waiting for capacity');
-  const held = l.egress.find((e) => e.state === 'held')!;
-  const rel = await api(`/api/admin/egress/${held.id}/release`, { method: 'POST' });
-  check(rel.status === 200 && rel.body.state === 'available', `operator released ${held.label}`);
+  check(waiting.n >= 1, 'C waited: the three unbound accounts were never given a bound proxy, and no unused proxy existed');
+  // C runs as soon as a BOUND account leaves cooldown: same account, same proxy, no release and no new proxy consumed
   const rc = await C.finish();
-  check(rc.state === 'completed' && C.egressUsed() === held.id, 'C got the released session and completed');
-  await sleep(1500);
-  check((await byLabel(held.label)).state === 'held', 'the released session is held again after C');
+  const cAcct = acctOf(C.workflowId()), cEgress = C.egressUsed();
+  check(rc.state === 'completed' && !!cEgress && bindings.some((b) => b.id === cAcct && b.egress_id === cEgress), `C completed by REUSING a bound account and its proxy (${proxies.find((e) => e.id === cEgress)?.label}) — no release needed`);
+  check((db.prepare('SELECT COUNT(*) n FROM profiles WHERE egress_id IS NOT NULL').get() as { n: number }).n === 2, 'still exactly two bindings after C');
+  await sleep(1200);
+  const held = (await egressList()).egress.find((e) => e.id === cEgress)! as any;
+  check(held.state === 'held' && held.boundTo?.id === cAcct, 'the reused proxy is held for the same account again');
+  const rel = await api(`/api/admin/egress/${held.id}/release`, { method: 'POST' });
+  check(rel.status === 200 && rel.body.state === 'available' && rel.body.boundTo === null, `operator released ${held.label}: unbound and back in the unused pool`);
+  check(((await api('/api/accounts')).body.accounts as any[]).find((a) => a.id === cAcct)?.proxy === null, 'the account no longer lists a proxy');
 }
 
 console.log('[e2e:egress] 3. health takes a proxy down; a failing proxy fails only its workflow');
@@ -185,7 +196,9 @@ console.log('[e2e:egress] 3. health takes a proxy down; a failing proxy fails on
   check(p2after.state === 'held' && p2after.consecutiveFailures >= 1 && p2after.health !== 'healthy', `the failing session is held with a recorded failure (health ${p2after.health})`);
   await setDown(P1.control, false); await setDown(P2.control, false);
   await api(`/api/admin/egress/${p1.id}/release`, { method: 'POST' });
-  check((await byLabel('127.0.0.1:3100')).state === 'available', 'Restore returns a down session to the pool');
+  check((await byLabel('127.0.0.1:3100')).state === 'available', 'Restore returns an unbound down session to the pool');
+  // D's account keeps its (failed) proxy until the operator releases it; release it so E's fresh account takes the restored P1
+  await api(`/api/admin/egress/${p2.id}/release`, { method: 'POST' });
   const E = new Applicant('Erin', '321321321');
   await E.start();
   const re = await E.finish();
@@ -198,6 +211,7 @@ console.log('[e2e:egress] 3b. slow proxy: waits are scaled, the workflow complet
   const slowUp = await fetch(`${P3.control}/stats`).then(() => true).catch(() => false);
   if (!slowUp) console.log('  (skipped: no fake proxy with --delay on 3102)');
   else {
+    for (const e of (await egressList()).egress.filter((x) => x.kind !== 'direct' && x.state === 'held')) await api(`/api/admin/egress/${e.id}/release`, { method: 'POST' });
     for (const e of (await egressList()).egress.filter((x) => x.kind !== 'direct' && x.state === 'available')) await api(`/api/admin/egress/${e.id}/retire`, { method: 'POST' });
     const imp = await api('/api/admin/egress', { method: 'POST', body: JSON.stringify({ line: P3.line }) });
     check(imp.body.added === 1, 'slow proxy imported');
