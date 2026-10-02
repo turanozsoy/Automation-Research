@@ -450,16 +450,20 @@ export class SiteB {
     // here until the timeout.
     const nextSels = [this.cfg.checkout.agreeButton, this.cfg.checkout.toggle, this.cfg.checkout.primaryButton, this.cfg.checkout.secondaryButton].filter((x): x is string => !!x);
     const firstField = Object.keys(this.cfg.fields)[0];
-    const deadline = Date.now() + timeout;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeout;
+    this.tl.mark('watching the page after submit', `up to ${timeout} ms for: a checkout control (Agree / toggle / primary / secondary) in any frame → "advanced"; the form gone → "form-gone"; a red field → "errors"`);
+    let lastProgress = startedAt;
     while (Date.now() < deadline) {
+      if (Date.now() - lastProgress > 3000) { this.tl.mark('still on the form after submit', `${Math.round((Date.now() - startedAt) / 100) / 10} s; frames: ${this.page.frames().map((f) => f.url() || 'about:blank').join(', ')}`); lastProgress = Date.now(); }
       for (const f of this.page.frames()) {
         for (const sel of nextSels) {
           const visible = await f.locator(sel).filter({ visible: true }).count().catch(() => 0);
-          if (visible > 0) return { outcome: 'advanced', errors: [] };
+          if (visible > 0) { this.tl.mark('page advanced after submit', `${sel} visible in ${f === this.page.mainFrame() ? 'main page' : 'iframe ' + f.url()} after ${Date.now() - startedAt} ms`); return { outcome: 'advanced', errors: [] }; }
         }
       }
       const formHere = await this.page.locator(this.cfg.fields[firstField].selectors.join(', ')).filter({ visible: true }).count().then((c) => c > 0).catch(() => false);
-      if (!formHere) return { outcome: 'form-gone', errors: [] };
+      if (!formHere) { this.tl.mark('form left the page after submit', `${Date.now() - startedAt} ms`); return { outcome: 'form-gone', errors: [] }; }
       const errors = await this.fieldsWithErrors();
       if (errors.length) return { outcome: 'errors', errors };
       await new Promise((r) => setTimeout(r, 250));
@@ -514,7 +518,12 @@ export class SiteB {
   async findFrameWithAny(selectors: string[], timeout: number, code: import('../shared/messages.js').ErrorCode): Promise<{ frame: Frame; selector: string }> {
     const page = this.page;
     const urlFilter = this.cfg.checkout.frameUrlIncludes;
-    const deadline = Date.now() + timeout;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeout;
+    const frameName = (f: Frame) => (f === page.mainFrame() ? 'main page' : `iframe ${f.url() || 'about:blank'}`);
+    const short = (sel: string) => (sel.length > 60 ? sel.slice(0, 57) + '…' : sel);
+    let lastProgress = startedAt;
+    let lastSummary = '';
 
     return new Promise<{ frame: Frame; selector: string }>((resolve, reject) => {
       let settled = false;
@@ -530,26 +539,40 @@ export class SiteB {
       const check = async () => {
         if (settled || checking) return;
         checking = true;
+        // per selector: how many matches exist anywhere (attached) even if none is visible yet — says "it is there but hidden"
+        const attached: Record<string, number> = {};
         try {
           for (const f of page.frames()) {
             if (settled) return;
             if (urlFilter && !f.url().includes(urlFilter)) continue;
             for (const selector of selectors) {
               try {
-                if (await f.locator(selector).filter({ visible: true }).first().isVisible()) {
+                const loc = f.locator(selector);
+                if (await loc.filter({ visible: true }).first().isVisible()) {
                   cleanup();
+                  this.tl.mark(`found ${short(selector)}`, `visible in ${frameName(f)} after ${Date.now() - startedAt} ms`);
                   resolve({ frame: f, selector });
                   return;
                 }
+                attached[selector] = (attached[selector] ?? 0) + (await loc.count().catch(() => 0));
               } catch { /* frame detached mid-check */ }
             }
           }
         } finally {
           checking = false;
         }
-        if (!settled && Date.now() > deadline) {
+        if (settled) return;
+        // narrate the wait every ~3 s (or at once when the picture changes) so /debug shows what the script sees
+        const frames = page.frames().map((f) => frameName(f)).join(', ');
+        const summary = `frames: ${frames}; present but not visible: ${Object.entries(attached).filter(([, n]) => n > 0).map(([sel, n]) => `${short(sel)} ×${n}`).join(', ') || 'none'}`;
+        if (summary !== lastSummary || Date.now() - lastProgress > 3000) {
+          this.tl.mark(`still waiting for ${selectors.map(short).join(' | ')}`, `${Math.round((Date.now() - startedAt) / 100) / 10} s of ${timeout / 1000} s — ${summary}`);
+          lastProgress = Date.now();
+          lastSummary = summary;
+        }
+        if (Date.now() > deadline) {
           cleanup();
-          reject(new AutomationError(code, `No frame showed ${selectors.join(' | ')} within ${timeout} ms (frames: ${page.frames().map(f => f.url() || 'about:blank').join(', ')})`));
+          reject(new AutomationError(code, `No frame showed ${selectors.join(' | ')} within ${timeout} ms (${summary})`));
         }
       };
       const kick = () => { void check(); };
@@ -624,8 +647,13 @@ export class SiteB {
   /** Click the first visible button matching `selector` inside `frame` (Playwright waits for it to be enabled). */
   async clickInFrame(frame: Frame, selector: string, code: import('../shared/messages.js').ErrorCode): Promise<void> {
     const loc = frame.locator(selector).filter({ visible: true }).first();
+    const where = frame === this.page.mainFrame() ? 'main page' : `iframe ${frame.url() || 'about:blank'}`;
+    const label = await loc.innerText({ timeout: 1000 }).then((t) => t.trim().replace(/\s+/g, ' ').slice(0, 40)).catch(() => '');
+    this.tl.mark(`clicking ${selector.length > 60 ? selector.slice(0, 57) + '…' : selector}`, `${label ? `"${label}" ` : ''}in ${where}; waits for it to be enabled and unobstructed, up to ${this.cfg.timeouts.checkoutStep} ms`);
+    const t0 = Date.now();
     try {
       await loc.click({ timeout: this.cfg.timeouts.checkoutStep });
+      this.tl.mark('click done', `${Date.now() - t0} ms`);
     } catch (e) {
       throw new AutomationError(code, `Could not click ${selector}: ${msg(e)}`);
     }

@@ -282,12 +282,27 @@ export class Workflow {
     await this.runSteps();
   }
 
+  /** What each submit step does, for the /debug timeline. */
+  private static readonly STEP_WHAT: Record<string, string> = {
+    'reconcile': 'compare every Website B field with the final snapshot and re-fill any that differ',
+    'address': 'verify the finalised address (and repair it if Website B changed it)',
+    'submit-click': 'Step 3: click the submit button, then watch for field errors or the next screen',
+    'checkout-route': 'Step 4 vs Step 7: search every frame for the Agree button and the secondary button at the same time; click whichever shows first (primary button is the fallback)',
+    'checkout-toggle': 'Step 5: look for the toggle and the primary button together; turn the toggle OFF if it is on',
+    'primary': 'Step 6: click the primary button',
+    'secondary': 'Step 7: click the secondary button',
+    'capture-url': 'wait for the generated role-details URL (navigation, anchor or text)',
+  };
+
   private async runSteps(): Promise<void> {
     const names = this.stepNames();
     while (this.stepIndex < names.length) {
       const name = names[this.stepIndex];
+      const startedAt = Date.now();
+      this.tl.mark(`▶ step ${this.stepIndex + 1}/${names.length} "${name}"`, Workflow.STEP_WHAT[name] ?? '');
       try {
         await this.runStep(name);
+        this.tl.mark(`✓ step "${name}" done`, `${Date.now() - startedAt} ms`);
         this.stepIndex++;
       } catch (e) {
         const ae = toAutomationError(e);
@@ -363,6 +378,7 @@ export class Workflow {
         const secondary = this.cfg.checkout.secondaryButton;
         if (!agree) { this.checkoutPath = 'agree'; this.tl.mark('no Agree button configured', 'continuing with the toggle and primary steps'); return; }
         const candidates = this.cfg.checkout.agreeOptional ? [agree, secondary, primary] : [agree];
+        this.tl.mark('racing checkout controls', `Step 4 = ${agree}  |  Step 7 = ${secondary}${this.cfg.checkout.agreeOptional ? `  |  Step 6 = ${primary}` : ' (agreeOptional=false: Step 4 only)'}  —  up to ${this.cfg.timeouts.checkoutStep} ms${this.cfg.checkout.frameUrlIncludes ? `, frames filtered by "${this.cfg.checkout.frameUrlIncludes}"` : ''}`);
         const hit = await this.siteB.findFrameWithAny(candidates, this.cfg.timeouts.checkoutStep, 'AGREE_NOT_FOUND');
         if (hit.selector === agree) {
           this.checkoutPath = 'agree';
