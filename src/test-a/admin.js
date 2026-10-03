@@ -325,6 +325,13 @@
     $('#verifiedCount').textContent = `${j.total} verified`;
     $('#statVerified').textContent = vq ? vtotal : j.total;
     $('#statVerifiedNote').textContent = j.items[0] ? `Latest ${human(j.items[0].verifiedAt).toLowerCase()}` : 'None yet';
+    const w = j.waitStats;
+    if (w && w.withLink) {
+      const secs = (ms) => (ms === null ? '—' : `${Math.round(ms / 1000)} s`);
+      $('#statWait').textContent = `${secs(w.avgWaitMs)} avg`;
+      $('#statWaitNote').textContent = `p90 ${secs(w.p90WaitMs)} · ${w.leftDuringWait} of ${w.withLink} left the screen while waiting · ${w.neverOpened} never opened the link`;
+      $('#statWait').closest('.card').classList.toggle('attention', w.withLink >= 5 && w.leftDuringWait / w.withLink > 0.3);
+    } else { $('#statWait').textContent = '–'; $('#statWaitNote').textContent = 'No links prepared yet'; }
     const fresh = new Set();
     for (const it of j.items) { fresh.add(it.id); $('#verifiedList').appendChild(renderVerified(it, known.size > 0 && !known.has(it.id))); }
     for (const id of fresh) known.add(id);
@@ -378,6 +385,14 @@
     row('Session after this run', it.sessionResult === 'failed' ? badge({ f: ['warn', 'SESSION_PERSIST_FAILED'] }, 'f') : it.sessionResult === 'refreshed' ? badge({ r: ['ok', 'Refreshed'] }, 'r') : '—');
     row('Workflow ID', `<code>${esc(it.workflowId || '—')}</code>`);
     row('Workflow outcome', esc(it.workflowOutcome || '—'));
+    if (it.wait) {
+      const w = it.wait;
+      const secs = (ms) => (ms === null ? '—' : `${Math.round(ms / 1000)} s`);
+      row('Waited for the link', w.waitedMs === null ? '—' : `${secs(w.waitedMs)} after the code was handed over`);
+      row('Left the waiting screen', w.left ? `${badge({ y: ['warn', 'Yes'] }, 'y')} <span class="sub">after ${secs(w.leftAfterMs)}${w.cameBack ? ', came back' : ', did not come back while waiting'}</span>` : badge({ n: ['ok', 'No'] }, 'n'));
+      row('Page open when link became ready', w.unattendedAtReady ? badge({ n: ['warn', 'No'] }, 'n') : badge({ y: ['ok', 'Yes'] }, 'y'));
+      row('Opened the link', w.openedLink ? badge({ y: ['ok', 'Yes'] }, 'y') : badge({ n: ['warn', 'Not yet'] }, 'n'));
+    }
     row('Egress', it.egress ? esc(it.egress.label) : '—');
     group('Answers');
     const answers = Object.entries(it.answers || {});

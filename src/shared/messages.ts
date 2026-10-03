@@ -114,7 +114,10 @@ export type ApplicationEventType =
   | 'application_started' | 'step_viewed' | 'step_completed' | 'fields_updated' | 'information_required' | 'validation_failed' | 'address_completed'
   | 'automation_started' | 'automation_waiting_for_capacity' | 'automation_ready' | 'automation_phase_changed' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
   | 'generated_link_ready' | 'final_step_reached' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted'
-  | 'session_refreshed' | 'session_persist_failed';
+  | 'session_refreshed' | 'session_persist_failed'
+  // waiting-screen analytics: the applicant saw the preparing screen, left it (tab hidden or page closed), came back;
+  // link_ready_unattended = the link became ready while no applicant socket was connected
+  | 'wait_shown' | 'wait_hidden' | 'wait_visible' | 'link_ready_unattended';
 
 /** Everything an applicant is allowed to see about their own application. */
 export interface ApplicationView {
@@ -164,8 +167,10 @@ export interface AppAddressCompletedMsg { type: 'app.address_completed'; ts: num
 export interface AppVerifyMsg { type: 'app.verify'; ts: number; code: string }
 /** The applicant clicked the final call to action that opens the generated link. */
 export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
+/** The applicant is waiting for the role-details link: the waiting screen was shown, left (tab hidden / page closed) or shown again. */
+export interface AppWaitMsg { type: 'app.wait'; ts: number; event: 'shown' | 'hidden' | 'visible'; elapsedMs?: number }
 export interface AppPingMsg { type: 'ping'; ts: number }
-export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppPingMsg;
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppWaitMsg | AppPingMsg;
 
 // ---- service -> applicant ----
 /** Full safe snapshot; sent on connect and after every change. */

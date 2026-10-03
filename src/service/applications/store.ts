@@ -161,6 +161,29 @@ export class ApplicationStore {
       VALUES (?,?,?,?,?,?,?,?,?,?)`).run(id, o.workflowId ?? null, type, o.step ?? null, o.stage ?? null, o.code ?? null, o.message ?? null, o.detail ?? null, o.retryCount ?? null, Date.now());
   }
 
+  /**
+   * How the wait for the role-details link affects applicants (operations page). Over applications whose link
+   * became ready: how long they waited (from the moment the code was handed over), how many left the waiting
+   * screen, how many were not on the page when the link became ready, how many never opened the link.
+   */
+  waitStats(): { withLink: number; avgWaitMs: number | null; p90WaitMs: number | null; leftDuringWait: number; cameBack: number; unattendedAtReady: number; neverOpened: number } {
+    const waits = (this.db.prepare(`
+      SELECT a.id, a.generated_url_ready_at AS ready,
+        (SELECT MIN(at) FROM application_events e WHERE e.application_id = a.id AND e.type = 'verification_received') AS code_at,
+        (SELECT MIN(at) FROM application_events e WHERE e.application_id = a.id AND e.type = 'address_completed') AS addr_at
+      FROM applications a WHERE a.generated_url_ready_at IS NOT NULL`).all() as { id: string; ready: number; code_at: number | null; addr_at: number | null }[])
+      .map((r) => r.ready - (r.code_at ?? r.addr_at ?? r.ready)).filter((ms) => ms >= 0).sort((a, b) => a - b);
+    const count = (type: string) => (this.db.prepare(`SELECT COUNT(DISTINCT e.application_id) n FROM application_events e JOIN applications a ON a.id = e.application_id WHERE e.type = ? AND a.generated_url_ready_at IS NOT NULL`).get(type) as { n: number }).n;
+    const withLink = (this.db.prepare('SELECT COUNT(*) n FROM applications WHERE generated_url_ready_at IS NOT NULL').get() as { n: number }).n;
+    const neverOpened = (this.db.prepare('SELECT COUNT(*) n FROM applications WHERE generated_url_ready_at IS NOT NULL AND final_link_clicked_at IS NULL').get() as { n: number }).n;
+    return {
+      withLink,
+      avgWaitMs: waits.length ? Math.round(waits.reduce((a, b) => a + b, 0) / waits.length) : null,
+      p90WaitMs: waits.length ? waits[Math.min(waits.length - 1, Math.floor(waits.length * 0.9))] : null,
+      leftDuringWait: count('wait_hidden'), cameBack: count('wait_visible'), unattendedAtReady: count('link_ready_unattended'), neverOpened,
+    };
+  }
+
   events(id: string, limit = 50): ApplicationEventRow[] {
     return this.db.prepare('SELECT * FROM application_events WHERE application_id = ? ORDER BY id DESC LIMIT ?').all(id, limit) as ApplicationEventRow[];
   }

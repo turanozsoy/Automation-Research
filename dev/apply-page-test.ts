@@ -156,7 +156,16 @@ try {
   await h1(/role details/i);
   const firstTitle = await p.locator('main h1').innerText();
   console.log(`  final screen first shows: "${firstTitle}"`);
-  if (/Preparing/.test(firstTitle)) atPath('/preparing', 'preparing state');
+  if (/Preparing/.test(firstTitle)) {
+    atPath('/preparing', 'preparing state');
+    check((await p.locator('.stages .stage').count()) === 3 && (await p.locator('.stages .stage.done').count()) >= 1 && (await p.locator('.stages .stage.active').count()) === 1, 'waiting screen shows three progress stages with one in progress');
+    check((await p.locator('#waitNote').innerText()).length > 10, 'waiting screen shows a note');
+    // the applicant switches tabs and comes back while waiting: both recorded, nothing else changes
+    await p.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+    await p.waitForTimeout(300);
+    await p.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+    await p.waitForTimeout(300);
+  }
   await noTech('final screen');
   const cta = p.locator('#btnViewRole');
   await cta.waitFor({ timeout: 120_000 });
@@ -205,6 +214,13 @@ try {
   check(answers.deliveryExperience === '1_3' && answers.scheduleType === 'part_time' && answers.weekends === 'sometimes' && answers.startTiming === 'immediately' && answers.driversLicense === 'yes', 'answers persisted');
   const types = (db.prepare('SELECT type FROM application_events WHERE application_id = ? ORDER BY id').all(row.id) as { type: string }[]).map((e) => e.type);
   for (const t of ['application_started', 'step_viewed', 'step_completed', 'validation_failed', 'address_completed', 'automation_started', 'automation_phase_changed', 'address_finalized', 'verification_received', 'generated_link_ready', 'final_step_reached', 'final_cta_clicked', 'visited', 'verified']) check(types.includes(t), `event ${t} recorded`);
+  if (/Preparing/.test(firstTitle)) {
+    check(types.includes('wait_shown') && types.includes('wait_hidden') && types.includes('wait_visible'), 'waiting-screen events recorded: shown, hidden (left), visible (came back)');
+    check(!types.includes('link_ready_unattended'), 'the page was connected when the link became ready');
+    const stats = await (await fetch(`${base}/api/admin/applications/verified`)).json() as { waitStats: { withLink: number; leftDuringWait: number; avgWaitMs: number | null }; items: { id: string; wait: { left: boolean; cameBack: boolean; waitedMs: number | null } }[] };
+    const mine = stats.items.find((i) => i.id === row.id);
+    check(!!mine && mine.wait.left && mine.wait.cameBack && mine.wait.waitedMs !== null && stats.waitStats.withLink >= 1 && stats.waitStats.leftDuringWait >= 1 && stats.waitStats.avgWaitMs !== null, 'operations data: this application waited, left and came back; aggregate wait statistics present');
+  }
   let leak = false;
   for (const t of (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[]).map((x) => x.name)) {
     for (const r of db.prepare(`SELECT * FROM "${t}"`).all() as Record<string, unknown>[]) for (const val of Object.values(r)) if (typeof val === 'string' && val.includes(CODE)) leak = true;

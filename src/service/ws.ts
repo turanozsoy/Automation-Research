@@ -105,6 +105,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
   tl.onEvent(route);
   registry.setSender(route);
   apps.setNotifier((id: string, application: ApplicationView) => sendApp(id, { type: 'app.state', ts: Date.now(), application }));
+  apps.setPresence((id: string) => [...(appSockets.get(id) ?? [])].filter((s) => s.readyState === WebSocket.OPEN).length);
   apps.setProgressNotifier((id: string, event: ApplicationEventType, step?: string) => sendApp(id, { type: 'app.progress', ts: Date.now(), event, step }));
 
   // ---- upgrade: pick the endpoint, authenticate applicants before the socket exists ----
@@ -211,6 +212,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
         case 'app.address_completed': r = apps.addressCompleted(applicationId, clientIp); break;
         case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
         case 'app.link_opened': r = apps.linkOpened(applicationId); break;
+        case 'app.wait': r = apps.waitEvent(applicationId, m.event, m.elapsedMs); break;
         case 'ping': reply({ type: 'pong', ts: Date.now(), echo: m.ts }); return;
         default: reply({ type: 'app.error', ts: Date.now(), code: 'BAD_REQUEST', message: 'unknown message type' }); return;
       }
@@ -313,6 +315,16 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     if (url === '/api/applications' && method === 'POST') {
       const { row, token } = deps.apps.create();
       return json(201, { application: deps.apps.view(row) }, { 'set-cookie': sessionCookie(token, { secure: deps.settings.secureCookies, maxAgeMs: deps.settings.sessionTtlMs }) });
+    }
+    // waiting-screen analytics sent with navigator.sendBeacon when the page is being closed (the socket may already be gone)
+    if (url === '/api/applications/me/wait' && method === 'POST') {
+      const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+      const row = looksLikeToken(token) ? deps.apps.authenticate(token) : undefined;
+      if (!row) return json(401, { error: 'UNAUTHENTICATED' });
+      let body: Record<string, unknown> = {};
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { return json(400, { error: 'BAD_REQUEST' }); }
+      const r = deps.apps.waitEvent(row.id, body.event, body.elapsedMs);
+      return json(r.ok ? 200 : 400, r.ok ? { ok: true } : { error: r.code });
     }
     if (url === '/api/applications/me' && method === 'GET') {
       const token = parseCookies(req.headers.cookie)[SESSION_COOKIE];

@@ -37,6 +37,8 @@ export interface VerifiedApplicationItem {
   egress: { id: string; label: string } | null;
   processedWith: { profileId: string; label: string; exists: boolean; sessionStatus: 'none' | 'current' | 'attention' | 'expired'; sessionNote: string | null; sessionSavedAt: number | null; lastUsedAt: number | null } | null;
   sessionResult: 'refreshed' | 'failed' | null;
+  /** The wait for the link: how long, whether the applicant left the waiting screen, came back, and was present when it became ready. */
+  wait: { waitedMs: number | null; left: boolean; leftAfterMs: number | null; cameBack: boolean; unattendedAtReady: boolean; openedLink: boolean };
   answers: Record<string, unknown>;
 }
 
@@ -91,6 +93,22 @@ export class ApplicationService {
   /** Called after every change with the fresh safe view (the WebSocket layer pushes it to that application's sockets only). */
   setNotifier(fn: (applicationId: string, view: ApplicationView) => void): void { this.notify = fn; }
   setProgressNotifier(fn: (applicationId: string, event: ApplicationEventType, step?: string) => void): void { this.progress = fn; }
+  /** How many applicant sockets are connected for an application right now (set by the server). */
+  private presence: (applicationId: string) => number = () => 0;
+  setPresence(fn: (applicationId: string) => number): void { this.presence = fn; }
+
+  /** Waiting-screen analytics from the applicant page (never affects the workflow). */
+  waitEvent(id: string, event: unknown, elapsedMs: unknown): Result {
+    const row = this.store.get(id);
+    if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
+    if (event !== 'shown' && event !== 'hidden' && event !== 'visible') return { ok: false, code: 'BAD_REQUEST', message: 'unknown wait event' };
+    const ms = typeof elapsedMs === 'number' && Number.isFinite(elapsedMs) && elapsedMs >= 0 ? Math.round(Math.min(elapsedMs, 86_400_000)) : null;
+    const type: ApplicationEventType = event === 'shown' ? 'wait_shown' : event === 'hidden' ? 'wait_hidden' : 'wait_visible';
+    // only meaningful while the link is not there yet; afterwards the page shows the result and this says nothing about the wait
+    if (row.generated_url) return { ok: true };
+    this.store.event(id, type, { workflowId: row.workflow_id, step: row.current_step, detail: ms === null ? undefined : `after ${ms} ms` });
+    return { ok: true };
+  }
 
   // ---------- field model (derived from the Website B config, the single source of truth) ----------
 
@@ -416,6 +434,7 @@ export class ApplicationService {
           processed_workflow_id: workflowId, processed_profile_id: asg?.profile_id ?? null, processed_profile_label: prof?.label ?? null,
         });
         this.store.event(id, 'generated_link_ready', { workflowId });
+        if (this.presence(id) === 0) this.store.event(id, 'link_ready_unattended', { workflowId, detail: 'no applicant page connected when the link became ready' });
         this.progress(id, 'generated_link_ready');
         this.emit(id);
         break;
@@ -471,9 +490,9 @@ export class ApplicationService {
   // ---------- admin (internal) ----------
 
   /** Verified applications for the operations page: safe fields, the account that processed each one, session health. Never the session itself. */
-  verifiedList(q: string, offset: number, limit: number): { total: number; items: VerifiedApplicationItem[] } {
+  verifiedList(q: string, offset: number, limit: number): { total: number; items: VerifiedApplicationItem[]; waitStats: ReturnType<ApplicationStore['waitStats']> } {
     const { total, rows } = this.store.listVerified(q, offset, limit);
-    return { total, items: rows.map((r) => this.verifiedItem(r)) };
+    return { total, items: rows.map((r) => this.verifiedItem(r)), waitStats: this.store.waitStats() };
   }
 
   private verifiedItem(r: ApplicationRow): VerifiedApplicationItem {
@@ -498,6 +517,19 @@ export class ApplicationService {
             sessionStatus: meta?.sessionStatus ?? 'none', sessionNote: meta?.sessionNote ?? null, sessionSavedAt: meta?.sessionSavedAt ?? null, lastUsedAt: meta?.lastUsedAt ?? null }
         : null,
       sessionResult: sessionEvent ? (sessionEvent.type === 'session_refreshed' ? 'refreshed' : 'failed') : null,
+      wait: (() => {
+        const chrono = [...events].reverse(); // oldest first
+        const codeAt = chrono.find((e) => e.type === 'verification_received')?.at ?? chrono.find((e) => e.type === 'address_completed')?.at ?? null;
+        const hidden = chrono.find((e) => e.type === 'wait_hidden');
+        const leftAfter = hidden?.detail ? Number(/after (\d+) ms/.exec(hidden.detail)?.[1] ?? NaN) : NaN;
+        return {
+          waitedMs: r.generated_url_ready_at !== null && codeAt !== null ? Math.max(0, r.generated_url_ready_at - codeAt) : null,
+          left: !!hidden, leftAfterMs: Number.isFinite(leftAfter) ? leftAfter : null,
+          cameBack: chrono.some((e) => e.type === 'wait_visible'),
+          unattendedAtReady: chrono.some((e) => e.type === 'link_ready_unattended'),
+          openedLink: r.final_link_clicked_at !== null,
+        };
+      })(),
       answers,
     };
   }

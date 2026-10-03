@@ -293,6 +293,18 @@ fieldset .error-text { margin-top: 10px; }
 .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(217, 8, 18, .18); border-top-color: var(--color-primary-red); border-radius: 50%; animation: spin 900ms linear infinite; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- waiting screen: staged progress ---------- */
+.stages { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 0; }
+.stage { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 4px 0; font-size: 16px; font-weight: 600; color: var(--color-text); position: relative; }
+.stage + .stage::before { content: ""; position: absolute; left: 13px; top: -22px; width: 2px; height: 22px; background: var(--color-border); }
+.stage-dot { flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--color-border); background: var(--color-white); }
+.stage.done .stage-dot { background: var(--color-text); border-color: var(--color-text); color: var(--color-yellow); }
+.stage.done .stage-dot svg { width: 16px; height: 16px; }
+.stage.active .stage-dot { border-color: var(--color-primary-red); }
+.stage.pending { color: var(--color-text-tertiary); font-weight: 500; }
+.mini-spinner { display: block; width: 14px; height: 14px; border: 2px solid rgba(217, 8, 18, .2); border-top-color: var(--color-primary-red); border-radius: 50%; animation: spin 900ms linear infinite; }
+.stage.active .stage-text::after { content: "…"; }
+
 /* ---------- completed: conversion state ---------- */
 .status.success .step-badge { border-color: #f2d98a; background: var(--color-yellow-soft); color: #6b4a00; }
 .success-mark { position: relative; width: 76px; height: 76px; margin: 0 0 20px; align-self: flex-start; }

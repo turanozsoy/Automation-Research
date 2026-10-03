@@ -61,6 +61,10 @@
   let outbox = [];         // messages to (re)send once the socket is open
   const local = { fields: {}, answers: {}, code: '', codeSubmitted: false };
   let lastProblemAt = null;
+  // waiting screen (role details being prepared): when it was first shown, and the timer that swaps the note over time
+  let waitStartedAt = null;
+  let waitTimer = null;
+  let waitHidden = false;
 
   const FIXED_STEPS = ['contact', 'dob', 'address', 'code'];
   const steps = () => [...FIXED_STEPS, ...config.screens.map((s) => s.id)];
@@ -116,6 +120,7 @@
     if (m.type === 'app.state') {
       const prev = app;
       app = m.application;
+      if (prev && prev.generatedUrl === null && app.generatedUrl !== null && step === FINAL) onLinkReady();
       // Server values fill gaps only; what the applicant is typing right now wins.
       for (const [k, v] of Object.entries(app.fields || {})) if (!local.fields[k]) local.fields[k] = v;
       for (const [k, v] of Object.entries(app.answers || {})) if (local.answers[k] === undefined) local.answers[k] = v;
@@ -494,7 +499,7 @@
   function renderComplete() {
     const first = (local.fields.firstName || (app && app.fields && app.fields.firstName) || '').trim();
     const card = el('section', { class: 'status' });
-    const reassure = (text) => el('p', { class: 'reassure' }, el('span', { html: ICON.save, 'aria-hidden': 'true' }), el('span', { text }));
+    const reassure = (text) => el('p', { class: 'reassure' }, el('span', { html: ICON.save, 'aria-hidden': 'true' }), el('span', { class: 'reassure-text', text }));
     if (!app) { card.append(badge('Application'), el('h1', { text: 'Your application' }), el('p', { class: 'lede', text: 'Loading…' })); return card; }
     if (app.state === 'link_ready' || app.state === 'completed') {
       const opened = !!app.finalLinkClickedAt;
@@ -527,12 +532,24 @@
     }
     if (app.state === 'processing') {
       const sp = document.importNode($('#tpl-spinner').content, true);
+      startWait();
+      // honest progress: three stages driven by the application's real state, no countdown
+      const codeHandedOver = app.verificationStep === 'completed' || (app.automation && app.automation.phase === 'submitting');
+      const stage = (text, state) => el('li', { class: `stage ${state}` },
+        el('span', { class: 'stage-dot', 'aria-hidden': 'true', html: state === 'done' ? ICON.check : state === 'active' ? '<span class="mini-spinner"></span>' : '' }),
+        el('span', { class: 'stage-text', text }),
+        el('span', { class: 'sr-only', text: state === 'done' ? ' (done)' : state === 'active' ? ' (in progress)' : ' (next)' }));
       card.append(
         badge(t('preparing.badge')),
         el('div', { class: 'status-icon wait' }, sp),
         el('h1', { text: t('preparing.title') }),
         el('p', { class: 'lede', text: t('preparing.intro', { name: first ? ', ' + first : '' }) }),
-        reassure(t('preparing.note')));
+        el('ol', { class: 'stages', 'aria-label': 'Progress' },
+          stage(t('preparing.stage1'), 'done'),
+          stage(t('preparing.stage2'), codeHandedOver ? 'done' : 'active'),
+          stage(t('preparing.stage3'), codeHandedOver ? 'active' : 'pending')),
+        reassure(waitNote()));
+      card.querySelector('.reassure').id = 'waitNote';
       return card;
     }
     // started: the applicant reached the end without the automation ever starting (missing information)
@@ -543,6 +560,41 @@
       el('p', { class: 'lede', text: t('incomplete.intro') }),
       el('div', { class: 'actions' }, el('button', { type: 'button', class: 'btn btn-primary', text: t('incomplete.cta'), onclick: () => go(firstIncompleteStep(), { completed: null }) })));
     return card;
+  }
+
+  // ---------------------------------------------------------------------------
+  // waiting screen: time-aware note, and analytics of leaving / returning while waiting
+  // ---------------------------------------------------------------------------
+  const waitElapsed = () => (waitStartedAt === null ? 0 : Date.now() - waitStartedAt);
+  const waitNote = () => { const s = waitElapsed() / 1000; return s >= 60 ? t('preparing.noteVeryLong') : s >= 20 ? t('preparing.noteLong') : t('preparing.note'); };
+  function startWait() {
+    if (waitStartedAt !== null) return;
+    waitStartedAt = Date.now();
+    sendWait('shown');
+    waitTimer = setInterval(() => {
+      const n = $('#waitNote .reassure-text');
+      if (n) n.textContent = waitNote();
+      if (!(app && app.state === 'processing' && step === FINAL)) stopWait();
+    }, 1000);
+  }
+  function stopWait() { if (waitTimer) clearInterval(waitTimer); waitTimer = null; waitStartedAt = null; waitHidden = false; }
+  /** Over the socket when it is open; otherwise a beacon, which survives the page being closed. */
+  function sendWait(event) {
+    const msg = { type: 'app.wait', ts: Date.now(), event, elapsedMs: waitElapsed() };
+    if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(msg)); return; }
+    try { navigator.sendBeacon('/api/applications/me/wait', JSON.stringify(msg)); } catch { /* best effort */ }
+  }
+  function onVisibility(hiddenNow) {
+    if (waitStartedAt === null || !(app && app.state === 'processing')) return;
+    if (hiddenNow && !waitHidden) { waitHidden = true; sendWait('hidden'); }
+    else if (!hiddenNow && waitHidden) { waitHidden = false; sendWait('visible'); }
+  }
+  function onLinkReady() {
+    stopWait();
+    try { if (navigator.vibrate) navigator.vibrate([120, 60, 120]); } catch { /* unsupported */ }
+    const original = document.title;
+    document.title = t('preparing.readyTitle') || original;
+    setTimeout(() => { document.title = original; }, 15000);
   }
 
   // ---------------------------------------------------------------------------
@@ -568,6 +620,8 @@
   async function init() {
     $('#headerBack').addEventListener('click', back);
     window.addEventListener('popstate', onPopState);
+    document.addEventListener('visibilitychange', () => onVisibility(document.visibilityState === 'hidden'));
+    window.addEventListener('pagehide', () => onVisibility(true));
     try { config = await (await fetch('/api/apply/config')).json(); } catch { /* defaults */ }
     landingExisting = await loadExisting();
     const wanted = stepFromPath(location.pathname);
