@@ -293,6 +293,25 @@ fieldset .error-text { margin-top: 10px; }
 .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(217, 8, 18, .18); border-top-color: var(--color-primary-red); border-radius: 50%; animation: spin 900ms linear infinite; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- legal pages (/privacy, /terms, /contact): server-rendered from editable copy ---------- */
+body[data-screen="legal"] .accent-line { display: block; }
+body[data-screen="legal"] .header-back { display: inline-flex; text-decoration: none; }
+.legal-page { padding: 26px var(--gutter) 40px; }
+.legal-page h1 { font-size: 34px; line-height: 1.1; letter-spacing: -0.025em; font-weight: 800; margin: 0 0 18px; }
+.legal-page h2 { font-size: 19px; line-height: 1.3; letter-spacing: -0.01em; font-weight: 700; margin: 28px 0 8px; }
+.legal-page p { margin: 0 0 14px; font-size: 16px; line-height: 1.55; color: var(--color-text-secondary); }
+.legal-page p:first-of-type { color: var(--color-text-tertiary); font-size: 14px; font-weight: 600; }
+.legal-page ul { margin: 0 0 14px; padding-left: 22px; }
+.legal-page li { margin: 0 0 8px; font-size: 16px; line-height: 1.5; color: var(--color-text-secondary); }
+.legal-page a { color: var(--color-text); font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.contact-card { margin: 8px 0 18px; border: 1px solid var(--color-border); border-radius: var(--radius-card); background: var(--color-surface); padding: 6px 18px; }
+.contact-row { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--color-border); font-size: 16px; line-height: 1.45; }
+.contact-row:last-child { border-bottom: 0; }
+.contact-label { font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--color-text-secondary); padding-top: 3px; }
+.legal-nav { margin-top: 30px; justify-content: flex-start; }
+.legal-nav a[aria-current="page"] { color: var(--color-text); background: var(--color-surface); }
+.legal-page .copyright { text-align: left; margin-top: 8px; }
+
 /* ---------- bottom sheet (address confirmation) ---------- */
 .sheet-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(17, 17, 17, .55); display: flex; align-items: flex-end; justify-content: center; animation: fade 160ms ease; }
 .sheet { width: 100%; max-width: var(--shell); background: var(--color-white); border-radius: 22px 22px 0 0; padding: 22px var(--gutter) calc(18px + env(safe-area-inset-bottom)); box-shadow: 0 -12px 40px rgba(0, 0, 0, .18); animation: rise 200ms ease; }

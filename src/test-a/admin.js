@@ -427,7 +427,7 @@
   const draftOf = (f) => (contentEdits.has(f.key) ? contentEdits.get(f.key) : f.value);
   const problemOf = (f) => {
     const v = draftOf(f);
-    if (!v.trim()) return 'cannot be empty';
+    if (!v.trim()) return f.optional ? '' : 'cannot be empty';
     if (v.length > f.max) return `${v.length - f.max} over the limit`;
     return '';
   };
@@ -451,7 +451,7 @@
       row.dataset.key = f.key;
       const vars = f.vars && f.vars.length ? `<span class="cvars">Placeholders: ${esc(f.vars.join(', '))}</span>` : '';
       row.innerHTML = `<label class="clabel" for="c-${esc(f.key)}">${esc(f.label)}<span class="ckey">${esc(f.key)}</span>${vars}</label>
-        <div>${f.multiline ? `<textarea id="c-${esc(f.key)}" rows="2" maxlength="${f.max + 200}"></textarea>` : `<input id="c-${esc(f.key)}" type="text" maxlength="${f.max + 200}">`}
+        <div>${f.multiline ? `<textarea id="c-${esc(f.key)}" rows="${f.max > 1000 ? 18 : f.max > 200 ? 5 : 2}" maxlength="${f.max + 200}"></textarea>` : `<input id="c-${esc(f.key)}" type="text" maxlength="${f.max + 200}">`}
           <div class="cmeta"><span class="ccount"></span>${err ? `<span class="cerr">${esc(err)}</span>` : ''}<span class="cstate">${f.custom ? `edited${f.updatedAt ? ' ' + esc(ago(f.updatedAt)) : ''}` : 'default'}</span><button type="button" class="creset" ${f.custom || contentEdits.has(f.key) ? '' : 'disabled'}>Reset to default</button></div>
         </div>`;
       const input = row.querySelector('input, textarea');

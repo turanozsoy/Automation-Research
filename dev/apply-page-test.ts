@@ -241,7 +241,18 @@ try {
   const adm = await (await fetch(`${base}/admin/accounts`)).text();
   check(dbg.includes('debug harness') && adm.includes('Account &amp; session management') && adm.includes('Verified applications') && adm.includes('Applicant page content') && (await fetch(`${base}/admin.css`)).status === 200, '/debug and /admin/accounts still served (with the Applicant page content section)');
   const contentList = await (await fetch(`${base}/api/admin/content`)).json() as { groups: string[]; fields: { key: string; custom: boolean; value: string }[] };
-  check(contentList.groups.length === 8 && contentList.fields.some((f) => f.key === 'opt.scheduleType.part_time.label') && contentList.fields.some((f) => f.key === 'landing.pill') && contentList.fields.every((f) => !f.custom), 'content schema covers landing, steps, questions and role-ready; nothing left edited');
+  check(contentList.groups.length === 9 && contentList.fields.some((f) => f.key === 'opt.scheduleType.part_time.label') && contentList.fields.some((f) => f.key === 'landing.pill') && contentList.fields.some((f) => f.key === 'legal.privacy.body') && contentList.fields.every((f) => !f.custom), 'content schema covers landing, steps, questions, role-ready and legal pages; nothing left edited');
+  // legal pages: real content, editable, rendered as text (no HTML), contact details appear only when set
+  const privacy = await (await fetch(`${base}/privacy`)).text();
+  check(/<h1>Privacy Policy<\/h1>/.test(privacy) && /<h2>What we collect<\/h2>/.test(privacy) && privacy.includes('/apply/apply.css') && privacy.includes(String(new Date().getFullYear())), 'privacy page renders the draft policy with headings, the applicant stylesheet and the current year');
+  const contactBefore = await (await fetch(`${base}/contact`)).text();
+  check(!/contact-card/.test(contactBefore), 'contact page hides the details card while no contact details are set');
+  await put({ 'legal.contact.email': 'help@shipzora.example', 'legal.contact.phone': '+1 555 010 0200', 'legal.terms.body': '## Rules\n- Be <b>nice</b>\n\nSee https://example.com/x for more.' });
+  const contactAfter = await (await fetch(`${base}/contact`)).text();
+  const terms = await (await fetch(`${base}/terms`)).text();
+  check(/mailto:help@shipzora\.example/.test(contactAfter) && /tel:\+15550100200/.test(contactAfter), 'contact details appear as links once set');
+  check(/<h2>Rules<\/h2>/.test(terms) && /<li>Be &lt;b&gt;nice&lt;\/b&gt;<\/li>/.test(terms) && /<a href="https:\/\/example\.com\/x"/.test(terms), 'edited terms render headings, bullets and links, with HTML escaped');
+  await put({ 'legal.contact.email': null, 'legal.contact.phone': null, 'legal.terms.body': null });
   check((await fetch(`${base}/debug.html`)).status === 404 && (await fetch(`${base}/index.html`)).status === 404, 'files are not reachable by guessing names');
   check((await fetch(`${base}/privacy`)).status === 200, 'footer placeholder pages respond');
   const direct = await fetch(`${base}/step-3`);

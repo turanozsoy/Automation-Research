@@ -33,7 +33,8 @@ const PAGES: Record<string, [string, string]> = {
   '/admin.js': [INTERNAL_DIR, 'admin.js'],
   '/admin.css': [INTERNAL_DIR, 'admin.css'],
 };
-const PLACEHOLDER_PAGES: Record<string, string> = { '/privacy': 'Privacy', '/terms': 'Terms', '/contact': 'Contact' };
+/** Public legal pages: rendered from the editable applicant content (legal.<slug>.*). */
+const LEGAL_PAGES: Record<string, 'privacy' | 'terms' | 'contact'> = { '/privacy': 'privacy', '/terms': 'terms', '/contact': 'contact' };
 const APPLY_ROUTES = /^\/(step-\d{1,2}|preparing|completed)$/;
 
 export interface ServerDeps {
@@ -288,7 +289,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     // applicant step routes (/step-2 … /step-n, /preparing, /completed): the applicant page restores the step client-side
     if (method === 'GET' && APPLY_ROUTES.test(url)) return serveFile(APPLY_DIR, 'index.html', res);
     if (method === 'GET' && url.startsWith('/apply/')) return serveFile(APPLY_DIR, url.slice('/apply/'.length), res);
-    if (method === 'GET' && PLACEHOLDER_PAGES[url]) return placeholderPage(PLACEHOLDER_PAGES[url], res);
+    if (method === 'GET' && LEGAL_PAGES[url]) return legalPage(LEGAL_PAGES[url], deps.content.values(), res);
     // ---- development: automation browser mode (internal, /debug) ----
     if (url === '/api/dev/browser' && method === 'GET') return json(200, deps.browserMode.status());
     if (url === '/api/dev/browser' && method === 'POST') {
@@ -460,6 +461,57 @@ function serveFile(dir: string, rel: string, res: ServerResponse): void {
 }
 
 /** Footer links exist in the UI before the pages do; say so plainly instead of inventing policy text. */
+const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+/** Plain text with light structure -> HTML: "## " heading, "- " bullet, blank line = paragraph; emails and https links become links. Never raw HTML. */
+function textToHtml(text: string): string {
+  const inline = (line: string) => escHtml(line)
+    .replace(/(https:\/\/[^\s<]+[^\s<.,)])/g, '<a href="$1" rel="noopener">$1</a>')
+    .replace(/([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, '<a href="mailto:$1">$1</a>');
+  const out: string[] = [];
+  let para: string[] = [];
+  let list: string[] = [];
+  const flush = () => {
+    if (list.length) { out.push(`<ul>${list.map((l) => `<li>${inline(l)}</li>`).join('')}</ul>`); list = []; }
+    if (para.length) { out.push(`<p>${para.map(inline).join('<br>')}</p>`); para = []; }
+  };
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = raw.trim();
+    if (!line) { flush(); continue; }
+    if (line.startsWith('## ')) { flush(); out.push(`<h2>${inline(line.slice(3))}</h2>`); continue; }
+    if (line.startsWith('- ')) { if (para.length) flush(); list.push(line.slice(2)); continue; }
+    if (list.length) flush();
+    para.push(line);
+  }
+  flush();
+  return out.join('\n');
+}
+
+function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string, string>, res: ServerResponse): void {
+  const year = String(new Date().getFullYear());
+  const v = (k: string) => (content[k] ?? '').replace(/\{year\}/g, year);
+  const title = v(`legal.${slug}.title`) || slug;
+  let body = textToHtml(v(`legal.${slug}.body`));
+  if (slug === 'contact') {
+    const rows: string[] = [];
+    if (v('legal.contact.email')) rows.push(`<div class="contact-row"><span class="contact-label">Email</span><a href="mailto:${escHtml(v('legal.contact.email'))}">${escHtml(v('legal.contact.email'))}</a></div>`);
+    if (v('legal.contact.phone')) rows.push(`<div class="contact-row"><span class="contact-label">Phone</span><a href="tel:${escHtml(v('legal.contact.phone').replace(/[^+\d]/g, ''))}">${escHtml(v('legal.contact.phone'))}</a></div>`);
+    if (v('legal.contact.hours')) rows.push(`<div class="contact-row"><span class="contact-label">Hours</span><span>${escHtml(v('legal.contact.hours'))}</span></div>`);
+    if (v('legal.contact.address')) rows.push(`<div class="contact-row"><span class="contact-label">Address</span><span>${v('legal.contact.address').split('\n').map(escHtml).join('<br>')}</span></div>`);
+    if (rows.length) body += `<div class="contact-card">${rows.join('')}</div>`;
+  }
+  const link = (href: string, text: string) => `<a href="${href}"${href === `/${slug}` ? ' aria-current="page"' : ''}>${text}</a>`;
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#ffffff"><meta name="robots" content="noindex">
+<title>${escHtml(title)} — Shipzora Careers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="stylesheet" href="/apply/apply.css"></head>
+<body data-screen="legal">
+<header class="site-header"><div class="shell header-row"><a class="header-back" href="/" aria-label="Back to the application"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a><p class="app-title"><span class="brand-word">Shipzora</span> Careers</p></div><div class="accent-line" aria-hidden="true"><span></span></div></header>
+<main class="shell legal-page"><h1>${escHtml(title)}</h1>${body}
+<nav class="legal-links legal-nav" aria-label="Legal pages">${link('/privacy', 'Privacy')}${link('/terms', 'Terms')}${link('/contact', 'Contact')}</nav>
+<p class="copyright">© ${year} Shipzora</p></main></body></html>`);
+}
+
 function placeholderPage(title: string, res: ServerResponse): void {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} — Shipzora Careers</title>

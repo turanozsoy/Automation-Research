@@ -75,7 +75,7 @@ The debug harness is an internal developer tool; applicants use the application 
   but its button still opens the generated role-details link directly. Build the verification step and point
   the button at it (copy keys `ready.*`), then re-check `/completed` as the conversion route.
 - Set `ADMIN_PASSWORD`, `PROFILE_MASTER_KEY` and `SECURE_COOKIES=1` behind HTTPS; back up `DATA_DIR`.
-- Real Privacy, Terms and Contact pages (footer links are placeholders).
+- Review the draft Privacy and Terms texts with counsel and fill in the Contact details (operations page → Applicant page content → Legal pages).
 - Meta Pixel on the step routes and the `/completed` conversion (not added yet).
 - Decide the `awaiting_code` idle limit (an applicant idle on the code screen holds an account and its proxy).
 
@@ -290,8 +290,11 @@ verified, automation_ended, service_restarted.
 
 ## Applicant site
 
-`src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`; footer
-links `/privacy`, `/terms`, `/contact` are honest placeholders until real pages exist.
+`src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`. `/privacy`,
+`/terms` and `/contact` are server-rendered from the editable applicant content (group "Legal pages": title
+and text per page, with `## ` headings, `- ` bullets and blank-line paragraphs; the contact page adds email,
+phone, hours and address rows that appear only when set). The shipped Privacy and Terms texts are drafts to
+review with counsel; HTML in the text is never interpreted.
 
 Design: mobile is the authoritative layout (QA at 375, 390 and 430 px wide; desktop only centres the same
 540 px shell), white background, black type, red primary action, warm yellow accent; tokens live at the top of `apply.css` (`--color-*`, `--radius-*`, `--control-h`, `--shell`). The

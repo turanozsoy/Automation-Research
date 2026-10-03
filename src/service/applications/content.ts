@@ -16,6 +16,8 @@ export interface ContentField {
   def: string;
   max: number;
   multiline?: boolean;
+  /** May be saved empty (the applicant page simply omits it). */
+  optional?: boolean;
   /** Placeholders the text may contain, e.g. {n} (code length), {name} (first name). */
   vars?: string[];
 }
@@ -26,9 +28,34 @@ export interface ContentFieldView extends ContentField {
   updatedAt: number | null;
 }
 
-export const CONTENT_GROUPS = ['Landing', 'Personal details', 'Date of birth', 'Address', 'Verification', 'Questions', 'Preparing / errors', 'Role ready'] as const;
+export const CONTENT_GROUPS = ['Landing', 'Personal details', 'Date of birth', 'Address', 'Verification', 'Questions', 'Preparing / errors', 'Role ready', 'Legal pages'] as const;
 
 const f = (key: string, group: string, label: string, def: string, max = 120, extra: Partial<ContentField> = {}): ContentField => ({ key, group, label, def, max, ...extra });
+
+const PRIVACY = `Last updated: {year}\n\n## Who we are\nShipzora Careers runs this application site so you can apply for logistics and delivery roles with Shipzora. This policy explains what we collect when you apply and how we use it.\n\n## What we collect\n- Your name, mobile number and email address, so we can contact you about your application.\n- Your date of birth and home address, which are needed to set up your onboarding record. They are not used to evaluate your application.\n- Your answers to the short questions about experience, schedule and availability.\n- The verification code you enter. It is used once to prepare your application and is never stored.\n- Technical information needed to run the site, such as the time of your visit and the steps you completed.\n\n## How we use it\n- To prepare your application and your onboarding record.\n- To show you your role details once they are ready.\n- To contact you about your application.\n- To keep the site secure and to understand how applicants move through the application.\n\n## Sharing\nWe share your information only with service providers that process applications on our behalf and only for that purpose. We do not sell your information.\n\n## Cookies\nThe site sets one first-party cookie that keeps your application session so you can return and continue where you left off. It does not track you across other sites.\n\n## Keeping your information\nWe keep application information for as long as needed to process your application and to meet our legal and business record-keeping obligations, then delete or anonymise it.\n\n## Your choices\nYou can ask us what information we hold about you, ask us to correct it, or ask us to delete it. Use the details on the Contact page.\n\n## Changes\nIf this policy changes, the new version will be published here with a new date.`;
+const TERMS = `Last updated: {year}
+
+## Using this site
+This site lets you apply for roles with Shipzora. By using it you agree to these terms.
+
+## Your information
+You confirm that the information you enter is accurate and belongs to you, and that the address you provide matches the address on your government-issued ID.
+
+## No guarantee of a role
+Completing the application does not guarantee an offer, an interview or a start date. Shipzora decides on applications according to its own process.
+
+## Acceptable use
+Do not use the site in a way that interferes with it, attempts to access other people's applications, or submits false information.
+
+## Availability
+We may change or withdraw parts of the site at any time. We do our best to keep it available but do not promise uninterrupted access.
+
+## Changes to these terms
+If these terms change, the new version will be published here with a new date.
+
+## Questions
+Use the details on the Contact page.`;
+const CONTACT = `Questions about your application, or about how we handle your information? Reach us using the details below and include the name you applied with so we can find your application quickly.`;
 
 /** Static copy (the question screens add their own fields from config/apply-questions.json). */
 export const STATIC_FIELDS: ContentField[] = [
@@ -122,6 +149,18 @@ export const STATIC_FIELDS: ContentField[] = [
   f('ready.noteConfirmed', 'Role ready', 'Secondary paragraph (confirmed)', 'Your role details have been confirmed.', 160),
   f('ready.cta', 'Role ready', 'Final button', 'Continue to verification', 40),
   f('ready.ctaAgain', 'Role ready', 'Final button (after opening)', 'Open Role Details again', 40),
+  // Legal pages (/privacy, /terms, /contact). Bodies are plain text with light structure: a line starting with
+  // "## " is a heading, "- " a bullet, a blank line separates paragraphs; {year} = current year. Drafts: review with counsel.
+  f('legal.privacy.title', 'Legal pages', 'Privacy page — title', 'Privacy Policy', 60),
+  f('legal.privacy.body', 'Legal pages', 'Privacy page — text (DRAFT: review with your legal counsel). "## " = heading, "- " = bullet, blank line = new paragraph', PRIVACY, 20000, { multiline: true, vars: ['{year}'] }),
+  f('legal.terms.title', 'Legal pages', 'Terms page — title', 'Terms of Use', 60),
+  f('legal.terms.body', 'Legal pages', 'Terms page — text (DRAFT: review with your legal counsel). "## " = heading, "- " = bullet, blank line = new paragraph', TERMS, 20000, { multiline: true, vars: ['{year}'] }),
+  f('legal.contact.title', 'Legal pages', 'Contact page — title', 'Contact us', 60),
+  f('legal.contact.body', 'Legal pages', 'Contact page — text', CONTACT, 4000, { multiline: true }),
+  f('legal.contact.email', 'Legal pages', 'Contact page — support email (shown as a link; leave empty to hide)', '', 120, { optional: true }),
+  f('legal.contact.phone', 'Legal pages', 'Contact page — phone (leave empty to hide)', '', 40, { optional: true }),
+  f('legal.contact.hours', 'Legal pages', 'Contact page — hours (leave empty to hide)', '', 120, { optional: true }),
+  f('legal.contact.address', 'Legal pages', 'Contact page — postal address (one line per row; leave empty to hide)', '', 300, { multiline: true, optional: true }),
 ];
 
 interface QuestionsFile { screens?: { id: string; title: string; questions: { key: string; label: string; options: { value: string; label: string; hint?: string }[] }[] }[] }
@@ -195,7 +234,7 @@ export class ApplicantContent {
         if (typeof raw !== 'string') { errors[key] = 'text expected'; continue; }
         let text = raw.replace(CONTROL, '').replace(/\r\n?/g, '\n');
         text = fld.multiline ? text.split('\n').map((l) => l.trim()).join('\n').trim() : text.replace(/\n/g, ' ').trim();
-        if (!text) { errors[key] = 'cannot be empty (reset it to use the default)'; continue; }
+        if (!text && !fld.optional) { errors[key] = 'cannot be empty (reset it to use the default)'; continue; }
         if (text.length > fld.max) { errors[key] = `at most ${fld.max} characters`; continue; }
         if (text === fld.def) del.run(key); else up.run(key, text, now);
         saved.push(key);
