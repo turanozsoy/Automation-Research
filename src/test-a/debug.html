@@ -76,10 +76,10 @@
   <input data-field="authenticationCode" autocomplete="off">
 
   <div id="pausePanel" style="display:none;background:#fff3cd;border:1px solid #d9a400;padding:8px;margin-top:12px">
-    <b>Paused</b> — step <code id="pauseStep"></code> failed: <span id="pauseMsg"></span><br>
+    <b>Paused</b> at step <code id="pauseStep"></code> failed: <span id="pauseMsg"></span><br>
     <small>Do the step yourself in the Chromium window if you want, then choose:</small><br>
     <button id="btnRetry">Retry this step</button>
-    <button id="btnSkip">I did it manually — continue with next step</button>
+    <button id="btnSkip">I did it manually, continue with the next step</button>
     <button id="btnAbort">Abort</button>
     <div id="pauseSteps" style="font-family:monospace;font-size:11px;margin-top:6px"></div>
   </div>
@@ -92,7 +92,7 @@
   <p style="font-size:12px;color:#666">Debounce: <span id="debounce">?</span> ms · Target: <span id="target">?</span></p>
 </div>
 <div>
-  <h3>Live timeline — every workflow <small style="font-weight:normal;font-size:12px">· applicant-started workflows included · each step, what the script is doing, what it is waiting for</small></h3>
+  <h3>Live timeline: every workflow <small style="font-weight:normal;font-size:12px">· applicant-started workflows included · each step, what the script is doing, what it is waiting for</small></h3>
   <div class="allbar">
     <label>Filter <input id="allFilter" placeholder="workflow id, step name, text…" autocomplete="off"></label>
     <label><input type="checkbox" id="allFollow" checked> follow</label>

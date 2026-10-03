@@ -502,7 +502,7 @@ function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string
   const link = (href: string, text: string) => `<a href="${href}"${href === `/${slug}` ? ' aria-current="page"' : ''}>${text}</a>`;
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#ffffff"><meta name="robots" content="noindex">
-<title>${escHtml(title)} — Shipzora Careers</title>
+<title>${escHtml(title)} | Shipzora Careers</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="/apply/apply.css"></head>
 <body data-screen="legal">
@@ -514,7 +514,7 @@ function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string
 
 function placeholderPage(title: string, res: ServerResponse): void {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} — Shipzora Careers</title>
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} | Shipzora Careers</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;margin:0;background:#f3f4f1;color:#1b1f24}main{max-width:560px;margin:0 auto;padding:48px 20px}a{color:#084b46}</style></head>
 <body><main><h1>${title}</h1><p>This page isn\u2019t available yet.</p><p><a href="/">Back to your application</a></p></main></body></html>`);
 }
