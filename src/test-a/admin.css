@@ -91,7 +91,7 @@ h2 { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; display: flex; a
 .sub { display: block; font-size: 12px; color: var(--ink-3); margin-top: 2px; }
 
 /* ---------- table ---------- */
-.table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
 .table { width: 100%; border-collapse: collapse; }
 .table th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); font-weight: 600; padding: 10px 14px; background: var(--surface-2); border-bottom: 1px solid var(--line); }
 .table td { padding: 11px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
@@ -100,6 +100,17 @@ h2 { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; display: flex; a
 .table tr.highlight td { background: var(--warn-soft); }
 .th-actions, .td-actions { text-align: right; }
 .td-actions { white-space: nowrap; }
+.th-check, .td-check { width: 28px; padding-right: 0 !important; }
+.row-check, #selectAll { width: 16px; height: 16px; accent-color: var(--brand); cursor: pointer; vertical-align: middle; }
+.menu-btn::after { content: " \25BE"; font-size: 11px; }
+.menu { position: fixed; z-index: 60; min-width: 220px; padding: 6px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 14px 36px rgba(0,0,0,.16); }
+.menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; font: inherit; font-size: 13px; color: var(--ink); border-radius: 6px; cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: var(--surface-2); outline: none; }
+.menu button.danger { color: var(--danger); }
+.menu .menu-note { font-size: 12px; color: var(--ink-3); padding: 6px 10px; max-width: 260px; }
+.menu hr { border: 0; border-top: 1px solid var(--line-soft); margin: 4px 0; }
+.bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; background: var(--brand-soft); border: 1px solid #cfe3df; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 13px; }
+.bulk-bar strong { margin-right: 4px; color: var(--brand-ink); }
 .td-actions .btn, .td-actions .btn-text-danger { vertical-align: middle; }
 .acct-name { font-weight: 600; }
 .empty { color: var(--ink-3); padding: 28px 14px !important; text-align: center; }

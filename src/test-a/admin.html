@@ -70,12 +70,19 @@
       </div>
       <span class="toolbar-note" id="accountsNote"></span>
     </div>
+    <div class="bulk-bar" id="bulkBar" hidden>
+      <strong id="bulkCount">0 selected</strong>
+      <button type="button" class="btn btn-secondary btn-sm" id="bulkAssign" title="Give every selected account without a proxy one never-used proxy">Assign never-used proxies</button>
+      <button type="button" class="btn btn-secondary btn-sm" id="bulkRelease" title="Release selected accounts that are under review or taken back into rotation">Release selected</button>
+      <button type="button" class="btn btn-danger btn-sm" id="bulkRemove">Remove selected</button>
+      <button type="button" class="btn-text" id="bulkClear">Clear selection</button>
+    </div>
     <div class="table-wrap">
       <table class="table" id="accountsTable">
         <thead><tr>
-          <th>Account</th><th>Email</th><th>Session</th><th>Proxy</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th class="th-actions">Actions</th>
+          <th class="th-check"><input type="checkbox" id="selectAll" aria-label="Select all listed accounts"></th><th>Account</th><th>Email</th><th>Session</th><th>Proxy</th><th>Status</th><th>Created</th><th>Last session update</th><th>Last workflow</th><th class="th-actions">Actions</th>
         </tr></thead>
-        <tbody id="rows"><tr><td colspan="9" class="empty">Loading accounts…</td></tr></tbody>
+        <tbody id="rows"><tr><td colspan="10" class="empty">Loading accounts…</td></tr></tbody>
       </table>
     </div>
   </section>
@@ -128,7 +135,7 @@
   </section>
 
   <footer class="page-foot">
-    <span>Shipzora Operations · internal</span>
+    <span data-brand-ops>Shipzora Operations · internal</span>
     <a class="dev-link" href="/debug">Developer harness</a>
   </footer>
 </main>
@@ -177,8 +184,8 @@
 <!-- ===== Remove confirmation ===== -->
 <dialog id="dlgRemove" class="dialog">
   <div class="dialog-body">
-    <h3>Remove account?</h3>
-    <p class="dialog-sub">This deletes <strong id="removeName"></strong> and its saved session. Verified applications processed with it keep their history.</p>
+    <h3 id="removeTitle">Remove account?</h3>
+    <p class="dialog-sub" id="removeText">This deletes <strong id="removeName"></strong> and its saved session. Verified applications processed with it keep their history.</p>
     <div class="dialog-actions">
       <button type="button" class="btn btn-secondary" id="btnCancelRemove">Keep account</button>
       <button type="button" class="btn btn-danger" id="btnConfirmRemove">Remove account</button>
@@ -190,7 +197,7 @@
 <dialog id="dlgDetails" class="drawer">
   <div class="drawer-body">
     <div class="drawer-head">
-      <div><p class="eyebrow">Verified application</p><h3 id="detName"></h3></div>
+      <div><p class="eyebrow" id="detEyebrow">Verified application</p><h3 id="detName"></h3></div>
       <button type="button" class="icon-btn" id="btnCloseDetails" aria-label="Close">×</button>
     </div>
     <dl class="kv" id="detList"></dl>

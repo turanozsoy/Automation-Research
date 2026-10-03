@@ -28,21 +28,21 @@ export interface ContentFieldView extends ContentField {
   updatedAt: number | null;
 }
 
-export const CONTENT_GROUPS = ['Landing', 'Personal details', 'Date of birth', 'Address', 'Verification', 'Questions', 'Preparing / errors', 'Role ready', 'Legal pages'] as const;
+export const CONTENT_GROUPS = ['Brand', 'Landing', 'Personal details', 'Date of birth', 'Address', 'Verification', 'Questions', 'Preparing / errors', 'Role ready', 'Legal pages'] as const;
 
 const f = (key: string, group: string, label: string, def: string, max = 120, extra: Partial<ContentField> = {}): ContentField => ({ key, group, label, def, max, ...extra });
 
-const PRIVACY = `Last updated: {year}\n\n## Who we are\nShipzora Careers runs this application site so you can apply for logistics and delivery roles with Shipzora. This policy explains what we collect when you apply and how we use it.\n\n## What we collect\n- Your name, mobile number and email address, so we can contact you about your application.\n- Your date of birth and home address, which are needed to set up your onboarding record. They are not used to evaluate your application.\n- Your answers to the short questions about experience, schedule and availability.\n- The verification code you enter. It is used once to prepare your application and is never stored.\n- Technical information needed to run the site, such as the time of your visit and the steps you completed.\n\n## How we use it\n- To prepare your application and your onboarding record.\n- To show you your role details once they are ready.\n- To contact you about your application.\n- To keep the site secure and to understand how applicants move through the application.\n\n## Sharing\nWe share your information only with service providers that process applications on our behalf and only for that purpose. We do not sell your information.\n\n## Cookies\nThe site sets one first-party cookie that keeps your application session so you can return and continue where you left off. It does not track you across other sites.\n\n## Keeping your information\nWe keep application information for as long as needed to process your application and to meet our legal and business record-keeping obligations, then delete or anonymise it.\n\n## Your choices\nYou can ask us what information we hold about you, ask us to correct it, or ask us to delete it. Use the details on the Contact page.\n\n## Changes\nIf this policy changes, the new version will be published here with a new date.`;
+const PRIVACY = `Last updated: {year}\n\n## Who we are\n{brand} Careers runs this application site so you can apply for logistics and delivery roles with {brand}. This policy explains what we collect when you apply and how we use it.\n\n## What we collect\n- Your name, mobile number and email address, so we can contact you about your application.\n- Your date of birth and home address, which are needed to set up your onboarding record. They are not used to evaluate your application.\n- Your answers to the short questions about experience, schedule and availability.\n- The verification code you enter. It is used once to prepare your application and is never stored.\n- Technical information needed to run the site, such as the time of your visit and the steps you completed.\n\n## How we use it\n- To prepare your application and your onboarding record.\n- To show you your role details once they are ready.\n- To contact you about your application.\n- To keep the site secure and to understand how applicants move through the application.\n\n## Sharing\nWe share your information only with service providers that process applications on our behalf and only for that purpose. We do not sell your information.\n\n## Cookies\nThe site sets one first-party cookie that keeps your application session so you can return and continue where you left off. It does not track you across other sites.\n\n## Keeping your information\nWe keep application information for as long as needed to process your application and to meet our legal and business record-keeping obligations, then delete or anonymise it.\n\n## Your choices\nYou can ask us what information we hold about you, ask us to correct it, or ask us to delete it. Use the details on the Contact page.\n\n## Changes\nIf this policy changes, the new version will be published here with a new date.`;
 const TERMS = `Last updated: {year}
 
 ## Using this site
-This site lets you apply for roles with Shipzora. By using it you agree to these terms.
+This site lets you apply for roles with {brand}. By using it you agree to these terms.
 
 ## Your information
 You confirm that the information you enter is accurate and belongs to you, and that the address you provide matches the address on your government-issued ID.
 
 ## No guarantee of a role
-Completing the application does not guarantee an offer, an interview or a start date. Shipzora decides on applications according to its own process.
+Completing the application does not guarantee an offer, an interview or a start date. {brand} decides on applications according to its own process.
 
 ## Acceptable use
 Do not use the site in a way that interferes with it, attempts to access other people's applications, or submits false information.
@@ -61,13 +61,19 @@ const CONTACT = `Questions about your application, or about how we handle your i
 export const STATIC_FIELDS: ContentField[] = [
   // Landing
   f('landing.pill', 'Landing', 'Earnings pill', 'Earn up to $1,800 / week', 40),
-  f('landing.title', 'Landing', 'Hero headline (one line per row; the word “Shipzora” is shown in yellow)', 'Drive with Shipzora.\nDeliver Success.', 80, { multiline: true }),
+  // The company / site name. {brand} in any other text is replaced with it (applicant pages, legal pages, page titles, operator pages).
+  f('brand.name', 'Brand', 'Company / site name ({brand} everywhere else becomes this)', 'Shipzora', 40),
+  f('brand.tabTitle', 'Brand', 'Browser tab title of the application', 'Apply to {brand}', 60, { vars: ['{brand}'] }),
+  f('brand.siteTitle', 'Brand', 'Site title used after legal page titles and in the operations pages', '{brand} Careers', 60, { vars: ['{brand}'] }),
+  f('brand.headerLanding', 'Brand', 'Header word after the company name on the landing page', 'Careers', 30),
+  f('brand.headerSteps', 'Brand', 'Header word after the company name on the application steps', 'Application', 30),
+  f('landing.title', 'Landing', 'Hero headline (one line per row; the company name is shown in yellow)', 'Drive with {brand}.\nDeliver Success.', 80, { multiline: true, vars: ['{brand}'] }),
   f('landing.subtitle', 'Landing', 'Hero supporting sentence', 'Flexible schedules: Full-time, Part-time, or Students.', 140),
   f('landing.trust1', 'Landing', 'Trust row: item 1 (check icon)', 'Progress saved', 24),
   f('landing.trust2', 'Landing', 'Trust row: item 2 (lock icon)', 'Secure', 24),
   f('landing.trust3', 'Landing', 'Trust row: item 3 (clock icon)', '5 min', 24),
   f('landing.cta', 'Landing', 'Start button', 'Start Driving Today', 40),
-  f('landing.copyright', 'Landing', 'Copyright line under the button ({year} = current year)', '© {year} Shipzora', 60, { vars: ['{year}'] }),
+  f('landing.copyright', 'Landing', 'Copyright line under the button ({year} = current year)', '© {year} {brand}', 60, { vars: ['{year}', '{brand}'] }),
   f('landing.welcome.eyebrow', 'Landing', 'Saved application: small label', 'Saved application', 40),
   f('landing.welcome.title', 'Landing', 'Saved application: title (name is appended when known)', 'Welcome back', 40),
   f('landing.welcome.inProgress', 'Landing', 'Saved application: in progress text', 'You have an application in progress. Pick up where you left off.', 160),
@@ -104,7 +110,7 @@ export const STATIC_FIELDS: ContentField[] = [
   f('address.confirm.edit', 'Address', 'Confirmation sheet: edit button', 'Edit address', 40),
   // Verification
   f('code.title', 'Verification', 'Heading', 'Verification code', 60),
-  f('code.intro', 'Verification', 'Supporting text', 'Enter the verification code provided for your Shipzora application.', 220),
+  f('code.intro', 'Verification', 'Supporting text', 'Enter the verification code provided for your {brand} application.', 220, { vars: ['{brand}'] }),
   f('code.label', 'Verification', 'Field label', '{n}-digit code', 40, { vars: ['{n}'] }),
   f('code.note', 'Verification', 'Helper text under the field', 'Your code is used once to prepare your application and is never stored.', 160),
   f('code.retry', 'Verification', 'Retry message (after a problem)', 'We couldn’t finish the previous step. Your details are saved. Enter your verification code again to try again.', 220),
@@ -140,7 +146,7 @@ export const STATIC_FIELDS: ContentField[] = [
   f('ready.badgeConfirmed', 'Role ready', 'Badge once confirmed', 'Confirmed', 30),
   f('ready.title', 'Role ready', 'Heading ({name} = first name)', '{name}, one quick verification', 80, { vars: ['{name}'] }),
   f('ready.titleNoName', 'Role ready', 'Heading when the name is unknown', 'Your role details are ready', 80),
-  f('ready.intro', 'Role ready', 'Supporting paragraph', 'Thanks for completing your Shipzora application. A short verification is needed before we show your role details. It only takes a moment.', 220),
+  f('ready.intro', 'Role ready', 'Supporting paragraph', 'Thanks for completing your {brand} application. A short verification is needed before we show your role details. It only takes a moment.', 220),
   f('ready.check1', 'Role ready', 'Checklist: item 1', 'Contact details received', 60),
   f('ready.check2', 'Role ready', 'Checklist: item 2', 'Home address received', 60),
   f('ready.check3', 'Role ready', 'Checklist: item 3 (shown as the NEXT step, not done)', 'Identity verification', 60),
@@ -201,6 +207,11 @@ export class ApplicantContent {
   }
 
   /** Merged copy for the applicant page: every key, override or default. */
+  /** The company / site name (brand.name). */
+  brandName(): string { return (this.overrides.get('brand.name')?.value ?? this.fields.get('brand.name')?.def ?? 'Shipzora').trim() || 'Shipzora'; }
+  /** Server-side placeholder substitution for rendered pages ({brand}, {year}). */
+  fill(text: string): string { return text.replace(/\{brand\}/g, this.brandName()).replace(/\{year\}/g, String(new Date().getFullYear())); }
+
   values(): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [k, fld] of this.fields) out[k] = this.overrides.get(k)?.value ?? fld.def;

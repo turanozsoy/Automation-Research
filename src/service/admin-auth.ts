@@ -149,10 +149,10 @@ export function clientIp(req: IncomingMessage, trustedProxies: string[] = []): s
 }
 
 /** The login page (internal, tiny, no external assets). `next` is validated server-side to a same-origin path. */
-export function loginPage(next: string, error?: string): string {
+export function loginPage(next: string, error?: string, brand = 'Shipzora'): string {
   const safeNext = /^\/(?!\/)[\w\-./?=&%#]*$/.test(next) ? next : '/admin/accounts';
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Sign in — Shipzora Operations</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Sign in — ${esc(brand)} Operations</title>
 <style>
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;margin:0;background:#f3f4f1;color:#1b1f24;display:flex;min-height:100vh;align-items:center;justify-content:center}
   main{width:100%;max-width:380px;padding:24px}
@@ -165,7 +165,7 @@ export function loginPage(next: string, error?: string): string {
   button:hover{background:#084b46}.err{background:#fbeae8;border:1px solid #f0b7b0;color:#7a1a12;border-radius:6px;padding:10px 12px;font-size:13.5px;margin-bottom:14px}
   .brand{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b7178;font-weight:700;margin-bottom:14px}
 </style></head>
-<body><main><div class="card"><div class="brand">Shipzora Operations</div><h1>Sign in</h1><p>Internal pages. Enter the operator password.</p>
+<body><main><div class="card"><div class="brand">${esc(brand)} Operations</div><h1>Sign in</h1><p>Internal pages. Enter the operator password.</p>
 ${error ? `<div class="err" role="alert">${esc(error)}</div>` : ''}
 <form method="post" action="/api/admin/login"><input type="hidden" name="next" value="${esc(safeNext)}">
 <label for="pw">Operator password</label><input id="pw" name="password" type="password" autocomplete="current-password" required autofocus>

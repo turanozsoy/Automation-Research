@@ -1,7 +1,7 @@
 {
   "verificationCode": {
     "length": 9,
-    "help": "Enter the verification code provided for your Shipzora application."
+    "help": "Enter the verification code provided for your application."
   },
   "screens": [
     {

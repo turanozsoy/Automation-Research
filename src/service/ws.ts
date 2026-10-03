@@ -260,7 +260,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       if (!deps.auth.enabled) { res.writeHead(302, { location: q.get('next') || '/admin/accounts' }); res.end(); return; }
       if (deps.auth.loggedIn(req)) { res.writeHead(302, { location: safeNext(q.get('next')) }); res.end(); return; }
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-      res.end(loginPage(safeNext(q.get('next')), q.get('error') === '1' ? 'That password is not right.' : q.get('error') === '2' ? 'Too many attempts. Wait a minute and try again.' : undefined));
+      res.end(loginPage(safeNext(q.get('next')), q.get('error') === '1' ? 'That password is not right.' : q.get('error') === '2' ? 'Too many attempts. Wait a minute and try again.' : undefined, deps.content.brandName()));
       return;
     }
     if (url === '/api/admin/login' && method === 'POST') {
@@ -549,7 +549,9 @@ function textToHtml(text: string): string {
 
 function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string, string>, res: ServerResponse): void {
   const year = String(new Date().getFullYear());
-  const v = (k: string) => (content[k] ?? '').replace(/\{year\}/g, year);
+  const brand = (content['brand.name'] ?? '').trim() || 'Shipzora';
+  const v = (k: string) => (content[k] ?? '').replace(/\{year\}/g, year).replace(/\{brand\}/g, brand);
+  const siteTitle = v('brand.siteTitle') || `${brand} Careers`;
   const title = v(`legal.${slug}.title`) || slug;
   let body = textToHtml(v(`legal.${slug}.body`));
   if (slug === 'contact') {
@@ -563,19 +565,19 @@ function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string
   const link = (href: string, text: string) => `<a href="${href}"${href === `/${slug}` ? ' aria-current="page"' : ''}>${text}</a>`;
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#ffffff"><meta name="robots" content="noindex">
-<title>${escHtml(title)} | Shipzora Careers</title>
+<title>${escHtml(title)} | ${escHtml(siteTitle)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
 <link rel="stylesheet" href="/apply/apply.css"></head>
 <body data-screen="legal">
-<header class="site-header"><div class="shell header-row"><a class="header-back" href="/" aria-label="Back to the application"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a><p class="app-title"><span class="brand-word">Shipzora</span> Careers</p></div><div class="accent-line" aria-hidden="true"><span></span></div></header>
+<header class="site-header"><div class="shell header-row"><a class="header-back" href="/" aria-label="Back to the application"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a><p class="app-title"><span class="brand-word">${escHtml(brand)}</span> ${escHtml(v('brand.headerLanding') || 'Careers')}</p></div><div class="accent-line" aria-hidden="true"><span></span></div></header>
 <main class="shell legal-page"><h1>${escHtml(title)}</h1>${body}
 <nav class="legal-links legal-nav" aria-label="Legal pages">${link('/privacy', 'Privacy')}${link('/terms', 'Terms')}${link('/contact', 'Contact')}</nav>
-<p class="copyright">© ${year} Shipzora</p></main></body></html>`);
+<p class="copyright">${escHtml(v('landing.copyright') || `© ${year} ${brand}`)}</p></main></body></html>`);
 }
 
 function placeholderPage(title: string, res: ServerResponse): void {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title} | Shipzora Careers</title>
+  res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title>
 <style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;margin:0;background:#f3f4f1;color:#1b1f24}main{max-width:560px;margin:0 auto;padding:48px 20px}a{color:#084b46}</style></head>
 <body><main><h1>${title}</h1><p>This page isn\u2019t available yet.</p><p><a href="/">Back to your application</a></p></main></body></html>`);
 }

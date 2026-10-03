@@ -89,19 +89,21 @@
     const list = visibleAccounts();
     $('#accountsNote').textContent = accounts.length ? `${list.length} of ${accounts.length} account${accounts.length === 1 ? '' : 's'}` : '';
     if (!accounts.length) {
-      tb.innerHTML = '<tr><td colspan="9" class="empty"><strong>No onboarding accounts yet.</strong>Add an account to capture its session; workflows will use it automatically.</td></tr>';
+      tb.innerHTML = '<tr><td colspan="10" class="empty"><strong>No onboarding accounts yet.</strong>Add an account to capture its session; workflows will use it automatically.</td></tr>';
       return;
     }
-    if (!list.length) { tb.innerHTML = '<tr><td colspan="9" class="empty"><strong>No accounts match.</strong>Try another search or filter.</td></tr>'; return; }
+    if (!list.length) { tb.innerHTML = '<tr><td colspan="10" class="empty"><strong>No accounts match.</strong>Try another search or filter.</td></tr>'; return; }
     for (const a of list) {
       const tr = document.createElement('tr');
       tr.dataset.accountId = a.id;
       const loginOpen = !!logins[a.id];
-      const sessionSub = a.sessionStatus === 'attention' && a.sessionNote ? `<span class="sub">${esc(a.sessionNote)}</span>`
+      const sessionSub = a.sessionStatus === 'attention' && a.sessionNote ? `<span class="sub" title="${esc(a.sessionNote)}">${esc(NOTE_TEXT[a.sessionNote] || a.sessionNote)}</span>`
         : a.sessionStatus === 'expired' && a.stateReason ? `<span class="sub">${esc(a.stateReason)}</span>`
         : a.hasSession ? `<span class="sub">Last used ${esc(ago(a.lastUsedAt))}</span>` : '';
+      const browserOpen = loginOpen ? 'Login browser open' : a.browser && a.browser.running ? (a.browser.running.type === 'workflow' ? 'Workflow browser open' : 'Browser open') : '';
       tr.innerHTML = `
-        <td data-label="Account"><span class="acct-name">${esc(a.name)}</span>${loginOpen ? '<span class="sub">Login browser open</span>' : ''}</td>
+        <td class="td-check" data-label="Select"><input type="checkbox" class="row-check" aria-label="Select ${esc(a.name)}" ${selected.has(a.id) ? 'checked' : ''}></td>
+        <td data-label="Account"><span class="acct-name">${esc(a.name)}</span>${browserOpen ? `<span class="sub">${browserOpen}</span>` : ''}</td>
         <td data-label="Email">${esc(a.email)}</td>
         <td data-label="Session">${badge(SESSION, a.sessionStatus)}${sessionSub}</td>
         <td data-label="Proxy">${a.proxy ? `<span class="mono">${esc(a.proxy.label)}</span><span class="sub">${esc((EGRESS_STATE[a.proxy.state] || [0, a.proxy.state])[1])}${a.proxy.since ? ' · bound ' + esc(ago(a.proxy.since)) : ''}</span>` : '<span class="sub">none yet</span>'}</td>
@@ -111,34 +113,135 @@
         <td data-label="Last workflow">${when(a.lastWorkflowAt)}</td>
         <td data-label="Actions" class="td-actions"></td>`;
       const actions = tr.lastElementChild;
+      tr.querySelector('.row-check').onchange = (ev) => { if (ev.target.checked) selected.add(a.id); else selected.delete(a.id); updateBulkBar(); };
       const b1 = document.createElement('button');
       b1.type = 'button'; b1.className = 'btn btn-secondary btn-sm';
       b1.textContent = a.hasSession ? 'Refresh cookies' : 'Get cookies';
       b1.onclick = () => startLogin(a.id, a.name);
-      const b2 = document.createElement('button');
-      b2.type = 'button'; b2.className = 'btn-text-danger'; b2.textContent = 'Remove';
-      b2.onclick = () => askRemove(a);
-      if (a.reservation) {
-        const who = a.reservation.applicant ? `${a.reservation.applicant.fullName} (${a.reservation.applicant.displayId})` : 'that applicant';
-        const decide = async (decision, confirmText) => { if (!confirm(confirmText)) return; try { await api(`/api/accounts/${a.id}/review`, { method: 'POST', body: JSON.stringify({ decision }) }); msg(decision === 'release' ? `${a.name} released back into rotation.` : `${a.name} marked verified and taken by ${who}.`); await load(); } catch (e) { msg(e.message, true); } };
-        if (a.reservation.state === 'review') {
-          const bv = document.createElement('button'); bv.type = 'button'; bv.className = 'btn btn-primary btn-sm'; bv.textContent = 'Mark verified';
-          bv.onclick = () => decide('verified', `Mark ${a.name} as verified for ${who}?\n\nThe account will never be used for another applicant.`);
-          actions.append(bv, document.createTextNode(' '));
-        }
-        const br = document.createElement('button'); br.type = 'button'; br.className = 'btn btn-secondary btn-sm'; br.textContent = 'Release account';
-        br.onclick = () => decide('release', `Release ${a.name} back into rotation?\n\n${a.reservation.state === 'taken' ? 'It is currently taken by ' + who + '.' : 'Only do this once you know ' + who + ' did not get the role.'}`);
-        actions.append(br, document.createTextNode(' '));
-      }
-      const running = loginOpen || !!(a.browser && a.browser.running);
-      if (!running) {
-        const bp = document.createElement('button'); bp.type = 'button'; bp.className = 'btn btn-secondary btn-sm'; bp.textContent = a.proxy ? 'Change proxy' : 'Assign proxy';
-        bp.onclick = () => showAssignProxy(a, actions, bp);
-        actions.append(bp, document.createTextNode(' '));
-      }
-      actions.append(b1, document.createTextNode(' '), b2);
+      const more = document.createElement('button');
+      more.type = 'button'; more.className = 'btn btn-secondary btn-sm menu-btn'; more.textContent = 'More'; more.setAttribute('aria-haspopup', 'menu'); more.setAttribute('aria-label', `More actions for ${a.name}`);
+      more.onclick = () => openRowMenu(a, more, actions);
+      actions.append(b1, document.createTextNode(' '), more);
       tb.appendChild(tr);
     }
+    updateBulkBar();
+  }
+
+  const NOTE_TEXT = { SESSION_PERSIST_FAILED: 'The refreshed session could not be saved after the last run. Refresh cookies.' };
+
+  // ---------- per-row menu (everything that is not the primary cookie action) ----------
+  let openMenu = null;
+  function closeMenu() { if (openMenu) { openMenu.remove(); openMenu = null; } }
+  document.addEventListener('click', (ev) => { if (openMenu && !openMenu.contains(ev.target) && !ev.target.closest('.menu-btn')) closeMenu(); });
+  document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
+  window.addEventListener('scroll', closeMenu, true);
+  function openRowMenu(a, button, actions) {
+    if (openMenu && openMenu.dataset.for === a.id) { closeMenu(); return; }
+    closeMenu();
+    const menu = document.createElement('div'); menu.className = 'menu'; menu.setAttribute('role', 'menu'); menu.dataset.for = a.id;
+    const item = (text, fn, cls = '') => { const b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'menuitem'); b.className = cls; b.textContent = text; b.onclick = () => { closeMenu(); fn(); }; menu.appendChild(b); return b; };
+    const note = (text) => { const d = document.createElement('div'); d.className = 'menu-note'; d.textContent = text; menu.appendChild(d); };
+    const rule = () => menu.appendChild(document.createElement('hr'));
+    const running = !!logins[a.id] || !!(a.browser && a.browser.running);
+    if (running) note('Browser open: proxy, environment and removal wait until it closes.');
+    else item(a.proxy ? 'Change proxy…' : 'Assign proxy…', () => showAssignProxy(a, actions, button));
+    if (a.proxy && !running) item('Check proxy & DNS', () => runDiagnostics(a));
+    item('View history', () => showHistory(a));
+    if (a.reservation) {
+      rule();
+      const who = a.reservation.applicant ? `${a.reservation.applicant.fullName} (${a.reservation.applicant.displayId})` : 'that applicant';
+      const decide = async (decision, confirmText) => { if (!confirm(confirmText)) return; try { await api(`/api/accounts/${a.id}/review`, { method: 'POST', body: JSON.stringify({ decision }) }); msg(decision === 'release' ? `${a.name} released back into rotation.` : `${a.name} marked verified and taken by ${who}.`); await load(); } catch (e) { msg(e.message, true); } };
+      if (a.reservation.state === 'review') item('Mark verified', () => decide('verified', `Mark ${a.name} as verified for ${who}?\n\nThe account will never be used for another applicant.`));
+      item('Release account', () => decide('release', `Release ${a.name} back into rotation?\n\n${a.reservation.state === 'taken' ? 'It is currently taken by ' + who + '.' : 'Only do this once you know ' + who + ' did not get the role.'}`));
+    }
+    rule();
+    if (running) note('Remove is unavailable while the browser is open.'); else item('Remove account', () => askRemove(a), 'danger');
+    document.body.appendChild(menu);
+    const r = button.getBoundingClientRect();
+    menu.style.top = `${Math.min(r.bottom + 4, window.innerHeight - menu.offsetHeight - 8)}px`;
+    menu.style.left = `${Math.max(8, r.right - menu.offsetWidth)}px`;
+    openMenu = menu;
+    menu.querySelector('button')?.focus();
+  }
+
+  // ---------- bulk selection ----------
+  const selected = new Set();
+  function updateBulkBar() {
+    for (const id of [...selected]) if (!accounts.some((a) => a.id === id)) selected.delete(id);
+    const n = selected.size;
+    $('#bulkBar').hidden = n === 0;
+    $('#bulkCount').textContent = `${n} selected`;
+    const visible = visibleAccounts();
+    const all = $('#selectAll');
+    all.checked = visible.length > 0 && visible.every((a) => selected.has(a.id));
+    all.indeterminate = !all.checked && visible.some((a) => selected.has(a.id));
+  }
+  $('#selectAll').onchange = (ev) => { for (const a of visibleAccounts()) { if (ev.target.checked) selected.add(a.id); else selected.delete(a.id); } renderAccounts(); };
+  $('#bulkClear').onclick = () => { selected.clear(); renderAccounts(); };
+  const selectedAccounts = () => accounts.filter((a) => selected.has(a.id));
+  $('#bulkRemove').onclick = () => { const list = selectedAccounts(); if (!list.length) return; removing = { bulk: list }; $('#removeTitle').textContent = `Remove ${list.length} account${list.length === 1 ? '' : 's'}?`; $('#removeText').innerHTML = `This deletes <strong>${esc(list.map((a) => a.name).slice(0, 6).join(', '))}${list.length > 6 ? ` and ${list.length - 6} more` : ''}</strong> with their saved sessions. Accounts whose browser is open are skipped. Verified applications keep their history.`; $('#dlgRemove').showModal(); $('#btnCancelRemove').focus(); };
+  $('#bulkRelease').onclick = async () => {
+    const list = selectedAccounts().filter((a) => a.reservation);
+    if (!list.length) { msg('None of the selected accounts is under review or taken.', true); return; }
+    if (!confirm(`Release ${list.length} account${list.length === 1 ? '' : 's'} back into rotation?\n\nTaken accounts will be used for other applicants again.`)) return;
+    let ok = 0; const errors = [];
+    for (const a of list) { try { await api(`/api/accounts/${a.id}/review`, { method: 'POST', body: JSON.stringify({ decision: 'release' }) }); ok++; } catch (e) { errors.push(`${a.name}: ${e.message}`); } }
+    msg(`${ok} released${errors.length ? `; ${errors.length} failed (${errors[0]})` : '.'}`, errors.length > 0);
+    selected.clear(); await load();
+  };
+  $('#bulkAssign').onclick = async () => {
+    const list = selectedAccounts().filter((a) => !a.proxy && !logins[a.id] && !(a.browser && a.browser.running));
+    const clean = egressList.filter((e) => e.kind !== 'direct' && e.clean && e.state === 'available' && !e.boundTo);
+    if (!list.length) { msg('Every selected account already has a proxy (or its browser is open).', true); return; }
+    if (!clean.length) { msg('No never-used proxy is available. Import proxies first, or assign used ones one by one from the row menu.', true); return; }
+    const n = Math.min(list.length, clean.length);
+    if (!confirm(`Assign ${n} never-used prox${n === 1 ? 'y' : 'ies'} to ${n} account${n === 1 ? '' : 's'}?${list.length > clean.length ? `\n\nOnly ${clean.length} never-used proxies exist; ${list.length - clean.length} account(s) stay without one.` : ''}`)) return;
+    let ok = 0; const errors = [];
+    for (let i = 0; i < n; i++) { try { await api(`/api/accounts/${list[i].id}/proxy`, { method: 'POST', body: JSON.stringify({ egressId: clean[i].id, allowHistorical: false }) }); ok++; } catch (e) { errors.push(`${list[i].name}: ${e.message}`); } }
+    msg(`${ok} prox${ok === 1 ? 'y' : 'ies'} assigned${errors.length ? `; ${errors.length} failed (${errors[0]})` : '.'}`, errors.length > 0);
+    selected.clear(); await Promise.all([load(), loadEgress()]);
+  };
+
+  // ---------- generic drawer (history, proxy & DNS check) ----------
+  function showDrawer(eyebrow, title, rows) {
+    $('#detEyebrow').textContent = eyebrow; $('#detName').textContent = title; $('#detList').innerHTML = rows.join('');
+    if (!$('#dlgDetails').open) $('#dlgDetails').showModal();
+  }
+  async function runDiagnostics(a) {
+    msg(`Checking ${a.name}'s proxy and DNS path… this opens its browser briefly (up to a minute).`);
+    let r;
+    try { r = await api(`/api/dev/network-diagnostics/${a.id}`, { method: 'POST' }); } catch (e) { msg(e.message, true); return; }
+    const rows = []; const row = (k, v) => rows.push(`<dt>${esc(k)}</dt><dd>${v}</dd>`); const group = (t) => rows.push(`<dd class="group">${esc(t)}</dd>`);
+    const VERDICT = { ok: ['ok', 'OK: traffic and DNS go through the proxy'], leak: ['danger', 'LEAK: a name was looked up on this server'], launch_refused: ['warn', 'Launch refused: the proxy could not be used'], inconclusive: ['warn', 'Inconclusive'], not_applicable: ['neutral', 'No proxy assigned'] };
+    const [cls, text] = VERDICT[r.verdict] || ['neutral', r.verdict];
+    group('Result'); row('Verdict', `<span class="badge ${cls}">${esc(text)}</span>`);
+    if (r.egress) row('Proxy', `${esc(r.egress.label)} <span class="sub">${esc(r.egress.protocol || '')}${r.egress.hostIsLiteral ? ' · IP address' : ' · hostname'}</span>`);
+    row('Launch', r.launch.ok ? `opened through the proxy${r.launch.failover ? ' (after a failover)' : ''}` : `refused${r.launch.code ? ` (${esc(r.launch.code)})` : ''}${r.launch.message ? `<span class="sub">${esc(r.launch.message)}</span>` : ''}`);
+    row('Direct fallback', 'never (the launch fails instead)');
+    if (r.publicIp) { group('Seen from outside'); row('Public IP', r.publicIp.ip ? `<code>${esc(r.publicIp.ip)}</code>` : `<span class="sub">${esc(r.publicIp.error || 'not available')}</span>`); }
+    if (r.canary) { group('DNS path test'); row('http', esc(r.canary.http.explanation)); if (r.canary.https) row('https (CONNECT)', esc(r.canary.https.explanation)); row('Canary name', `<code>${esc(r.canary.hostname)}</code>`); }
+    if (r.secureDns) { group('Browser settings'); row('Secure DNS (DoH)', `${esc(r.secureDns.observed)} <span class="sub">${esc(r.secureDns.detail)}</span>`); }
+    if (r.commandLine) { row('Local resolver', r.commandLine.hostResolverRules ? `blocked <span class="sub">${esc(r.commandLine.hostResolverRules)}</span>` : '<span class="badge warn">rule missing</span>'); row('Credentials in command line', r.commandLine.credentialsPresent ? '<span class="badge danger">present</span>' : 'none'); }
+    if (r.notes && r.notes.length) { group('Notes'); for (const n of r.notes) row('', esc(n)); }
+    row('Duration', `${Math.round((r.durationMs || 0) / 100) / 10} s`);
+    showDrawer('Proxy & DNS check', a.name, rows);
+    msg('');
+  }
+  async function showHistory(a) {
+    let r;
+    try { r = await api(`/api/accounts/${a.id}/history`); } catch (e) { msg(e.message, true); return; }
+    const rows = []; const row = (k, v) => rows.push(`<dt>${esc(k)}</dt><dd>${v}</dd>`); const rowAt = (ts, v) => rows.push(`<dt>${when(ts)}</dt><dd>${v}</dd>`); const group = (t) => rows.push(`<dd class="group">${esc(t)}</dd>`);
+    const label = (id) => { const e = egressList.find((x) => x.id === id); return e ? e.label : (id || '').slice(0, 8); };
+    group('Now');
+    row('Proxy', a.proxy ? `${esc(a.proxy.label)} <span class="sub">${esc((EGRESS_STATE[a.proxy.state] || [0, a.proxy.state])[1])}</span>` : 'none');
+    row('Browser', r.runtime ? `open (${esc(r.runtime.type)}) since ${when(r.runtime.since)}` : 'closed');
+    if (a.browser) row('Profile', `${a.browser.initialized ? 'persistent profile created' : 'not created yet'}${a.browser.locale || a.browser.timezone || a.browser.viewport ? `<span class="sub">${esc([a.browser.locale, a.browser.timezone, a.browser.viewport].filter(Boolean).join(' · '))}</span>` : ''}`);
+    group(`Proxy assignments (${r.history.length})`);
+    if (!r.history.length) row('', '<span class="sub">none yet</span>');
+    for (const hrow of r.history) rowAt(hrow.assigned_at, `${esc(label(hrow.egress_id))} <span class="sub">${esc(hrow.reason)}${hrow.ended_at ? ` · ended ${esc(human(hrow.ended_at))}${hrow.ended_reason ? ' (' + esc(hrow.ended_reason) + ')' : ''}` : ' · current'}</span>`);
+    group(`Recent events (${r.audit.length})`);
+    for (const ev of r.audit) rowAt(ev.at, `${esc(ev.type.toLowerCase().replace(/_/g, ' '))}${ev.code ? ` <span class="sub">${esc(ev.code)}</span>` : ''}${ev.detail ? `<span class="sub">${esc(ev.detail)}</span>` : ''}`);
+    showDrawer('Account history', a.name, rows);
   }
 
   function renderStats() {
@@ -238,13 +341,18 @@
 
   // ---------- remove (confirmation dialog, destructive styling) ----------
   let removing = null;
-  function askRemove(a) { removing = a; $('#removeName').textContent = a.name; $('#dlgRemove').showModal(); $('#btnCancelRemove').focus(); }
+  function askRemove(a) { removing = a; $('#removeTitle').textContent = 'Remove account?'; $('#removeText').innerHTML = 'This deletes <strong id="removeName"></strong> and its saved session. Verified applications processed with it keep their history.'; $('#removeName').textContent = a.name; $('#dlgRemove').showModal(); $('#btnCancelRemove').focus(); }
   $('#btnCancelRemove').onclick = () => { removing = null; $('#dlgRemove').close(); };
   $('#btnConfirmRemove').onclick = async () => {
     if (!removing) return;
-    const a = removing; removing = null;
+    const target = removing; removing = null;
     $('#dlgRemove').close();
-    try { await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); msg(`Removed ${a.name}.`); await load(); loadVerified(false); } catch (e) { msg(e.message, true); }
+    const list = target.bulk || [target];
+    let ok = 0; const errors = [];
+    for (const a of list) { try { await api(`/api/accounts/${a.id}`, { method: 'DELETE' }); ok++; } catch (e) { errors.push(`${a.name}: ${e.message}`); } }
+    if (target.bulk) msg(`${ok} account${ok === 1 ? '' : 's'} removed${errors.length ? `; ${errors.length} skipped (${errors[0]})` : '.'}`, errors.length > 0);
+    else msg(errors.length ? errors[0] : `Removed ${list[0].name}.`, errors.length > 0);
+    selected.clear(); await load(); loadVerified(false);
   };
 
   function focusAccount(id) {
@@ -430,6 +538,7 @@
 
   function showDetails(it) {
     const p = it.processedWith;
+    $('#detEyebrow').textContent = 'Verified application';
     $('#detName').textContent = it.fullName;
     const rows = [];
     const row = (k, v) => rows.push(`<dt>${esc(k)}</dt><dd>${v}</dd>`);
@@ -481,8 +590,16 @@
   let contentGroup = null;
   const contentEdits = new Map(); // key -> draft text (differs from the saved value)
 
+  function applyBrand(name) {
+    const b = (name || '').trim() || 'Shipzora';
+    document.title = `${b} Operations`;
+    for (const el of document.querySelectorAll('.brand-name')) el.textContent = b;
+    for (const el of document.querySelectorAll('[data-brand-ops]')) el.textContent = `${b} Operations · internal`;
+    const link = document.querySelector('a.brand'); if (link) link.setAttribute('aria-label', `${b} Operations`);
+  }
   async function loadContent() {
     content = await api('/api/admin/content');
+    applyBrand((content.fields.find((f) => f.key === 'brand.name') || {}).value);
     if (!contentGroup || !content.groups.includes(contentGroup)) contentGroup = content.groups[0] || null;
     renderContent();
   }

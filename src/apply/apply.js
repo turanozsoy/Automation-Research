@@ -40,8 +40,11 @@
   // ---------------------------------------------------------------------------
   let config = { verificationCode: { length: 6, help: '' }, screens: [], content: {} };
   /** Applicant copy by key (config.content, defaults merged with edits made on the operations page); always rendered as text. */
+  /** The company / site name, editable on the operations page (brand.name); every {brand} in the copy becomes it. */
+  const brand = () => ((config.content && config.content['brand.name']) || 'Shipzora').trim() || 'Shipzora';
   const t = (key, vars = {}) => {
     let s = (config.content && typeof config.content[key] === 'string') ? config.content[key] : '';
+    s = s.replace(/\{brand\}/g, brand());
     s = s.replace(/\{n\}/g, String(config.verificationCode.length));
     s = s.replace(/\{name\}/g, vars.name !== undefined ? vars.name : '');
     s = s.replace(/\{year\}/g, String(new Date().getFullYear()));
@@ -49,7 +52,8 @@
   };
   /** Hero headline: text nodes per line, with the brand word highlighted (no HTML from the content). */
   const heroTitle = (text) => text.split('\n').flatMap((line, i) => {
-    const parts = line.split(/(Shipzora\.?)/i).filter(Boolean).map((part) => (/^shipzora\.?$/i.test(part) ? el('span', { class: 'accent', text: part }) : part));
+    const b = brand().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = line.split(new RegExp(`(${b}\\.?)`, 'i')).filter(Boolean).map((part) => (new RegExp(`^${b}\\.?$`, 'i').test(part) ? el('span', { class: 'accent', text: part }) : part));
     return i ? [el('br'), ...parts] : parts;
   });
   /** Text with line breaks (multiline copy such as the hero headline), built from text nodes. */
@@ -623,7 +627,8 @@
     root.replaceChildren();
     setProgress();
     document.body.dataset.screen = step === 'landing' ? 'landing' : step === FINAL ? 'status' : 'step';
-    $('#headerContext').replaceChildren(el('span', { class: 'brand-word', text: 'Shipzora' }), ' ', step === 'landing' ? 'Careers' : 'Application');
+    $('#headerContext').replaceChildren(el('span', { class: 'brand-word', text: brand() }), ' ', step === 'landing' ? t('brand.headerLanding') : t('brand.headerSteps'));
+    document.title = t('brand.tabTitle') || document.title;
     $('#headerBack').hidden = step === 'landing' || step === FINAL || !prevStep(step);
     if (step === 'landing') root.append(renderLanding(landingExisting));
     else if (step === 'contact') root.append(renderContact());

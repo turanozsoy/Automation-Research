@@ -109,6 +109,14 @@ header, anything else gets 403, and the service warns at startup. The applicant 
 
 ## Applicant page content (editable copy)
 
+**Company / site name.** The group **Brand** holds `brand.name` (default "Shipzora"). Every `{brand}` in any other
+text becomes this name, and it also drives the applicant page's browser-tab title (`brand.tabTitle`), the header
+(`<name> Careers` / `<name> Application`, words from `brand.headerLanding` / `brand.headerSteps`), the yellow word in
+the hero headline, the copyright line, the legal pages (title suffix `brand.siteTitle`, body text, footer) and the
+operator pages (operations header, tab title, footer, sign-in page). Change it once on the operations page and it
+changes everywhere; no code or config edit is needed. Technical names (cookie names, routes, database keys) stay as
+they are on purpose.
+
 The operations page has an **Applicant page content** section: every applicant-facing string (landing
 hero, step headings and helper text, verification screen, question wording and option labels, preparing /
 problem copy, role-ready screen) grouped by screen, with the current text, a character limit, "Reset to
@@ -123,6 +131,14 @@ name are the only placeholders. API: `GET /api/admin/content`, `PUT /api/admin/c
 `{ values: { key: text | null } }` (`null` resets).
 
 ## Operations page: `/admin/accounts`
+
+Accounts table: each row has the primary cookie action (**Get cookies** / **Refresh cookies**) and a **More** menu
+with Assign / Change proxy, Check proxy & DNS (runs the network diagnostics for that account and shows the verdict,
+public IP, DNS path test and Secure DNS state), View history (proxy assignments, runtime, recent audit events), Mark
+verified / Release account for held accounts, and Remove. Rows have checkboxes; selecting some shows a bar with
+**Assign never-used proxies** (one clean proxy per selected account without one), **Release selected** and
+**Remove selected** (accounts whose browser is open are skipped and reported). Session notes are written in plain
+words (the raw code stays in the tooltip).
 
 Internal page for HR / operations staff (`src/test-a/admin.html`, `admin.css`, `admin.js`; the `/debug`
 harness keeps its plain developer look). Top bar with section links and a small "Automation: Visible |
