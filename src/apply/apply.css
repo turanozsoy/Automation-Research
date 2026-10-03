@@ -293,11 +293,25 @@ fieldset .error-text { margin-top: 10px; }
 .spinner { display: inline-block; width: 24px; height: 24px; border: 3px solid rgba(217, 8, 18, .18); border-top-color: var(--color-primary-red); border-radius: 50%; animation: spin 900ms linear infinite; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* ---------- bottom sheet (address confirmation) ---------- */
+.sheet-backdrop { position: fixed; inset: 0; z-index: 40; background: rgba(17, 17, 17, .55); display: flex; align-items: flex-end; justify-content: center; animation: fade 160ms ease; }
+.sheet { width: 100%; max-width: var(--shell); background: var(--color-white); border-radius: 22px 22px 0 0; padding: 22px var(--gutter) calc(18px + env(safe-area-inset-bottom)); box-shadow: 0 -12px 40px rgba(0, 0, 0, .18); animation: rise 200ms ease; }
+.sheet .eyebrow { margin-bottom: 6px; }
+.sheet h2 { margin: 0 0 10px; font-size: 26px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 800; }
+.sheet-text { margin: 0 0 18px; color: var(--color-text-secondary); font-size: 16px; line-height: 1.45; }
+.address-card { display: flex; flex-direction: column; gap: 2px; padding: 16px 18px; margin: 0 0 18px; border: 1px solid var(--color-yellow-warm); background: var(--color-yellow-soft); border-radius: var(--radius-card); font-size: 18px; font-weight: 700; line-height: 1.35; }
+.address-card .address-line + .address-line { font-weight: 600; color: var(--color-text-secondary); font-size: 16px; }
+.sheet .btn + .btn { margin-top: 10px; }
+@keyframes fade { from { opacity: 0; } }
+@keyframes rise { from { transform: translateY(24px); opacity: .6; } }
+@media (min-width: 640px) { .sheet-backdrop { align-items: center; padding: 24px; } .sheet { border-radius: 22px; } }
+
 /* ---------- waiting screen: staged progress ---------- */
 .stages { list-style: none; margin: 0 0 6px; padding: 0; display: grid; gap: 0; }
-.stage { display: flex; align-items: center; gap: 14px; min-height: 52px; padding: 4px 0; font-size: 16px; font-weight: 600; color: var(--color-text); position: relative; }
-.stage + .stage::before { content: ""; position: absolute; left: 13px; top: -22px; width: 2px; height: 22px; background: var(--color-border); }
-.stage-dot { flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--color-border); background: var(--color-white); }
+.stage { display: flex; align-items: center; gap: 14px; height: 60px; padding: 0; font-size: 16px; font-weight: 600; color: var(--color-text); position: relative; }
+/* connector runs from the bottom of the dot above (y = 44 of a 60px row) to the top of this row's dot (y = 16) */
+.stage + .stage::before { content: ""; position: absolute; left: 13px; top: -16px; width: 2px; height: 32px; background: var(--color-border); }
+.stage-dot { flex: none; width: 28px; height: 28px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 2px solid var(--color-border); background: var(--color-white); position: relative; z-index: 1; }
 .stage.done .stage-dot { background: var(--color-text); border-color: var(--color-text); color: var(--color-yellow); }
 .stage.done .stage-dot svg { width: 16px; height: 16px; }
 .stage.active .stage-dot { border-color: var(--color-primary-red); }

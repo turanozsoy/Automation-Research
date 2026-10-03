@@ -423,13 +423,30 @@
     const select = el('select', { class: 'select', id: 'f-state', name: 'state', autocomplete: 'address-level1', onchange: (ev) => { v.state = ev.target.value; clearError('state'); } },
       el('option', { value: '', text: 'Select a state' }),
       ...US_STATES.map(([code, name]) => el('option', { value: code, text: name, selected: v.state === code })));
+    // Continue -> a confirmation sheet: the address must match the applicant's ID. Only "Yes" saves it and starts
+    // the onboarding preparation in the background; "Edit" returns to the fields. Nothing is sent before that.
+    const confirmAndContinue = () => {
+      send({ type: 'app.update', fields: { address1: v.address1.trim(), city: v.city.trim(), state: v.state, zip: v.zip.trim() } });
+      if (!codeReceived()) send({ type: 'app.address_completed' });
+      go('code');
+    };
     const submit = () => {
       const errors = validateAddress();
       if (errors.length) return showErrors(errors);
-      send({ type: 'app.update', fields: { address1: v.address1.trim(), city: v.city.trim(), state: v.state, zip: v.zip.trim() } });
-      // Onboarding preparation starts in the background; the applicant moves straight on.
-      if (!codeReceived()) send({ type: 'app.address_completed' });
-      go('code');
+      const stateName = (US_STATES.find(([c]) => c === v.state) || [v.state, v.state])[1];
+      const sheet = el('div', { class: 'sheet-backdrop', id: 'addressConfirm', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'addressConfirmTitle' },
+        el('div', { class: 'sheet' },
+          el('p', { class: 'eyebrow', text: t('address.title') }),
+          el('h2', { id: 'addressConfirmTitle', text: t('address.confirm.title') }),
+          el('p', { class: 'sheet-text', text: t('address.confirm.text') }),
+          el('div', { class: 'address-card' },
+            el('span', { class: 'address-line', text: v.address1.trim() }),
+            el('span', { class: 'address-line', text: `${v.city.trim()}, ${stateName} ${v.zip.trim()}` })),
+          el('button', { type: 'button', class: 'btn btn-primary', id: 'btnAddressYes', text: t('address.confirm.yes'), onclick: () => { sheet.remove(); confirmAndContinue(); } }),
+          el('button', { type: 'button', class: 'btn btn-secondary', id: 'btnAddressEdit', text: t('address.confirm.edit'), onclick: () => { sheet.remove(); const f = $('#f-address1'); if (f) f.focus(); } })));
+      sheet.addEventListener('click', (ev) => { if (ev.target === sheet) { sheet.remove(); } });
+      $('#screen').appendChild(sheet);
+      $('#btnAddressYes').focus();
     };
     return form(submit,
       el('h1', { text: t('address.title') }),
@@ -539,9 +556,9 @@
         el('span', { class: 'stage-dot', 'aria-hidden': 'true', html: state === 'done' ? ICON.check : state === 'active' ? '<span class="mini-spinner"></span>' : '' }),
         el('span', { class: 'stage-text', text }),
         el('span', { class: 'sr-only', text: state === 'done' ? ' (done)' : state === 'active' ? ' (in progress)' : ' (next)' }));
+      void sp;
       card.append(
         badge(t('preparing.badge')),
-        el('div', { class: 'status-icon wait' }, sp),
         el('h1', { text: t('preparing.title') }),
         el('p', { class: 'lede', text: t('preparing.intro', { name: first ? ', ' + first : '' }) }),
         el('ol', { class: 'stages', 'aria-label': 'Progress' },

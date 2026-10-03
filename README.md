@@ -69,7 +69,17 @@ Then open <http://localhost:3000/debug> in one tab per workflow you want to driv
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 The debug harness is an internal developer tool; applicants use the application API below.
 
-### Operator login (internal pages)
+### Before launch — open reminders
+
+- **Verification step before the role details.** The final screen already reads as "one quick verification",
+  but its button still opens the generated role-details link directly. Build the verification step and point
+  the button at it (copy keys `ready.*`), then re-check `/completed` as the conversion route.
+- Set `ADMIN_PASSWORD`, `PROFILE_MASTER_KEY` and `SECURE_COOKIES=1` behind HTTPS; back up `DATA_DIR`.
+- Real Privacy, Terms and Contact pages (footer links are placeholders).
+- Meta Pixel on the step routes and the `/completed` conversion (not added yet).
+- Decide the `awaiting_code` idle limit (an applicant idle on the code screen holds an account and its proxy).
+
+## Operator login (internal pages)
 
 `/admin/accounts`, `/debug`, the admin and dev APIs, `/ws` and `/ws/admin` are internal. Set
 `ADMIN_PASSWORD` and every one of them requires a sign-in at `/admin/login`: a successful login sets an
@@ -305,7 +315,7 @@ about the application is in the URL. Flow:
 | Landing | — | one mobile screen: red/black `SHIPZORA CAREERS` header with a short red/yellow accent, full-width hero photo (`src/apply/hero.png` or `hero.jpg`, picked up automatically; dark placeholder until then) with a gradient, cash pill, headline with the brand word in yellow, trust row, red CTA with a small copyright line and the legal links beneath it → `POST /api/applications` (cookie). A returning applicant sees a Welcome back panel; the CTA resumes. |
 | 1 About you | firstName, lastName, mobileNumber (digits), email | `autocomplete` given-name / family-name / tel / email |
 | 2 Date of birth | dateOfBirth (ISO) | month / day / year inputs (`bday-*`); copy says it sets up the onboarding record and is not used to evaluate the application |
-| 3 Address | address1, city, state, zip | "Street address" (as on the driver’s license), City, State + ZIP; separate fields, real state list; Continue → `app.address_completed` → straight to step 4 while the workflow prepares |
+| 3 Address | address1, city, state, zip | "Street address" (as on the driver’s license), City, State + ZIP; separate fields, real state list; Continue opens a confirmation sheet ("Does this match your ID?" with the entered address; Yes / Edit address); only Yes saves and sends `app.address_completed` → straight to step 4 while the workflow prepares |
 | 4 Verification code | nothing (code → `app.verify` only) | one numeric `one-time-code` input, length from config; shows "received" once handed over; asks again after a problem |
 | 5–7 Questions | answers (saved on each selection) | card radios from `config/apply-questions.json` |
 | Final | — | `processing` → "Preparing your role details…" with three honest progress stages (received → verifying → preparing, driven by the application state, no countdown), a note that changes after 20 s and 60 s, vibration + tab title when the link arrives; leaving the tab / page and returning while waiting is recorded (`wait_shown`, `wait_hidden`, `wait_visible`, sent over the socket or a beacon on close) and `link_ready_unattended` marks a link that became ready with no applicant page connected — the operations page shows per-application wait rows and an overall "Wait for the link" card (average, p90, left while waiting, never opened); `link_ready` → "Your role details are ready" + **View Role Details** (new tab, `app.link_opened` → visited); `completed` → confirmed; `problem` → Try again (back to the code step) |

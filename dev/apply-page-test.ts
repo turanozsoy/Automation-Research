@@ -78,8 +78,18 @@ try {
   await p.fill('#f-city', 'Springfield');
   await p.selectOption('#f-state', 'NY');
   await p.fill('#f-zip', '10001');
-  const tContinue = Date.now();
   await p.getByRole('button', { name: 'Continue' }).click();
+  await p.locator('#addressConfirm').waitFor({ timeout: 3000 });
+  check(/1 Main St/.test(await p.locator('#addressConfirm .address-card').innerText()) && /Springfield, New York 10001/.test(await p.locator('#addressConfirm .address-card').innerText()), 'Continue shows the "matches your ID" confirmation with the entered address');
+  const dbBefore = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
+  check((dbBefore.prepare("SELECT COUNT(*) n FROM applications WHERE first_name = 'Jordan' AND last_name = ? AND state = 'processing'").get(LAST) as { n: number }).n === 0, 'nothing is submitted while the confirmation is open');
+  dbBefore.close();
+  await p.locator('#btnAddressEdit').click();
+  check((await p.locator('#addressConfirm').count()) === 0 && await p.evaluate(() => document.activeElement?.id) === 'f-address1', 'Edit address closes the sheet and focuses the street field');
+  await p.getByRole('button', { name: 'Continue' }).click();
+  await p.locator('#addressConfirm').waitFor({ timeout: 3000 });
+  const tContinue = Date.now();
+  await p.locator('#btnAddressYes').click();
   await h1(/Verification code/, 3000);
   atPath('/step-5', 'verification code');
   const dt = Date.now() - tContinue;
@@ -169,7 +179,7 @@ try {
   await noTech('final screen');
   const cta = p.locator('#btnViewRole');
   await cta.waitFor({ timeout: 120_000 });
-  check(/your role details are ready/i.test(await p.locator('main h1').innerText()), 'CTA appeared live when the link was ready');
+  check(/one quick verification|role details are ready/i.test(await p.locator('main h1').innerText()), 'CTA appeared live when the link was ready');
   await p.waitForFunction(() => location.pathname === '/completed', null, { timeout: 5000 }).catch(() => {});
   atPath('/completed', 'role-ready conversion route');
   await p.reload();
