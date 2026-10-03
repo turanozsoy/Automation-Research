@@ -54,10 +54,13 @@ async function main(): Promise<void> {
   // Every account browser is its own Chromium process launched with its own proxy, so the per-context placeholder is
   // no longer needed anywhere. Direct (server IP) is never an automatic fallback for an account that has a proxy; under
   // STRICT_ACCOUNT_EGRESS it is never used for account browsers at all.
-  store.setDirectAllowed(!settings.strictAccountEgress);
   const eg = store.egress.counts();
+  // Strict account egress is the default as soon as at least one proxy is imported: accounts without a proxy then wait
+  // for one instead of using the server IP. STRICT_ACCOUNT_EGRESS=0/1 in the environment overrides this.
+  if (!settings.strictAccountEgressExplicit && eg.total > 0 && !settings.strictAccountEgress) { settings.strictAccountEgress = true; tl.mark('strict account egress', 'enabled automatically: proxies are imported (STRICT_ACCOUNT_EGRESS=0 to allow direct)'); }
+  store.setDirectAllowed(!settings.strictAccountEgress);
   tl.mark('egress', `${eg.total} proxy egress(es): ${eg.available} available (${eg.clean} clean / never assigned), ${eg.inUse} in use, ${eg.held} held, ${eg.down} down, ${eg.retired} retired; direct ${settings.strictAccountEgress ? 'FORBIDDEN for account browsers (STRICT_ACCOUNT_EGRESS)' : 'allowed for unbound accounts (development)'}`);
-  if (!settings.strictAccountEgress) console.warn('\n  STRICT_ACCOUNT_EGRESS is off: accounts without a proxy may run through the server IP. Set STRICT_ACCOUNT_EGRESS=1 (default in production).\n');
+  if (!settings.strictAccountEgress) console.warn('\n  STRICT_ACCOUNT_EGRESS is off: accounts without a proxy may run through the server IP. It turns on by itself once a proxy is imported (unless STRICT_ACCOUNT_EGRESS=0).\n');
   await browser.launch();
   registry.start();
   const logins = new LoginSessionManager(settings, cfg, store, browser, tl);

@@ -130,6 +130,12 @@
         br.onclick = () => decide('release', `Release ${a.name} back into rotation?\n\n${a.reservation.state === 'taken' ? 'It is currently taken by ' + who + '.' : 'Only do this once you know ' + who + ' did not get the role.'}`);
         actions.append(br, document.createTextNode(' '));
       }
+      const running = loginOpen || !!(a.browser && a.browser.running);
+      if (!running) {
+        const bp = document.createElement('button'); bp.type = 'button'; bp.className = 'btn btn-secondary btn-sm'; bp.textContent = a.proxy ? 'Change proxy' : 'Assign proxy';
+        bp.onclick = () => showAssignProxy(a, actions, bp);
+        actions.append(bp, document.createTextNode(' '));
+      }
       actions.append(b1, document.createTextNode(' '), b2);
       tb.appendChild(tr);
     }
@@ -250,25 +256,65 @@
     setTimeout(() => tr.classList.remove('highlight'), 4000);
   }
 
+  /**
+   * Inline chooser: available, unbound proxies. Never-used ones are assigned automatically to new accounts; a proxy
+   * that was used before is only ever assigned by hand, after an explicit confirmation (allowHistorical).
+   */
+  function showAssignProxy(a, actions, button) {
+    const eligible = egressList.filter((e) => e.kind !== 'direct' && e.state === 'available' && !e.boundTo && !e.liveWorkflows);
+    if (!eligible.length) { msg('No available proxy to assign. Import proxies, or release one from another account first.', true); return; }
+    const sel = document.createElement('select'); sel.className = 'assign-select'; sel.setAttribute('aria-label', `Proxy for ${a.name}`);
+    const first = document.createElement('option'); first.value = ''; first.textContent = a.proxy ? `Replace ${a.proxy.label} with…` : 'Choose a proxy…'; sel.appendChild(first);
+    for (const e of eligible) { const o = document.createElement('option'); o.value = e.id; o.textContent = `${e.label}${e.clean ? '' : ' (used before)'}${e.health && e.health !== 'healthy' ? ` · ${e.health}` : ''}`; sel.appendChild(o); }
+    const cancel = document.createElement('button'); cancel.type = 'button'; cancel.className = 'btn-text'; cancel.textContent = 'Cancel';
+    const restore = () => { sel.replaceWith(button); cancel.remove(); };
+    cancel.onclick = restore;
+    sel.onchange = async () => {
+      const e = eligible.find((x) => x.id === sel.value);
+      if (!e) return;
+      const historical = !e.clean;
+      const text = `${a.proxy ? `Replace ${a.proxy.label} with ${e.label}` : `Assign ${e.label} to ${a.name}`}?\n\n` +
+        (historical ? `${e.label} was used by another account before. Reusing it ties this account to a proxy with history. The provider may count this as a new session.\n\n` : '') +
+        'From now on every browser of this account (workflows, Get / Refresh cookies) uses this proxy until you release it.';
+      if (!confirm(text)) { sel.value = ''; return; }
+      sel.disabled = true;
+      try {
+        await api(`/api/accounts/${a.id}/proxy`, { method: 'POST', body: JSON.stringify({ egressId: e.id, allowHistorical: historical }) });
+        msg(`${e.label} assigned to ${a.name}.`);
+        await Promise.all([load(), loadEgress()]);
+      } catch (err) { msg(err.message, true); restore(); }
+    };
+    button.replaceWith(sel); sel.after(document.createTextNode(' '), cancel); sel.focus();
+  }
+
   // =====================================================================
   // proxy egress
   // =====================================================================
   const EGRESS_STATE = { available: ['ok', 'Available'], in_use: ['brand', 'In use'], held: ['warn', 'Held'], down: ['danger', 'Down'], retired: ['neutral', 'Retired'] };
   const EGRESS_HEALTH = { healthy: ['ok', 'Healthy'], degraded: ['warn', 'Degraded'], down: ['danger', 'Down'], unknown: ['neutral', 'Unknown'] };
   let egressDirectAllowed = true;
+  let egressStrict = false;
+  let egressList = []; // for the per-account Assign proxy control
 
   async function loadEgress() {
     let j;
     try { j = await api('/api/admin/egress'); } catch (e) { $('#egressNote').textContent = e.message; return; }
     egressDirectAllowed = j.directAllowed;
+    egressStrict = !!j.strictAccountEgress;
+    egressList = j.egress;
     const c = j.counts;
     $('#egressCount').textContent = `${c.total} session${c.total === 1 ? '' : 's'}`;
     $('#statProxies').textContent = c.available;
-    $('#statProxiesNote').textContent = c.total ? `${c.inUse} in use · ${c.held} held · ${c.down} down` : 'Workflows use the server IP';
-    $('#egressNote').textContent = egressDirectAllowed ? '' : 'Per-context proxy mode: the direct egress is unavailable; every workflow needs a proxy.';
+    $('#statProxiesNote').textContent = c.total ? `${c.clean} never used · ${c.inUse} in use · ${c.held} held · ${c.down} down` : 'Workflows use the server IP';
+    const proxyCount = j.egress.filter((e) => e.kind !== 'direct').length;
+    $('#egressNote').textContent = egressStrict
+      ? 'Strict: every account browser needs its own proxy; the server IP is never used for accounts. New accounts take a never-used proxy automatically, or assign one from the Accounts table.'
+      : proxyCount ? 'Strict mode is off (STRICT_ACCOUNT_EGRESS=0): accounts without a proxy run through the server IP.'
+      : 'No proxy imported yet: accounts run through the server IP. Strict mode turns on by itself once a proxy is imported.';
     const tb = $('#egressRows');
     tb.innerHTML = '';
     for (const e of j.egress) tb.appendChild(renderEgress(e));
+    if (accounts.length) renderAccounts(); // the Assign proxy choices depend on this list
   }
 
   function renderEgress(e) {
@@ -280,7 +326,7 @@
     const stateSub = e.state === 'held' ? `<span class="sub">since ${esc(human(e.heldSince))}</span>`
       : e.state === 'in_use' ? `<span class="sub">${e.liveWorkflows} workflow${e.liveWorkflows === 1 ? '' : 's'}</span>`
       : e.state === 'available' && isDirect ? `<span class="sub">${e.liveWorkflows} live workflow${e.liveWorkflows === 1 ? '' : 's'}${egressDirectAllowed ? '' : ' · unavailable in per-context mode'}</span>`
-      : e.state === 'available' && e.releasedAt ? `<span class="sub">released ${esc(human(e.releasedAt))}</span>`
+      : e.state === 'available' && !isDirect ? `<span class="sub">${e.clean ? 'never used · assigned automatically' : 'used before · assign by hand only'}${e.releasedAt ? ' · released ' + esc(human(e.releasedAt)) : ''}</span>`
       : e.stateReason ? `<span class="sub">${esc(e.stateReason)}</span>` : '';
     const healthBadge = isDirect ? '<span class="sub">—</span>' : badge(EGRESS_HEALTH, e.health);
     const healthSub = isDirect ? '' : `<span class="sub">${e.lastCheckAt ? 'checked ' + esc(ago(e.lastCheckAt)) : 'not checked yet'}${e.lastError ? ' · ' + esc(e.lastError) : ''}</span>`;
@@ -295,7 +341,7 @@
     const actions = tr.lastElementChild;
     const btn = (text, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.className = cls; b.textContent = text; b.onclick = fn; actions.appendChild(b); return b; };
     const act = async (path, method, okMsg) => { try { await api(path, { method }); if (okMsg) msg(okMsg); await loadEgress(); } catch (err) { msg(err.message, true); } };
-    if (e.state === 'held') btn('Release proxy', 'btn btn-primary btn-sm', () => { if (confirm(`Release ${e.label}${e.boundTo ? ` from ${e.boundTo.label}` : ''}?\n\nThis clears the account binding and makes the proxy available to a different account. Only do this after the provider confirms the session can be reused.`)) act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} released${e.boundTo ? ` from ${e.boundTo.label}` : ''} and back in the unused pool.`); });
+    if (e.state === 'held') btn('Release proxy', 'btn btn-primary btn-sm', () => { if (confirm(`Release ${e.label}${e.boundTo ? ` from ${e.boundTo.label}` : ''}?\n\nThis clears the account binding. A released proxy is never assigned automatically again (it was used before); you can still assign it to an account by hand from the Accounts table.`)) act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} released${e.boundTo ? ` from ${e.boundTo.label}` : ''}. Assign it by hand when you want to reuse it.`); });
     if (e.state === 'down') btn('Restore', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} restored.`));
     if (e.state === 'retired') btn('Reinstate', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/release`, 'POST', `${e.label} reinstated.`));
     if (!isDirect) btn('Check now', 'btn btn-secondary btn-sm', () => act(`/api/admin/egress/${e.id}/check`, 'POST'));

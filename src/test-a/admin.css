@@ -75,6 +75,8 @@ h2 { font-size: 18px; margin: 0 0 4px; letter-spacing: -0.01em; display: flex; a
 .btn:disabled, .chip:disabled { opacity: .55; cursor: default; }
 .icon-btn { background: none; border: 0; font-size: 22px; line-height: 1; padding: 4px 8px; cursor: pointer; color: var(--ink-3); border-radius: var(--radius); }
 .icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+.assign-select { height: 30px; max-width: 240px; padding: 0 8px; font: inherit; font-size: 12.5px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); vertical-align: middle; }
+.btn-text { background: none; border: 0; color: var(--ink-2); font: inherit; font-size: 12.5px; font-weight: 600; padding: 6px 8px; border-radius: var(--radius); cursor: pointer; }
 .link-btn { background: none; border: 0; padding: 0; font: inherit; color: var(--brand-ink); text-decoration: underline; cursor: pointer; }
 .link-btn:disabled { color: var(--ink-3); text-decoration: none; cursor: default; }
 

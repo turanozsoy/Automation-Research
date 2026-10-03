@@ -367,6 +367,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       const r = deps.store.egress.importLines(text);
       deps.tl.mark('egress import', `${r.added} added / ${r.duplicates} duplicates / ${r.invalid.length} invalid`);
       if (r.added) { deps.notifyAdmin?.('egress'); void deps.egressHealth.checkAll(); }
+      if (!deps.settings.strictAccountEgressExplicit && !deps.settings.strictAccountEgress && deps.store.egress.counts().total > 0) { deps.settings.strictAccountEgress = true; deps.store.setDirectAllowed(false); deps.tl.mark('strict account egress', 'enabled: the first proxy was imported; accounts without a proxy no longer use the server IP'); }
       return json(200, r);
     }
     if (url === '/api/admin/egress/validate' && method === 'POST') {

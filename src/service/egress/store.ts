@@ -435,7 +435,14 @@ export class EgressStore {
       if (live > 0) throw new EgressError('EGRESS_NOT_ELIGIBLE', `proxy ${e.label} is attached to a running workflow`);
       if (this.hasHistory(e.id) && !opts.allowHistorical) throw new EgressError('HISTORICAL_PROXY_REQUIRES_CONFIRMATION', `proxy ${e.label} was assigned to an account before; confirm explicitly to reuse it`);
       if (p.egress_id === newEgressId) return { oldEgressId: p.egress_id, newEgressId };
-      if (!p.egress_id) { this.bind(newEgressId, profileId, 'manual_bind', null, operator); return { oldEgressId: null, newEgressId }; }
+      if (!p.egress_id) {
+        const now = Date.now();
+        const taken = this.db.prepare("UPDATE egress SET state='held', held_since=?, state_reason=?, updated_at=? WHERE id=? AND state='available'").run(now, `held for ${p.label} (manual_bind)`, now, newEgressId);
+        if (taken.changes !== 1) throw new EgressError('EGRESS_NOT_ELIGIBLE', 'the proxy was taken concurrently');
+        this.bind(newEgressId, profileId, 'manual_bind', null, operator);
+        this.event(newEgressId, 'available', 'held', `assigned by ${operator} (manual_bind)`);
+        return { oldEgressId: null, newEgressId };
+      }
       return this.moveBinding(p.id, p.egress_id, newEgressId, 'manual_replace', null, operator);
     }).immediate();
   }

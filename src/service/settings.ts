@@ -55,6 +55,8 @@ export interface Settings {
    * Even when off, an account that HAS a proxy never falls back to direct or to another account's proxy.
    */
   strictAccountEgress: boolean;
+  /** True when STRICT_ACCOUNT_EGRESS was set in the environment; otherwise main() turns strict mode on as soon as any proxy is imported. */
+  strictAccountEgressExplicit: boolean;
   /** Root of the permanent Chromium user data directories, one per account (BROWSER_PROFILE_DIR). 0700. */
   browserProfileDir: string;
   /** Runtime lock files, outside the Chromium directories (PROFILE_LOCK_DIR). */
@@ -118,6 +120,7 @@ export function loadSettings(): Settings {
     adminSessionTtlMs: num('ADMIN_SESSION_HOURS', 12) * 60 * 60_000,
     production,
     strictAccountEgress: flag('STRICT_ACCOUNT_EGRESS', production),
+    strictAccountEgressExplicit: !!process.env.STRICT_ACCOUNT_EGRESS,
     browserProfileDir: resolve(dataDir, process.env.BROWSER_PROFILE_DIR || 'browser-profiles'),
     profileLockDir: resolve(dataDir, process.env.PROFILE_LOCK_DIR || 'locks'),
     profileRuntimeLeaseMs: num('PROFILE_RUNTIME_LEASE_MS', 90_000),

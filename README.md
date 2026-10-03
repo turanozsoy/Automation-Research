@@ -222,7 +222,16 @@ Proxy provenance: `egress_assignment_history` records every proxy -> account ass
 fingerprint, so delete + re-import does not launder a proxy). "Available" is not "clean". Automatic assignment (first
 use, and failover) only ever takes a CLEAN proxy: a real proxy, `available`, health not down/degraded, unbound, not in
 use, never in the history. Released, restored or re-enabled proxies are historical and never automatic candidates again;
-an operator may still bind one explicitly (`POST /api/accounts/:id/proxy` with `allowHistorical: true`).
+the operator assigns one by hand with **Assign proxy** / **Change proxy** on the account's row of the operations page
+(the chooser marks them "used before" and asks for confirmation; API: `POST /api/accounts/:id/proxy` with
+`allowHistorical: true`). The Proxies table says per proxy whether it is "never used · assigned automatically" or
+"used before · assign by hand only".
+
+Strict account egress (`STRICT_ACCOUNT_EGRESS`) is on by default as soon as at least one proxy is imported (at start,
+or the moment the first proxy is imported while running) and always in production: an account without a proxy then
+waits for one (Get Cookies answers "No clean proxy for this account", workflows queue) instead of using the server IP.
+Only while no proxy exists at all do accounts run direct. `STRICT_ACCOUNT_EGRESS=0` or `=1` in the environment decides
+explicitly; `npm run start:fake` sets `0` for the development stack.
 
 Launch: reserve account + proxy + runtime atomically -> preflight the proxy (3 probes) -> launch. A failed preflight
 takes the proxy down (`PROXY_FAILURE`) and performs at most `MAX_AUTO_EGRESS_FAILOVERS_PER_LAUNCH` (1) clean
