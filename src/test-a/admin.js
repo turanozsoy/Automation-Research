@@ -11,6 +11,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const api = async (path, opts) => {
     const r = await fetch(path, { headers: { 'content-type': 'application/json' }, ...opts });
+    if (r.status === 401) { location.href = `/admin/login?next=${encodeURIComponent(location.pathname)}`; throw new Error('Signed out'); }
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(j.error || j.reason || `HTTP ${r.status}`);
     return j;
@@ -524,6 +525,10 @@
       questionLabels[q.key] = { label: q.label, options: Object.fromEntries((q.options || []).map((o) => [o.value, o.label])) };
     }
   }).catch(() => {});
+
+  // operator session: show Sign out when a password protects this page; a 401 anywhere sends the operator to the login page
+  fetch('/api/admin/session').then((r) => r.json()).then((s) => { if (s.authRequired) { $('#btnSignOut').hidden = false; if (!s.loggedIn) location.href = `/admin/login?next=${encodeURIComponent(location.pathname)}`; } }).catch(() => {});
+  $('#btnSignOut').onclick = async () => { await fetch('/api/admin/logout', { method: 'POST' }); location.href = '/admin/login'; };
 
   load().catch((e) => msg(e.message, true));
   loadVerified(true);

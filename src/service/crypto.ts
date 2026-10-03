@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -51,6 +51,11 @@ export class Vault {
     d.setAAD(Buffer.from(profileId));
     d.setAuthTag(tag);
     return Buffer.concat([d.update(body), d.final()]).toString('utf8');
+  }
+
+  /** A key derived from the master for another purpose (e.g. signing operator sessions); never the master itself. */
+  derive(label: string): Buffer {
+    return createHmac('sha256', this.master).update(`derive:${label}`).digest();
   }
 
   private wrap(dataKey: Buffer): Buffer {

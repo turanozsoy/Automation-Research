@@ -11,6 +11,7 @@ import type { BrowserModeControl } from './dev/browser-mode.js';
 import type { EgressHealth } from './egress/health.js';
 import { parseProxyLine } from './egress/store.js';
 import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
+import { AdminAuth, clientIp, loginPage } from './admin-auth.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
 import type { Settings } from './settings.js';
@@ -47,6 +48,8 @@ export interface ServerDeps {
   tl: Timeline;
   /** Applicant-facing copy (defaults in code, overrides edited on the operations page). */
   content: ApplicantContent;
+  /** Operator login for the internal surfaces. */
+  auth: AdminAuth;
   /** Set by startServer: nudge the operations page. */
   notifyAdmin?: (what: 'verified' | 'accounts' | 'egress') => void;
 }
@@ -107,6 +110,10 @@ export function startServer(deps: ServerDeps): Promise<void> {
   // ---- upgrade: pick the endpoint, authenticate applicants before the socket exists ----
   server.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     const path = (req.url ?? '').split('?')[0];
+    // the developer and operations channels are internal: operator session required (or loopback when no password is set)
+    if (AdminAuth.isProtectedPath(path) && deps.auth.authorize(req) !== 'ok') {
+      socket.write(`HTTP/1.1 ${deps.auth.enabled ? '401 Unauthorized' : '403 Forbidden'}\r\nConnection: close\r\n\r\n`); socket.destroy(); return;
+    }
     if (path === '/ws') {
       devWss.handleUpgrade(req, socket, head, (ws) => devWss.emit('connection', ws, req));
       return;
@@ -236,6 +243,45 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
   };
 
   try {
+    // ---- operator login (the only internal endpoints reachable without a session) ----
+    if (url === '/admin/login' && method === 'GET') {
+      const q = new URL(req.url ?? '/', 'http://x').searchParams;
+      if (!deps.auth.enabled) { res.writeHead(302, { location: q.get('next') || '/admin/accounts' }); res.end(); return; }
+      if (deps.auth.loggedIn(req)) { res.writeHead(302, { location: safeNext(q.get('next')) }); res.end(); return; }
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(loginPage(safeNext(q.get('next')), q.get('error') === '1' ? 'That password is not right.' : q.get('error') === '2' ? 'Too many attempts. Wait a minute and try again.' : undefined));
+      return;
+    }
+    if (url === '/api/admin/login' && method === 'POST') {
+      const body = await readBody(req);
+      const isForm = /application\/x-www-form-urlencoded/.test(req.headers['content-type'] ?? '');
+      const fields = isForm ? Object.fromEntries(new URLSearchParams(body)) : (JSON.parse(body || '{}') as Record<string, unknown>);
+      const r = deps.auth.login(fields.password, clientIp(req));
+      if (r.ok) {
+        if (isForm) { res.writeHead(303, { location: safeNext(String(fields.next ?? '')), 'set-cookie': r.cookie }); res.end(); return; }
+        return json(200, { ok: true }, { 'set-cookie': r.cookie });
+      }
+      deps.tl.mark('operator login failed', `${clientIp(req)}${r.retryAfterMs ? ` (locked ${Math.ceil(r.retryAfterMs / 1000)} s)` : ''}`);
+      if (isForm) { res.writeHead(303, { location: `/admin/login?next=${encodeURIComponent(safeNext(String(fields.next ?? '')))}&error=${r.retryAfterMs ? 2 : 1}` }); res.end(); return; }
+      return json(r.retryAfterMs ? 429 : 401, { error: r.retryAfterMs ? 'TOO_MANY_ATTEMPTS' : 'INVALID_PASSWORD', retryAfterMs: r.retryAfterMs });
+    }
+    if (url === '/api/admin/logout' && method === 'POST') return json(200, { ok: true }, { 'set-cookie': deps.auth.logoutCookie() });
+    if (url === '/api/admin/session' && method === 'GET') return json(200, { authRequired: deps.auth.enabled, loggedIn: deps.auth.enabled ? deps.auth.loggedIn(req) : true });
+
+    // ---- everything internal: operator session, or loopback when no password is configured ----
+    if (AdminAuth.isProtectedPath(url)) {
+      const verdict = deps.auth.authorize(req);
+      if (verdict === 'login') {
+        if (method === 'GET' && AdminAuth.isPagePath(url)) { res.writeHead(302, { location: `/admin/login?next=${encodeURIComponent(url)}` }); res.end(); return; }
+        return json(401, { error: 'UNAUTHORIZED', login: '/admin/login' });
+      }
+      if (verdict === 'forbidden') {
+        res.writeHead(403, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('Internal pages are limited to localhost until ADMIN_PASSWORD is set on the service.');
+        return;
+      }
+    }
+
     if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
     // applicant step routes (/step-2 … /step-n, /preparing, /completed): the applicant page restores the step client-side
     if (method === 'GET' && APPLY_ROUTES.test(url)) return serveFile(APPLY_DIR, 'index.html', res);
@@ -364,6 +410,20 @@ function activeLogins(deps: ServerDeps): Record<string, ReturnType<LoginSessionM
     if (s.open) out[a.id] = s;
   }
   return out;
+}
+
+/** A same-origin path to return to after login; anything else goes to the operations page. */
+function safeNext(next: string | null | undefined): string {
+  return next && /^\/(?!\/)[\w\-./?=&%#]*$/.test(next) ? next : '/admin/accounts';
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 100_000) req.destroy(); });
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
 }
 
 function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {

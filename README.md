@@ -69,7 +69,19 @@ Then open <http://localhost:3000/debug> in one tab per workflow you want to driv
 type into the form, **Submit**. The status line shows the pool: available / live / cooldown / out / queued.
 The debug harness is an internal developer tool; applicants use the application API below.
 
-### Applicant page content (editable copy)
+### Operator login (internal pages)
+
+`/admin/accounts`, `/debug`, the admin and dev APIs, `/ws` and `/ws/admin` are internal. Set
+`ADMIN_PASSWORD` and every one of them requires a sign-in at `/admin/login`: a successful login sets an
+HttpOnly, SameSite=Strict cookie (`Secure` with `SECURE_COOKIES=1`) holding a signed token that expires
+after `ADMIN_SESSION_HOURS` (12); the signing key is derived from the vault master key, so sessions survive
+restarts and no password material is stored. Five wrong attempts lock that client for a minute. Pages
+redirect to the login page, APIs answer 401, sockets refuse the upgrade; both internal pages have Sign out.
+Without `ADMIN_PASSWORD` (development) the internal surfaces answer only to localhost with no forwarding
+header, anything else gets 403, and the service warns at startup. The applicant site, its API and
+`/ws/app` are never behind the login. `npm run test:auth` covers all of it.
+
+## Applicant page content (editable copy)
 
 The operations page has an **Applicant page content** section: every applicant-facing string (landing
 hero, step headings and helper text, verification screen, question wording and option labels, preparing /
@@ -390,6 +402,7 @@ npm run e2e:apply                  # drives the public application at / on a pho
 CONCURRENCY=5 npm run e2e:concurrency   # N applicants at once (headless): isolation of data, contexts, URLs, sockets, codes, session write-back; queue; admin live; DB consistency; resources
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 npm run test:app                   # application store + session helpers (throwaway DB)
+npm run test:auth                  # operator login: unit + a password-protected instance on :3010 + loopback rule on :3000
 npm run typecheck
 
 # concurrency scenarios (service started with MAX_WORKFLOWS=10; K imported fake accounts):

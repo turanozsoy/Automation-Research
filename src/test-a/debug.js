@@ -30,6 +30,7 @@
   }
 
   window.__pageLog = (text) => log(Date.now(), text, 'local');
+  fetch('/api/admin/session').then((r) => r.json()).then((s) => { if (s.authRequired) { const a = $('#signOut'); a.hidden = false; a.onclick = async (e) => { e.preventDefault(); await fetch('/api/admin/logout', { method: 'POST' }); location.href = '/admin/login?next=%2Fdebug'; }; } }).catch(() => {});
 
   // ---- live timeline of EVERY workflow (applicant-driven ones included); the dev channel broadcasts all of them ----
   const allEl = $('#all');

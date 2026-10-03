@@ -14,6 +14,7 @@ import { ApplicantContent } from './applications/content.js';
 import { APPLY_CONFIG_PATH } from './ws.js';
 import { readFileSync } from 'node:fs';
 import { Timeline } from './timeline.js';
+import { AdminAuth } from './admin-auth.js';
 import { WorkflowRegistry } from './workflows.js';
 import { startServer } from './ws.js';
 
@@ -25,7 +26,10 @@ async function main(): Promise<void> {
   tl.mark('service starting', `instance ${instanceId.slice(0, 8)}, target=${cfg.targetUrl}, data=${settings.dataDir}`);
 
   const db = openDb(settings.dbPath);
-  const store = new ProfileStore(db, Vault.load(settings.dataDir), instanceId);
+  const vault = Vault.load(settings.dataDir);
+  const store = new ProfileStore(db, vault, instanceId);
+  const auth = new AdminAuth({ password: settings.adminPassword, secret: vault.derive('admin-auth'), secure: settings.secureCookies, ttlMs: settings.adminSessionTtlMs });
+  if (!auth.enabled) console.warn('\n  ADMIN_PASSWORD is not set: /admin/accounts, /debug and the admin APIs answer only to localhost. Set it before exposing this service.\n');
   const orphans = store.recoverOrphans(settings.cooldownMs);
   if (orphans.length) tl.mark('recovered orphaned assignments from a previous run', `${orphans.length} workflow(s) marked lost`);
   const status = store.status();
@@ -51,7 +55,7 @@ async function main(): Promise<void> {
   const interrupted = apps.recoverOnBoot();
   if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
   const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl);
-  await startServer({ cfg, registry, store, logins, apps, browserMode, egressHealth, settings, tl, content });
+  await startServer({ cfg, registry, store, logins, apps, browserMode, egressHealth, settings, tl, content, auth });
   egressHealth.start();
   tl.mark('server listening', `http://localhost:${settings.port}`);
 
