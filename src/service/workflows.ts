@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import type { ErrorCode, FieldUpdateMsg, PoolStatus, ServerMsg } from '../shared/messages.js';
 import type { BrowserManager } from './browser/manager.js';
 import { scaleTimeouts, type SiteBConfig } from './config.js';
-import type { ProfileStore, ReleaseOutcome } from './profiles/store.js';
+import { EgressError } from './egress/store.js';
+import { ProfileRuntimeError, type ProfileStore, type ReleaseOutcome } from './profiles/store.js';
+import { ownerAlive } from './proc.js';
 import type { Settings } from './settings.js';
 import { AutomationError, type Timeline } from './timeline.js';
 import { Workflow, toAutomationError, type TerminalOutcome } from './workflow.js';
@@ -31,9 +33,7 @@ export class WorkflowRegistry {
     private store: ProfileStore,
     private browser: BrowserManager,
     private tl: Timeline,
-  ) {
-    browser.setDisconnectHandler(() => void this.onBrowserLost());
-  }
+  ) {}
 
   setSender(fn: (msg: ServerMsg) => void): void { this.send = fn; }
   /** Told after a successful run whether the account's refreshed session was persisted (never the session itself). */
@@ -46,6 +46,9 @@ export class WorkflowRegistry {
     this.timers.push(setInterval(() => {
       const promoted = this.store.promoteCooledDown();
       const reaped = this.store.reapExpiredLeases(cooldownMs).filter((id) => !this.live.has(id));
+      // runtime leases of OTHER service instances whose heartbeat lapsed: reclaimed only when the owner is provably gone
+      const stale = this.store.recoverStaleRuntimes(this.settings.profileRuntimeLeaseMs, ownerAlive);
+      if (stale.recovered.length) this.tl.mark('stale profile runtime leases recovered', `${stale.recovered.length} (profile data untouched)`);
       if (promoted || reaped.length) { this.tl.mark('pool maintenance', `${promoted} profile(s) back to available, ${reaped.length} stale assignment(s) reaped`); }
       const st = this.poolStatus();
       if (promoted || reaped.length || st.cooldown > 0 || st.queued > 0) this.broadcastPool();
@@ -148,9 +151,18 @@ export class WorkflowRegistry {
         return this.reassign(workflowId, attempt, 'storageState unreadable');
       }
       const asg = this.store.getAssignment(workflowId);
-      const proxy = asg?.egress_id ? this.store.egress.proxyOptions(asg.egress_id) : null;
       if (asg?.egress_id && asg.egress_id !== 'direct') tl.mark('egress', this.store.egress.get(asg.egress_id)?.label ?? asg.egress_id);
-      const bundle = await this.browser.createContext(workflowId, storageState, proxy);
+      // The reservation took the profile's runtime lease in the same transaction; without it nothing launches.
+      const runtime = this.store.runtimeHandleFor(workflowId);
+      if (!runtime || runtime.profileId !== profileId) throw new ProfileRuntimeError('RUNTIME_LEASE_LOST', 'the reservation holds no runtime lease for this profile');
+      const opened = await this.browser.openAccount({
+        key: workflowId, profileId, runtime, egressId: asg?.egress_id ?? null, workflowId,
+        // workflow.ts watches the context itself (context 'close' -> BROWSER_CLOSED); the lease is already released here
+        onClosed: () => { this.broadcastPool(); },
+      });
+      if (opened.failover) this.send({ type: 'event', ts: Date.now(), workflowId, name: 'egress replaced (clean failover)', detail: `${this.store.egress.get(opened.failover.from)?.label ?? '?'} → ${this.store.egress.get(opened.failover.to)?.label ?? '?'}` });
+      const bundle = { context: opened.context, page: opened.page };
+      const proxy = opened.egressId && opened.egressId !== 'direct';
       // A proxied path is slower and more variable: every wait in this run is scaled, nothing else changes.
       let runCfg = this.cfg;
       if (proxy && this.cfg.timeouts.proxyMultiplier > 1) {
@@ -179,10 +191,22 @@ export class WorkflowRegistry {
       this.broadcastPool();
     } catch (e) {
       let ae = toAutomationError(e);
+      let egressFault = false;
+      // The isolation layer stopped the launch: these are the network's or the lock's fault, never the account's.
+      if (e instanceof EgressError) {
+        egressFault = true;
+        ae = new AutomationError(e.code === 'NO_CLEAN_EGRESS_AVAILABLE' ? 'NO_CLEAN_EGRESS_AVAILABLE' : 'EGRESS_FAILED', e.message);
+        tl.mark(e.code, e.message);
+      } else if (e instanceof ProfileRuntimeError) {
+        egressFault = true;
+        ae = new AutomationError('PROFILE_IN_USE', e.message);
+        tl.mark(e.code, e.message);
+      }
       // A network failure while opening Website B through a proxy egress is the egress's fault, not the account's.
       if (/ERR_(PROXY|TUNNEL|SOCKS)|ERR_PROXY_AUTH|ERR_NO_SUPPORTED_PROXIES|ERR_HTTP_RESPONSE_CODE_FAILURE/.test(ae.message)) {
         const asg = this.store.getAssignment(workflowId);
         if (asg?.egress_id && asg.egress_id !== 'direct') {
+          egressFault = true;
           this.store.egress.recordWorkflowFailure(asg.egress_id, workflowId, ae.message.replace(/https?:\/\/\S+/g, '<url>'));
           ae = new AutomationError('EGRESS_FAILED', `Egress ${this.store.egress.get(asg.egress_id)?.label ?? asg.egress_id} failed: ${ae.message.split(' at ')[0]}`);
           tl.mark('egress failed', ae.message);
@@ -204,7 +228,8 @@ export class WorkflowRegistry {
       else if (!wf) {
         this.send({ type: 'error', ts: Date.now(), workflowId, code: ae.code, message: ae.message, fatal: true });
         this.send({ type: 'state', ts: Date.now(), workflowId, state: 'failed', detail: ae.message });
-        this.store.release(workflowId, 'failed', this.settings.cooldownMs, { reason: ae.message, outcomeCode: ae.code });
+        await this.browser.closeContext(workflowId).catch(() => {});
+        this.store.release(workflowId, 'failed', this.settings.cooldownMs, { reason: ae.message, outcomeCode: ae.code, countFailure: !egressFault });
         this.broadcastPool();
       }
     }
@@ -235,7 +260,6 @@ export class WorkflowRegistry {
 
   /** An operator released an egress or an account: try to serve the queue now. */
   kick(): Promise<void> { return this.processQueue(); }
-  isPerContextProxy(): boolean { return this.browser.isPerContextProxy(); }
 
   /** Workflows that hold or are about to hold a browser context (live, preparing or queued). */
   activeCount(): number { return this.live.size + this.early.size; }
@@ -298,17 +322,5 @@ export class WorkflowRegistry {
     void wf;
     this.broadcastPool();
     void this.processQueue();
-  }
-
-  private async onBrowserLost(): Promise<void> {
-    if (this.stopping) return; // Chromium is being closed on purpose
-    this.tl.mark('browser lost, failing all live workflows');
-    for (const wf of [...this.live.values()]) wf.fail(new AutomationError('BROWSER_CLOSED', 'Chromium disconnected'));
-    try {
-      await this.browser.launch();
-      void this.processQueue();
-    } catch (e) {
-      this.tl.mark('browser relaunch failed', String(e));
-    }
   }
 }

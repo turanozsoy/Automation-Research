@@ -44,6 +44,7 @@ console.log('[test:auth] 1. unit');
   const fakeReq = (ip: string, headers: Record<string, string> = {}) => ({ headers, socket: { remoteAddress: ip } } as any);
   check(isLoopback(fakeReq('127.0.0.1')) && isLoopback(fakeReq('::1')) && isLoopback(fakeReq('::ffff:127.0.0.1')), 'loopback addresses recognised');
   check(!isLoopback(fakeReq('10.0.0.5')) && !isLoopback(fakeReq('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })), 'remote clients and proxied requests are not loopback');
+  check(!isLoopback(fakeReq('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }), ['127.0.0.1']) && isLoopback(fakeReq('127.0.0.1', { 'x-forwarded-for': '127.0.0.1' }), ['127.0.0.1']) && !isLoopback(fakeReq('10.0.0.5', { 'x-forwarded-for': '127.0.0.1' }), ['127.0.0.1']), 'trusted proxy: the forwarded client decides; an untrusted peer cannot claim loopback');
   const open = new AdminAuth({ password: null, secret, secure: false, ttlMs: 1 });
   check(!open.enabled && open.authorize(fakeReq('127.0.0.1')) === 'ok' && open.authorize(fakeReq('10.0.0.5')) === 'forbidden', 'no password: loopback ok, anything else forbidden');
   check(a.authorize(fakeReq('127.0.0.1')) === 'login' && a.authorize(fakeReq('127.0.0.1', { cookie: `shipzora_admin=${tok}` })) === 'ok', 'password set: login required even on loopback; valid cookie passes');
@@ -56,7 +57,9 @@ const PASSWORD = 'Operator-Secret-9312';
 const dataDir = mkdtempSync(join(tmpdir(), 'auth-'));
 const logLines: string[] = [];
 const child = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'dev/start-fake.ts'], {
-  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, ADMIN_PASSWORD: PASSWORD, HEADLESS: '1', MAX_WORKFLOWS: '1', EGRESS_CHECK_INTERVAL_MS: '0' },
+  // TRUSTED_PROXIES: this instance models a deployment behind a reverse proxy on the same host, so X-Forwarded-For from
+  // the loopback peer is the client address (without it forwarding headers are ignored and rate limits key on the peer).
+  env: { ...process.env, PORT: String(PORT), DATA_DIR: dataDir, ADMIN_PASSWORD: PASSWORD, HEADLESS: '1', MAX_WORKFLOWS: '1', EGRESS_CHECK_INTERVAL_MS: '0', TRUSTED_PROXIES: '127.0.0.1' },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 child.stdout.on('data', (d) => logLines.push(d.toString()));

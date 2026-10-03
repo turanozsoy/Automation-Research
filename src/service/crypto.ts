@@ -9,20 +9,23 @@ import { dirname, resolve } from 'node:path';
  * Rotating the master key only re-wraps the small data keys.
  *
  * Development convenience: without PROFILE_MASTER_KEY a key is generated once into
- * <dataDir>/master.key (gitignored). Production must supply the env var / a secret store.
+ * <dataDir>/master.key (gitignored). Production must supply the env var / a secret store: with
+ * NODE_ENV=production (or PROFILE_MASTER_KEY_REQUIRED=1) the service refuses to start without it.
  */
 export interface Encrypted { ciphertext: Buffer; nonce: Buffer; dataKeyEnc: Buffer; keyVersion: number }
 
 export class Vault {
   private constructor(private master: Buffer) {}
 
-  static load(dataDir: string): Vault {
+  static load(dataDir: string, opts: { requireEnvKey?: boolean } = {}): Vault {
     const env = process.env.PROFILE_MASTER_KEY;
     if (env) {
       const key = Buffer.from(env, 'base64');
       if (key.length !== 32) throw new Error('PROFILE_MASTER_KEY must be 32 bytes, base64 encoded');
       return new Vault(key);
     }
+    const required = opts.requireEnvKey || process.env.NODE_ENV === 'production' || process.env.PROFILE_MASTER_KEY_REQUIRED === '1';
+    if (required) throw new Error('PROFILE_MASTER_KEY is required in production (32 bytes, base64). Refusing to start with a development key file.');
     const file = resolve(dataDir, 'master.key');
     if (!existsSync(file)) {
       mkdirSync(dirname(file), { recursive: true });

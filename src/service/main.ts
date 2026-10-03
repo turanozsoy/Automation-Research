@@ -17,6 +17,7 @@ import { Timeline } from './timeline.js';
 import { AdminAuth } from './admin-auth.js';
 import { WorkflowRegistry } from './workflows.js';
 import { startServer } from './ws.js';
+import { ownerAlive } from './proc.js';
 
 async function main(): Promise<void> {
   const settings = loadSettings();
@@ -26,32 +27,39 @@ async function main(): Promise<void> {
   tl.mark('service starting', `instance ${instanceId.slice(0, 8)}, target=${cfg.targetUrl}, data=${settings.dataDir}`);
 
   const db = openDb(settings.dbPath);
-  const vault = Vault.load(settings.dataDir);
+  const vault = Vault.load(settings.dataDir); // production: PROFILE_MASTER_KEY required, fail closed
   const store = new ProfileStore(db, vault, instanceId);
   store.setReserveAfterUse(settings.reserveAccounts);
   if (!settings.reserveAccounts) console.warn('\n  ACCOUNT_RESERVE=0: accounts return to rotation after every run (load testing only).\n');
-  const auth = new AdminAuth({ password: settings.adminPassword, secret: vault.derive('admin-auth'), secure: settings.secureCookies, ttlMs: settings.adminSessionTtlMs });
+  const loopbackHost = ['127.0.0.1', '::1', 'localhost'].includes(settings.host);
+  if (settings.production && !settings.adminPassword && !loopbackHost) throw new Error('ADMIN_PASSWORD is required in production when SERVICE_HOST is not loopback');
+  const auth = new AdminAuth({ password: settings.adminPassword, secret: vault.derive('admin-auth'), secure: settings.secureCookies, ttlMs: settings.adminSessionTtlMs, trustedProxies: settings.trustedProxies });
   if (!auth.enabled) console.warn('\n  ADMIN_PASSWORD is not set: /admin/accounts, /debug and the admin APIs answer only to localhost. Set it before exposing this service.\n');
+  if (!loopbackHost) console.warn(`\n  SERVICE_HOST=${settings.host}: the service is reachable beyond this machine. Keep it on a private interface / VPN behind a TLS reverse proxy; set TRUSTED_PROXIES for that proxy.\n`);
   const orphans = store.recoverOrphans(settings.cooldownMs);
   if (orphans.length) tl.mark('recovered orphaned assignments from a previous run', `${orphans.length} workflow(s) marked lost`);
+  // runtime leases of dead service instances: reclaimed only when the owner is provably gone; profiles are never touched
+  const stale = store.recoverStaleRuntimes(settings.profileRuntimeLeaseMs, ownerAlive);
+  if (stale.recovered.length || stale.conflicts.length) tl.mark('profile runtime leases from a previous run', `${stale.recovered.length} stale lease(s) recovered, ${stale.conflicts.length} left in place (owner alive or heartbeat too recent)`);
   const status = store.status();
   tl.mark('profile pool', `${status.total} profile(s): ${status.available} available, ${status.cooldown} cooldown, ${status.expired} expired, ${status.invalid} invalid, ${status.disabled} disabled`);
   if (status.total === 0) console.warn(`\n  No accounts yet. Add one at http://localhost:${settings.port}/admin/accounts\n`);
 
-  const browser = new BrowserManager(settings, tl);
+  const browser = new BrowserManager(settings, store, tl);
+  browser.setCheckUrl(settings.egressCheckUrl ?? cfg.baseUrl);
   const registry = new WorkflowRegistry(settings, cfg, store, browser, tl);
   const browserMode = new BrowserModeControl(settings, browser, registry, tl);
   browser.setMode(browserMode.initialMode());
-  // Windows needs Playwright's per-context placeholder for per-context proxies; under it no context can go direct.
-  const proxyEgresses = store.egress.counts().total;
-  const perContext = settings.chromiumProxyMode === 'per-context' || (settings.chromiumProxyMode === 'auto' && process.platform === 'win32' && proxyEgresses > 0);
-  browser.setPerContextProxy(perContext);
-  store.setDirectAllowed(!perContext);
+  // Every account browser is its own Chromium process launched with its own proxy, so the per-context placeholder is
+  // no longer needed anywhere. Direct (server IP) is never an automatic fallback for an account that has a proxy; under
+  // STRICT_ACCOUNT_EGRESS it is never used for account browsers at all.
+  store.setDirectAllowed(!settings.strictAccountEgress);
   const eg = store.egress.counts();
-  tl.mark('egress', `${eg.total} proxy egress(es): ${eg.available} available, ${eg.inUse} in use, ${eg.held} held, ${eg.down} down, ${eg.retired} retired; direct ${perContext ? 'unavailable (per-context proxy mode)' : 'allowed'}`);
+  tl.mark('egress', `${eg.total} proxy egress(es): ${eg.available} available (${eg.clean} clean / never assigned), ${eg.inUse} in use, ${eg.held} held, ${eg.down} down, ${eg.retired} retired; direct ${settings.strictAccountEgress ? 'FORBIDDEN for account browsers (STRICT_ACCOUNT_EGRESS)' : 'allowed for unbound accounts (development)'}`);
+  if (!settings.strictAccountEgress) console.warn('\n  STRICT_ACCOUNT_EGRESS is off: accounts without a proxy may run through the server IP. Set STRICT_ACCOUNT_EGRESS=1 (default in production).\n');
   await browser.launch();
   registry.start();
-  const logins = new LoginSessionManager(settings, cfg, store, tl);
+  const logins = new LoginSessionManager(settings, cfg, store, browser, tl);
   const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl, store);
   const content = new ApplicantContent(db, JSON.parse(readFileSync(APPLY_CONFIG_PATH, 'utf8')));
   const interrupted = apps.recoverOnBoot();
@@ -59,7 +67,7 @@ async function main(): Promise<void> {
   const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl);
   await startServer({ cfg, registry, store, logins, apps, browserMode, egressHealth, settings, tl, content, auth });
   egressHealth.start();
-  tl.mark('server listening', `http://localhost:${settings.port}`);
+  tl.mark('server listening', `http://${settings.host}:${settings.port}`);
 
   console.log('\n────────────────────────────────────────────────────────────');
   console.log(`  Accounts:   http://localhost:${settings.port}/admin/accounts   (add accounts, Get / Refresh Cookies)`);

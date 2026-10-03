@@ -201,6 +201,44 @@ Testing: `npm run fake-proxy -- --port 3100 --control 3900 --auth user1:pass1` (
 then `npm run e2e:egress`: import feedback, exclusive use, held/release serving the queue, health
 down, a failing proxy failing only its own workflow, Restore, and no credential in any table, log or page.
 
+### Client isolation: one account = one persistent browser profile = one proxy
+
+Every account is its own browser installation. Its Chromium runs on a permanent user data directory
+(`DATA_DIR/browser-profiles/profile-<id>/`, mode 0700, name derived from the internal id), launched with the account's
+own proxy and its stored environment (locale / time zone / viewport, set by the operator, identical every launch).
+Cookies, localStorage, IndexedDB, cache, service workers and preferences live in that directory and survive every run;
+the encrypted storageState is now a backup that seeds the directory once (`PROFILE_MIGRATED`) and is refreshed after a
+good run or a manual login. Manual login ("Get / Refresh Cookies") opens the SAME profile with the SAME proxy, so there
+is never a second browser identity. The service never deletes a profile directory (not on account removal either; the
+audit says `PROFILE_DIR_RETAINED`).
+
+Exclusive runtime: a profile has at most one runtime owner (workflow or manual login), enforced by the
+`profile_runtimes` primary key inside the reservation transaction, plus a lock file under `DATA_DIR/locks/` outside the
+Chromium directory. Ownership is lease token + instance id + heartbeat; a lapsed lease is reclaimed only when its owner
+process is provably gone (pid dead, or pid reused: start time differs), and the recovery is audited. Opening a profile
+that is in use answers `PROFILE_IN_USE`.
+
+Proxy provenance: `egress_assignment_history` records every proxy -> account assignment forever (by id and by connection
+fingerprint, so delete + re-import does not launder a proxy). "Available" is not "clean". Automatic assignment (first
+use, and failover) only ever takes a CLEAN proxy: a real proxy, `available`, health not down/degraded, unbound, not in
+use, never in the history. Released, restored or re-enabled proxies are historical and never automatic candidates again;
+an operator may still bind one explicitly (`POST /api/accounts/:id/proxy` with `allowHistorical: true`).
+
+Launch: reserve account + proxy + runtime atomically -> preflight the proxy (3 probes) -> launch. A failed preflight
+takes the proxy down (`PROXY_FAILURE`) and performs at most `MAX_AUTO_EGRESS_FAILOVERS_PER_LAUNCH` (1) clean
+replacements on the SAME profile (`PROXY_AUTOMATIC_FAILOVER`); without a clean proxy the launch stops with
+`NO_CLEAN_EGRESS_AVAILABLE` and the account stays intact. Direct (server IP) is never a fallback for an account with a
+proxy, and under `STRICT_ACCOUNT_EGRESS=1` (default in production) never used for account browsers at all.
+
+Network hygiene in every account browser: `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (plus the same
+WebRTC preferences seeded into the profile) and, with a proxy, `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy
+host>"` so nothing resolves through the server's DNS; proxied requests are resolved by the proxy. socks5 proxies have no
+active preflight probe (passive health only). Chromium's own background connections are reduced, not eliminated.
+
+Audit: `GET /api/admin/audit?profileId=&egressId=&type=`, `GET /api/accounts/:id/history`,
+`GET /api/admin/egress/:id/history`. Rows carry identifiers and codes only. Tests: `npm run test:isolation`
+(store level, 13 cases) and `npm run test:isolation:browser` (real Chromium through local fake proxies).
+
 ### Adding accounts (manual login, no extension)
 
 Open <http://localhost:3000/admin/accounts> while the service runs.

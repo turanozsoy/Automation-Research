@@ -12,7 +12,7 @@ import type { BrowserModeControl } from './dev/browser-mode.js';
 import type { EgressHealth } from './egress/health.js';
 import { parseProxyLine } from './egress/store.js';
 import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
-import { AdminAuth, clientIp, loginPage } from './admin-auth.js';
+import { AdminAuth, loginPage } from './admin-auth.js';
 import type { SiteBConfig } from './config.js';
 import type { ProfileStore } from './profiles/store.js';
 import type { Settings } from './settings.js';
@@ -229,7 +229,9 @@ export function startServer(deps: ServerDeps): Promise<void> {
     });
   });
 
-  return new Promise((res) => server.listen(settings.port, () => res()));
+  // Bind to one interface (SERVICE_HOST, default loopback): production puts the dashboard behind a VPN / private network
+  // and a TLS reverse proxy, never on 0.0.0.0.
+  return new Promise((res) => server.listen(settings.port, settings.host, () => res()));
 }
 
 function remoteIp(req: IncomingMessage): string {
@@ -262,12 +264,12 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       const body = await readBody(req);
       const isForm = /application\/x-www-form-urlencoded/.test(req.headers['content-type'] ?? '');
       const fields = isForm ? Object.fromEntries(new URLSearchParams(body)) : (JSON.parse(body || '{}') as Record<string, unknown>);
-      const r = deps.auth.login(fields.password, clientIp(req));
+      const r = deps.auth.login(fields.password, deps.auth.clientIp(req));
       if (r.ok) {
         if (isForm) { res.writeHead(303, { location: safeNext(String(fields.next ?? '')), 'set-cookie': r.cookie }); res.end(); return; }
         return json(200, { ok: true }, { 'set-cookie': r.cookie });
       }
-      deps.tl.mark('operator login failed', `${clientIp(req)}${r.retryAfterMs ? ` (locked ${Math.ceil(r.retryAfterMs / 1000)} s)` : ''}`);
+      deps.tl.mark('operator login failed', `${deps.auth.clientIp(req)}${r.retryAfterMs ? ` (locked ${Math.ceil(r.retryAfterMs / 1000)} s)` : ''}`);
       if (isForm) { res.writeHead(303, { location: `/admin/login?next=${encodeURIComponent(safeNext(String(fields.next ?? '')))}&error=${r.retryAfterMs ? 2 : 1}` }); res.end(); return; }
       return json(r.retryAfterMs ? 429 : 401, { error: r.retryAfterMs ? 'TOO_MANY_ATTEMPTS' : 'INVALID_PASSWORD', retryAfterMs: r.retryAfterMs });
     }
@@ -341,7 +343,12 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts().map((a) => enrichAccount(deps, a)), logins: activeLogins(deps) });
 
     // ---- egress (proxies): metadata only, never credentials ----
-    if (url === '/api/admin/egress' && method === 'GET') return json(200, { egress: deps.store.egress.list(), counts: deps.store.egress.counts(), directAllowed: !deps.registry.isPerContextProxy() });
+    if (url === '/api/admin/egress' && method === 'GET') return json(200, { egress: deps.store.egress.list(), counts: deps.store.egress.counts(), directAllowed: deps.store.isDirectAllowed(), strictAccountEgress: deps.settings.strictAccountEgress });
+    // Isolation audit trail and proxy provenance (identifiers and safe codes only; never credentials or browser contents).
+    if (url.startsWith('/api/admin/audit') && method === 'GET') {
+      const qs = new URL(req.url ?? '/', 'http://x').searchParams;
+      return json(200, { events: deps.store.audit.list({ profileId: qs.get('profileId') ?? undefined, egressId: qs.get('egressId') ?? undefined, type: (qs.get('type') as any) ?? undefined }, Number(qs.get('limit') ?? 50) || 50) });
+    }
     if (url === '/api/admin/egress' && method === 'POST') {
       const body = await readJson(req);
       const text = typeof body.lines === 'string' ? body.lines : typeof body.line === 'string' ? body.line : '';
@@ -357,7 +364,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       const r = parseProxyLine(String(body.line ?? ''));
       return json(200, r.ok ? { ok: true, host: r.proxy.host, port: r.proxy.port, kind: r.proxy.kind, hasAuth: r.proxy.username !== undefined } : { ok: false, reason: r.reason });
     }
-    const eg = /^\/api\/admin\/egress\/([^/]+)(?:\/(release|retire|check))?$/.exec(url);
+    const eg = /^\/api\/admin\/egress\/([^/]+)(?:\/(release|retire|check|history))?$/.exec(url);
     if (eg) {
       const id = decodeURIComponent(eg[1]);
       const action = eg[2];
@@ -367,6 +374,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
         if (action === 'release' && method === 'POST') { const m = deps.store.egress.release(id); deps.tl.mark('egress released', m.label); deps.notifyAdmin?.('egress'); void deps.registry.kick(); return json(200, m); }
         if (action === 'retire' && method === 'POST') { const m = deps.store.egress.retire(id); deps.tl.mark('egress retired', m.label); deps.notifyAdmin?.('egress'); return json(200, m); }
         if (action === 'check' && method === 'POST') { const r = await deps.egressHealth.check(id); deps.notifyAdmin?.('egress'); return json(200, { ...r, egress: deps.store.egress.meta(deps.store.egress.get(id)!) }); }
+        if (action === 'history' && method === 'GET') return json(200, { history: deps.store.egress.history({ egressId: id }), clean: deps.store.egress.isClean(id) });
       } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
     }
     if (url === '/api/admin/applications/verified' && method === 'GET') {
@@ -388,7 +396,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       return json(201, { id: row.id });
     }
 
-    const m = /^\/api\/accounts\/([^/]+)(?:\/(login\/start|login\/done|login\/cancel|login\/status|review))?$/.exec(url);
+    const m = /^\/api\/accounts\/([^/]+)(?:\/(login\/start|login\/done|login\/cancel|login\/status|review|proxy|environment|history))?$/.exec(url);
     if (m) {
       const id = decodeURIComponent(m[1]);
       const action = m[2];
@@ -397,11 +405,34 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
 
       if (!action && method === 'DELETE') {
         await deps.logins.cancel(id);
-        deps.store.remove(id);
-        deps.tl.mark('account removed', account.label);
+        try { deps.store.remove(id); } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
+        deps.tl.mark('account removed', `${account.label} (browser profile directory retained)`);
         deps.notifyAdmin?.('accounts');
         return json(200, { ok: true });
       }
+      // Operator proxy replacement: explicit, audited; a proxy with assignment history needs allowHistorical=true.
+      if (action === 'proxy' && method === 'POST') {
+        const body = await readJson(req);
+        if (typeof body.egressId !== 'string') return json(400, { error: 'egressId required' });
+        try {
+          const r = deps.store.egress.replaceProxyManually(id, body.egressId, deps.auth.operator(req).name, { allowHistorical: body.allowHistorical === true });
+          deps.tl.mark('account proxy replaced by operator', `${account.label}: ${r.oldEgressId ? deps.store.egress.get(r.oldEgressId)?.label ?? r.oldEgressId : 'none'} → ${deps.store.egress.get(r.newEgressId)?.label ?? r.newEgressId}`);
+          deps.notifyAdmin?.('accounts'); deps.notifyAdmin?.('egress');
+          return json(200, { account: enrichAccount(deps, deps.store.accountMeta(deps.store.get(id)!)), ...r });
+        } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e), code: (e as { code?: string }).code ?? null }); }
+      }
+      // Stable per-account browser environment (locale / timezone / viewport). Set by the operator, reused every launch.
+      if (action === 'environment' && method === 'POST') {
+        const body = await readJson(req);
+        try {
+          const vp = body.viewport === null ? null : typeof body.viewport === 'string' && /^\d+x\d+$/.test(body.viewport) ? { width: Number(body.viewport.split('x')[0]), height: Number(body.viewport.split('x')[1]) } : undefined;
+          const str = (v: unknown) => (v === undefined ? undefined : typeof v === 'string' && v ? v : null);
+          const env = deps.store.setEnvironment(id, { locale: str(body.locale), timezone: str(body.timezone), viewport: vp }, deps.auth.operator(req).name);
+          deps.notifyAdmin?.('accounts');
+          return json(200, { environment: env, account: enrichAccount(deps, deps.store.accountMeta(deps.store.get(id)!)) });
+        } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
+      }
+      if (action === 'history' && method === 'GET') return json(200, { history: deps.store.egress.history({ profileId: id }), audit: deps.store.audit.list({ profileId: id }, 50), runtime: deps.store.getRuntime(id) ? { type: deps.store.getRuntime(id)!.runtime_type, since: deps.store.getRuntime(id)!.started_at } : null });
       if (action === 'review' && method === 'POST') {
         const body = await readJson(req);
         if (body.decision !== 'release' && body.decision !== 'verified') return json(400, { error: 'decision must be "release" or "verified"' });

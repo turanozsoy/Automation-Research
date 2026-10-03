@@ -1,7 +1,9 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import type { Db } from '../db.js';
 import type { Vault } from '../crypto.js';
+import { AuditLog } from '../audit.js';
 import { EgressStore } from '../egress/store.js';
+import { pidStartOf } from '../proc.js';
 
 export type ProfileState = 'available' | 'reserved' | 'starting' | 'active' | 'cooldown' | 'expired' | 'invalid' | 'disabled' | 'review' | 'taken';
 export type AssignmentState = 'allocating' | 'preparing' | 'ready' | 'submitting' | 'paused' | 'completed' | 'failed' | 'abandoned' | 'lost' | 'uncertain';
@@ -15,6 +17,23 @@ export interface ProfileRow {
   session_saved_at: number | null; proxy_json: string | null; session_note: string | null;
   egress_id: string | null; egress_bound_at: number | null;
   reserved_for_application_id: string | null; reserved_at: number | null;
+  /** Persistent Chromium profile: directory name under BROWSER_PROFILE_DIR (from the id, never operator text) and its seeding marker. */
+  user_data_dir: string | null; profile_dir_initialized_at: number | null;
+  /** Stable, operator-configured browser environment (NULL = service default). Never randomized. */
+  browser_locale: string | null; browser_timezone: string | null; browser_viewport: string | null;
+}
+
+export type RuntimeType = 'workflow' | 'manual_login';
+export interface RuntimeRow {
+  profile_id: string; account_id: string; runtime_type: RuntimeType; workflow_id: string | null; instance_id: string;
+  pid: number | null; pid_start: string | null; lease_token: string; started_at: number; heartbeat_at: number;
+}
+/** Proof of exclusive runtime ownership of a profile; the browser layer must present it to launch. */
+export interface RuntimeHandle { profileId: string; runtimeType: RuntimeType; workflowId: string | null; leaseToken: string }
+export interface BrowserEnvironment { locale: string | null; timezone: string | null; viewport: { width: number; height: number } | null }
+
+export class ProfileRuntimeError extends Error {
+  constructor(public code: 'PROFILE_IN_USE' | 'RUNTIME_LEASE_LOST' | 'PROFILE_NOT_FOUND', message: string) { super(message); }
 }
 
 /** Safe, cookie-free view of an account for Website A's management page. */
@@ -32,6 +51,8 @@ export interface AccountMeta {
   lastWorkflowAt: number | null; lastUrl: string | null; stateReason: string | null;
   /** The proxy this account is bound to (reused for every run and login capture until the operator releases it). */
   proxy: { id: string; label: string; state: string; since: number | null } | null;
+  /** Persistent browser profile + environment (configuration only; never browser contents). */
+  browser: { profileDir: string | null; initialized: boolean; locale: string | null; timezone: string | null; viewport: string | null; running: { type: RuntimeType; workflowId: string | null; since: number } | null };
   /**
    * Out of rotation for an applicant: 'review' = the applicant opened the role link and the outcome is unknown until
    * the operator releases the account or marks it verified; 'taken' = verified, this applicant's account for good.
@@ -49,6 +70,8 @@ export interface AssignmentRow {
 export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; review: number; taken: number; noSession: number; nextAvailableInMs: number | null }
 
 const LIVE: AssignmentState[] = ['allocating', 'preparing', 'ready', 'submitting', 'paused'];
+/** Directory name for a profile: from the internal id only (a UUID), never from operator-entered text. */
+export const profileDirName = (id: string) => `profile-${id}`;
 
 /**
  * All profile/assignment persistence. Every mutation is a synchronous SQLite
@@ -57,13 +80,15 @@ const LIVE: AssignmentState[] = ['allocating', 'preparing', 'ready', 'submitting
  * statement, and the partial unique index on live assignments backs that up.
  */
 export class ProfileStore {
-  /** Egress rows live in the same database, so account + egress are acquired in ONE transaction. */
+  /** Egress rows live in the same database, so account + egress + runtime are acquired in ONE transaction. */
   readonly egress: EgressStore;
-  /** False when Chromium was launched in per-context proxy mode (Windows): contexts without a proxy cannot work there. */
+  readonly audit: AuditLog;
+  /** False under STRICT_ACCOUNT_EGRESS (or per-context proxy mode): no account browser ever goes direct. */
   private directAllowed = true;
 
-  constructor(private db: Db, private vault: Vault, private instanceId: string) {
-    this.egress = new EgressStore(db, vault);
+  constructor(private db: Db, private vault: Vault, readonly instanceId: string) {
+    this.audit = new AuditLog(db);
+    this.egress = new EgressStore(db, vault, this.audit);
   }
 
   setDirectAllowed(v: boolean): void { this.directAllowed = v; }
@@ -75,9 +100,10 @@ export class ProfileStore {
     const id = randomUUID();
     const e = this.vault.encrypt(id, storageStateJson);
     const now = Date.now();
-    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(id, label, accountKey, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now);
+    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at,user_data_dir)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).run(id, label, accountKey, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, now, profileDirName(id));
     this.event(id, null, 'available', 'seeded');
+    this.audit.record('PROFILE_CREATED', { profileId: id, code: 'seeded', detail: `profile dir ${profileDirName(id)}` });
     return this.get(id)!;
   }
 
@@ -86,9 +112,10 @@ export class ProfileStore {
     const id = randomUUID();
     const e = this.vault.encrypt(id, JSON.stringify({ cookies: [], origins: [] }));
     const now = Date.now();
-    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at)
-      VALUES (?,?,?,?,?,?,?,?,NULL,?,?)`).run(id, name, email, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now);
+    this.db.prepare(`INSERT INTO profiles (id,label,account_key,state,storage_state_enc,nonce,data_key_enc,key_version,session_saved_at,created_at,updated_at,user_data_dir)
+      VALUES (?,?,?,?,?,?,?,?,NULL,?,?,?)`).run(id, name, email, 'available', e.ciphertext, e.nonce, e.dataKeyEnc, e.keyVersion, now, now, profileDirName(id));
     this.event(id, null, 'available', 'account created (no session yet)');
+    this.audit.record('PROFILE_CREATED', { profileId: id, code: 'created', detail: `profile dir ${profileDirName(id)}` });
     return this.get(id)!;
   }
 
@@ -126,6 +153,11 @@ export class ProfileStore {
       sessionNote: r.session_note,
       lastWorkflowAt: wfAt, lastUrl: wfUrl, stateReason: r.state_reason,
       proxy: (() => { const e = this.egress.boundEgressOf(r.id); return e ? { id: e.id, label: e.label, state: e.state, since: r.egress_bound_at } : null; })(),
+      browser: (() => {
+        const rt = this.getRuntime(r.id);
+        return { profileDir: r.user_data_dir, initialized: r.profile_dir_initialized_at !== null, locale: r.browser_locale, timezone: r.browser_timezone, viewport: r.browser_viewport,
+          running: rt ? { type: rt.runtime_type, workflowId: rt.workflow_id, since: rt.started_at } : null };
+      })(),
       reservation: r.state === 'review' || r.state === 'taken' ? { state: r.state, applicationId: r.reserved_for_application_id, since: r.reserved_at } : null,
     };
   }
@@ -172,10 +204,159 @@ export class ProfileStore {
     return this.db.prepare('SELECT * FROM profiles ORDER BY created_at').all() as ProfileRow[];
   }
   remove(id: string): void {
-    // the account's proxy stays held (the provider may still count the session); the operator releases it explicitly
-    this.egress.unbindAccount(id, 'account removed');
-    this.db.prepare('DELETE FROM assignments WHERE profile_id = ?').run(id);
-    this.db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
+    const p = this.get(id);
+    if (!p) return;
+    if (this.getRuntime(id)) throw new ProfileRuntimeError('PROFILE_IN_USE', 'the account browser is running; close it before removing the account');
+    this.db.transaction(() => {
+      // the account's proxy stays held (the provider may still count the session); the operator releases it explicitly.
+      // Its assignment history survives this delete (no FK), so the proxy never looks clean again.
+      this.egress.unbindAccount(id, 'account removed');
+      this.db.prepare('DELETE FROM assignments WHERE profile_id = ?').run(id);
+      this.db.prepare('DELETE FROM profiles WHERE id = ?').run(id);
+      // the persistent Chromium directory is NOT deleted by ordinary cleanup; the operator removes it deliberately
+      this.audit.record('PROFILE_DIR_RETAINED', { profileId: id, detail: `account removed; browser profile dir ${p.user_data_dir ?? '(none)'} retained on disk` });
+    })();
+  }
+
+  // ---------- persistent browser profile + stable environment ----------
+
+  /** Directory name of the account's Chromium profile (derived from the id). */
+  profileDirName(id: string): string {
+    const p = this.get(id);
+    if (!p) throw new ProfileRuntimeError('PROFILE_NOT_FOUND', `account ${id} not found`);
+    if (!p.user_data_dir) {
+      // accounts created before the isolation migration (should have been backfilled; idempotent repair)
+      this.db.prepare('UPDATE profiles SET user_data_dir = ?, updated_at = ? WHERE id = ? AND user_data_dir IS NULL').run(profileDirName(id), Date.now(), id);
+      return profileDirName(id);
+    }
+    return p.user_data_dir;
+  }
+
+  /** Marks the persistent directory seeded (idempotent). `seeded` says whether a saved session was imported. */
+  markProfileDirInitialized(id: string, seeded: boolean): void {
+    const r = this.db.prepare('UPDATE profiles SET profile_dir_initialized_at = ?, updated_at = ? WHERE id = ? AND profile_dir_initialized_at IS NULL').run(Date.now(), Date.now(), id);
+    if (r.changes) this.audit.record(seeded ? 'PROFILE_MIGRATED' : 'PROFILE_CREATED', { profileId: id, code: seeded ? 'seeded_from_storage_state' : 'empty_profile_dir', detail: `persistent profile dir initialized (${this.get(id)?.user_data_dir ?? '?'})` });
+  }
+
+  /** Operator-set environment. Validated; stored; identical on every launch. Nothing is inferred or randomized. */
+  setEnvironment(id: string, env: Partial<BrowserEnvironment>, operator = 'operator'): BrowserEnvironment {
+    const p = this.get(id);
+    if (!p) throw new ProfileRuntimeError('PROFILE_NOT_FOUND', `account ${id} not found`);
+    if (this.getRuntime(id)) throw new ProfileRuntimeError('PROFILE_IN_USE', 'the account browser is running; close it before changing its environment');
+    const next = { locale: p.browser_locale, timezone: p.browser_timezone, viewport: p.browser_viewport };
+    if (env.locale !== undefined) {
+      if (env.locale !== null) { try { const [c] = Intl.getCanonicalLocales(env.locale); if (!c || !/^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(c)) throw new Error(); next.locale = c; } catch { throw new Error(`invalid locale "${String(env.locale).slice(0, 40)}" (expected e.g. en-US)`); } }
+      else next.locale = null;
+    }
+    if (env.timezone !== undefined) {
+      if (env.timezone !== null) { try { new Intl.DateTimeFormat('en-US', { timeZone: env.timezone }); next.timezone = env.timezone; } catch { throw new Error(`invalid IANA time zone "${String(env.timezone).slice(0, 40)}"`); } }
+      else next.timezone = null;
+    }
+    if (env.viewport !== undefined) {
+      if (env.viewport !== null) {
+        const { width, height } = env.viewport;
+        if (!Number.isInteger(width) || !Number.isInteger(height) || width < 320 || height < 320 || width > 7680 || height > 4320) throw new Error('viewport must be WxH between 320 and 7680x4320');
+        next.viewport = `${width}x${height}`;
+      } else next.viewport = null;
+    }
+    this.db.prepare('UPDATE profiles SET browser_locale = ?, browser_timezone = ?, browser_viewport = ?, updated_at = ? WHERE id = ?').run(next.locale, next.timezone, next.viewport, Date.now(), id);
+    this.audit.record('PROFILE_ENVIRONMENT_SET', { profileId: id, operator, detail: `locale=${next.locale ?? 'default'} timezone=${next.timezone ?? 'default'} viewport=${next.viewport ?? 'default'}` });
+    return this.environmentOf(this.get(id)!);
+  }
+
+  environmentOf(p: ProfileRow): BrowserEnvironment {
+    const m = p.browser_viewport ? /^(\d+)x(\d+)$/.exec(p.browser_viewport) : null;
+    return { locale: p.browser_locale, timezone: p.browser_timezone, viewport: m ? { width: Number(m[1]), height: Number(m[2]) } : null };
+  }
+
+  // ---------- exclusive runtime ownership ----------
+
+  getRuntime(profileId: string): RuntimeRow | undefined {
+    return this.db.prepare('SELECT * FROM profile_runtimes WHERE profile_id = ?').get(profileId) as RuntimeRow | undefined;
+  }
+  listRuntimes(): RuntimeRow[] { return this.db.prepare('SELECT * FROM profile_runtimes ORDER BY started_at').all() as RuntimeRow[]; }
+
+  /**
+   * Take exclusive runtime ownership of a profile for a manual login (workflows take theirs inside reserve()).
+   * One immediate transaction: refused while a live workflow assignment or any runtime row exists.
+   */
+  acquireRuntime(profileId: string, runtimeType: RuntimeType, opts: { workflowId?: string | null; pid?: number | null; pidStart?: string | null } = {}): RuntimeHandle {
+    let conflict: { code: string; detail: string; workflowId: string | null } | null = null;
+    try {
+      return this.db.transaction(() => {
+        const p = this.get(profileId);
+        if (!p) throw new ProfileRuntimeError('PROFILE_NOT_FOUND', `account ${profileId} not found`);
+        const existing = this.getRuntime(profileId);
+        if (existing) {
+          conflict = { code: existing.runtime_type, workflowId: opts.workflowId ?? null, detail: `requested ${runtimeType}; held by ${existing.runtime_type} on instance ${existing.instance_id.slice(0, 8)} since ${new Date(existing.started_at).toISOString()}` };
+          throw new ProfileRuntimeError('PROFILE_IN_USE', `profile already in use by ${existing.runtime_type === 'manual_login' ? 'a manual login browser' : `workflow ${existing.workflow_id?.slice(0, 8) ?? '?'}`}`);
+        }
+        const live = this.db.prepare('SELECT workflow_id FROM assignments WHERE profile_id = ? AND state IN (' + LIVE.map(() => '?').join(',') + ')').get(profileId, ...LIVE) as { workflow_id: string } | undefined;
+        if (live && live.workflow_id !== opts.workflowId) {
+          conflict = { code: 'workflow', workflowId: live.workflow_id, detail: `requested ${runtimeType}; a live workflow assignment holds the account` };
+          throw new ProfileRuntimeError('PROFILE_IN_USE', `profile already in use by workflow ${live.workflow_id.slice(0, 8)}`);
+        }
+        return this.insertRuntime(profileId, runtimeType, opts.workflowId ?? null, opts.pid ?? null, opts.pidStart ?? null);
+      }).immediate();
+    } catch (e) {
+      // recorded AFTER the rollback so the audit row survives the failed transaction
+      if (conflict) { const c = conflict as { code: string; detail: string; workflowId: string | null }; this.audit.record('PROFILE_RUNTIME_LOCK_CONFLICT', { profileId, workflowId: c.workflowId, code: c.code, detail: c.detail }); }
+      throw e;
+    }
+  }
+
+  /** Inside a transaction. The PRIMARY KEY on profile_id is the final arbiter. */
+  private insertRuntime(profileId: string, runtimeType: RuntimeType, workflowId: string | null, pid: number | null, pidStart: string | null): RuntimeHandle {
+    const now = Date.now();
+    const leaseToken = randomBytes(16).toString('hex');
+    // the owner process is THIS service (it heartbeats the lease); recorded with its start time so a reused pid is not mistaken for it
+    this.db.prepare('INSERT INTO profile_runtimes (profile_id, account_id, runtime_type, workflow_id, instance_id, pid, pid_start, lease_token, started_at, heartbeat_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run(profileId, profileId, runtimeType, workflowId, this.instanceId, pid ?? process.pid, pidStart ?? pidStartOf(process.pid), leaseToken, now, now);
+    this.audit.record('PROFILE_RUNTIME_LOCK_ACQUIRED', { profileId, workflowId, code: runtimeType, detail: `instance ${this.instanceId.slice(0, 8)}` });
+    return { profileId, runtimeType, workflowId, leaseToken };
+  }
+
+  /** Renew ownership. False when the lease is gone (recovered by another instance or released): the holder must stop. */
+  heartbeatRuntime(h: RuntimeHandle): boolean {
+    return this.db.prepare('UPDATE profile_runtimes SET heartbeat_at = ? WHERE profile_id = ? AND lease_token = ?').run(Date.now(), h.profileId, h.leaseToken).changes === 1;
+  }
+  /** Record the Chromium process once Playwright reports it (informational; never trusted alone). */
+  setRuntimeProcess(h: RuntimeHandle, pid: number | null, pidStart: string | null): void {
+    this.db.prepare('UPDATE profile_runtimes SET pid = ?, pid_start = ? WHERE profile_id = ? AND lease_token = ?').run(pid, pidStart, h.profileId, h.leaseToken);
+  }
+  /** Give the profile back. Fenced by the lease token; idempotent. */
+  releaseRuntime(h: RuntimeHandle, reason: string): boolean {
+    const r = this.db.prepare('DELETE FROM profile_runtimes WHERE profile_id = ? AND lease_token = ?').run(h.profileId, h.leaseToken);
+    if (r.changes) this.audit.record('PROFILE_RUNTIME_LOCK_RELEASED', { profileId: h.profileId, workflowId: h.workflowId, code: h.runtimeType, detail: reason });
+    return r.changes === 1;
+  }
+
+  /**
+   * Stale-lock recovery (boot and periodic). A runtime row of ANOTHER instance whose heartbeat lapsed is reclaimed
+   * only when `ownerAlive` says its process is genuinely gone (pid dead, or pid reused: start time differs).
+   * A lapsed heartbeat with a live owner is a conflict that is logged and left alone (fail closed). The persistent
+   * profile directory is never touched here.
+   */
+  recoverStaleRuntimes(leaseMs: number, ownerAlive: (pid: number | null, pidStart: string | null) => boolean | 'unknown'): { recovered: string[]; conflicts: string[] } {
+    const now = Date.now();
+    const out = { recovered: [] as string[], conflicts: [] as string[] };
+    const rows = this.db.prepare('SELECT * FROM profile_runtimes WHERE instance_id != ? AND heartbeat_at < ?').all(this.instanceId, now - leaseMs) as RuntimeRow[];
+    for (const r of rows) {
+      const alive = ownerAlive(r.pid, r.pid_start);
+      const age = Math.round((now - r.heartbeat_at) / 1000);
+      if (alive === true) {
+        this.audit.record('PROFILE_RUNTIME_LOCK_CONFLICT', { profileId: r.profile_id, workflowId: r.workflow_id, code: 'STALE_HEARTBEAT_OWNER_ALIVE', detail: `heartbeat ${age}s old but pid ${r.pid} is alive; not reclaimed` });
+        out.conflicts.push(r.profile_id);
+        continue;
+      }
+      if (alive === 'unknown' && now - r.heartbeat_at < leaseMs * 3) { out.conflicts.push(r.profile_id); continue; } // no pid to check: wait 3 leases
+      const del = this.db.prepare('DELETE FROM profile_runtimes WHERE profile_id = ? AND lease_token = ?').run(r.profile_id, r.lease_token);
+      if (del.changes) {
+        this.audit.record('PROFILE_RUNTIME_LOCK_RECOVERED', { profileId: r.profile_id, workflowId: r.workflow_id, code: r.runtime_type, detail: `stale lease of instance ${r.instance_id.slice(0, 8)} (heartbeat ${age}s old, pid ${r.pid ?? '?'} ${alive === false ? 'dead or reused' : 'unknown'}); profile data untouched` });
+        out.recovered.push(r.profile_id);
+      }
+    }
+    return out;
   }
 
   decryptStorageState(p: ProfileRow): string {
@@ -231,15 +412,20 @@ export class ProfileStore {
       const existing = this.getAssignment(workflowId);
       if (existing && LIVE.includes(existing.state)) return { profile: this.get(existing.profile_id)!, assignment: existing };
 
-      // Account first, then ITS egress: an account bound to a proxy reuses that proxy (never a new one); an unbound
-      // account takes one unused proxy and binds it; direct only when allowed. An account whose proxy is down,
-      // retired or in use is skipped, never given another proxy. Both resources or neither.
+      // Account first, then ITS egress, then the runtime lock: an account bound to a proxy reuses that proxy (never a
+      // new one); an unbound account takes one CLEAN proxy and binds it; direct only when allowed (never for a bound
+      // account). An account whose proxy is retired or in use is skipped, never given another proxy; one whose proxy
+      // is down is tried last and only while a clean replacement exists (the launch preflight decides). A profile
+      // with any runtime owner (manual login, another instance) is not a candidate. All three resources or none.
       const candidates = this.db.prepare(`
-        SELECT id FROM profiles
-        WHERE state='available' AND session_saved_at IS NOT NULL AND (cooldown_until IS NULL OR cooldown_until <= ?)
-        ORDER BY CASE WHEN egress_id IS NOT NULL THEN 0 ELSE 1 END, last_used_at ASC NULLS FIRST, created_at ASC`).all(now) as { id: string }[];
+        SELECT p.id FROM profiles p
+        WHERE p.state='available' AND p.session_saved_at IS NOT NULL AND (p.cooldown_until IS NULL OR p.cooldown_until <= ?)
+          AND NOT EXISTS (SELECT 1 FROM profile_runtimes r WHERE r.profile_id = p.id)
+        ORDER BY CASE WHEN p.egress_id IS NOT NULL THEN 0 ELSE 1 END,
+                 CASE WHEN EXISTS (SELECT 1 FROM egress e WHERE e.id = p.egress_id AND e.state = 'down') THEN 1 ELSE 0 END,
+                 p.last_used_at ASC NULLS FIRST, p.created_at ASC`).all(now) as { id: string }[];
       for (const c of candidates) {
-        const pick = this.egress.pickForAccount(c.id, this.directAllowed);
+        const pick = this.egress.pickForAccount(c.id, this.directAllowed, workflowId);
         if (pick.id === null) {
           if (pick.blocked) this.event(c.id, null, 'skipped', `cannot run: ${pick.blocked}`, workflowId);
           continue;
@@ -249,13 +435,20 @@ export class ProfileStore {
         this.db.prepare(`INSERT INTO assignments (workflow_id,profile_id,state,instance_id,lease_expires_at,client_ip,egress_id,application_id,lease_token,created_at,updated_at)
           VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(workflowId, row.id, 'allocating', this.instanceId, now + leaseMs, clientIp ?? null, pick.id, applicationId ?? null, randomBytes(16).toString('hex'), now, now);
         this.egress.markInUse(pick.id, workflowId);
+        this.insertRuntime(row.id, 'workflow', workflowId, null, null); // PRIMARY KEY: a concurrent owner makes this throw and the transaction roll back
         this.event(row.id, 'available', 'reserved', 'allocated', workflowId);
         const egressLabel = this.egress.get(pick.id)?.label ?? pick.id;
-        this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}, egress ${egressLabel} (${pick.bound === 'reused' ? 'the account\'s own proxy, reused' : pick.bound === 'new' ? 'unused proxy, now bound to this account' : 'direct'})`);
+        this.wfEvent(workflowId, null, 'allocating', `profile ${row.label}, egress ${egressLabel} (${pick.bound === 'reused' ? (pick.needsFailover ? 'the account\'s own proxy, currently down: preflight + clean failover at launch' : 'the account\'s own proxy, reused') : pick.bound === 'new' ? 'clean proxy, now bound to this account' : 'direct'})`);
         return { profile: row, assignment: this.getAssignment(workflowId)! };
       }
       return null;
-    })();
+    }).immediate();
+  }
+
+  /** The runtime handle a workflow's reservation created (the browser layer launches only with it). */
+  runtimeHandleFor(workflowId: string): RuntimeHandle | null {
+    const r = this.db.prepare("SELECT * FROM profile_runtimes WHERE workflow_id = ? AND runtime_type = 'workflow'").get(workflowId) as RuntimeRow | undefined;
+    return r ? { profileId: r.profile_id, runtimeType: 'workflow', workflowId, leaseToken: r.lease_token } : null;
   }
 
   getAssignment(workflowId: string): AssignmentRow | undefined {
@@ -321,13 +514,15 @@ export class ProfileStore {
    *   invalid      -> invalid (out of rotation until re-seeded)
    * Under a workflow that is switching profiles (reassign=true) the assignment stays live on the new profile.
    */
-  release(workflowId: string, outcome: ReleaseOutcome, cooldownMs: number, opts: { outcomeCode?: string; reason?: string; reassign?: boolean } = {}): void {
+  release(workflowId: string, outcome: ReleaseOutcome, cooldownMs: number, opts: { outcomeCode?: string; reason?: string; reassign?: boolean; /** false: the failure was the network's (egress), not the account's: no strike against it */ countFailure?: boolean } = {}): void {
     const a = this.getAssignment(workflowId);
     if (!a) return;
     const now = Date.now();
     this.db.transaction(() => {
       const p = this.get(a.profile_id)!;
       if (a.egress_id) this.egress.markUsed(a.egress_id, workflowId, outcome);
+      const rt = this.db.prepare("DELETE FROM profile_runtimes WHERE profile_id = ? AND runtime_type = 'workflow' AND workflow_id = ?").run(p.id, workflowId);
+      if (rt.changes) this.audit.record('PROFILE_RUNTIME_LOCK_RELEASED', { profileId: p.id, workflowId, code: 'workflow', detail: `assignment released (${outcome})` });
       const wfState: AssignmentState = outcome === 'auth_expired' || outcome === 'invalid' ? 'failed' : outcome === 'lost' ? 'lost' : outcome;
       if (!opts.reassign) {
         this.db.prepare('UPDATE assignments SET state=?, outcome_code=?, ended_at=?, updated_at=? WHERE workflow_id=?').run(wfState, opts.outcomeCode ?? null, now, now, workflowId);
@@ -343,7 +538,7 @@ export class ProfileStore {
         case 'auth_expired': next = 'expired'; break;
         case 'invalid': next = 'invalid'; break;
         case 'lost': case 'uncertain': next = 'cooldown'; needsVerify = 1; break;
-        case 'failed': next = 'cooldown'; failures += 1; break;
+        case 'failed': next = 'cooldown'; if (opts.countFailure !== false) failures += 1; break;
         default: next = 'cooldown'; failures = 0;
       }
       if (next === 'cooldown' && failures >= 3) { next = 'invalid'; opts.reason = `${opts.reason ?? outcome}; 3 consecutive failures`; }

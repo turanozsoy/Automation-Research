@@ -45,6 +45,37 @@ export interface Settings {
   adminPassword: string | null;
   /** Operator session lifetime (ADMIN_SESSION_HOURS, default 12). */
   adminSessionTtlMs: number;
+
+  // ---- client isolation (persistent per-account browser profiles) ----
+  /** NODE_ENV=production: secrets are required (fail closed) and strict egress is the default. */
+  production: boolean;
+  /**
+   * STRICT_ACCOUNT_EGRESS=1: account browsers only ever use their assigned proxy; the Direct (server IP) egress is
+   * never assigned to an account and never a fallback. Default on in production, off for local development.
+   * Even when off, an account that HAS a proxy never falls back to direct or to another account's proxy.
+   */
+  strictAccountEgress: boolean;
+  /** Root of the permanent Chromium user data directories, one per account (BROWSER_PROFILE_DIR). 0700. */
+  browserProfileDir: string;
+  /** Runtime lock files, outside the Chromium directories (PROFILE_LOCK_DIR). */
+  profileLockDir: string;
+  /** A profile runtime whose heartbeat is older than this is a candidate for stale-lock recovery (PROFILE_RUNTIME_LEASE_MS). */
+  profileRuntimeLeaseMs: number;
+  /** Bound on automatic clean-proxy replacements while launching one account browser (MAX_AUTO_EGRESS_FAILOVERS_PER_LAUNCH). */
+  maxAutoEgressFailoversPerLaunch: number;
+  /** Proxy preflight before an account browser launches: attempts and per-attempt timeout. Reaches the health threshold (3) by default. */
+  egressPreflightAttempts: number;
+  egressPreflightTimeoutMs: number;
+  /** Default browser environment for accounts without an explicit one (BROWSER_DEFAULT_LOCALE / BROWSER_DEFAULT_TIMEZONE). Unset = Chromium/system defaults. */
+  browserDefaultLocale: string | null;
+  browserDefaultTimezone: string | null;
+  /** Interface the HTTP/WebSocket server binds to (SERVICE_HOST, default 127.0.0.1: put a reverse proxy / VPN in front). */
+  host: string;
+  /**
+   * Reverse proxies whose X-Forwarded-For may be trusted for client IPs and the loopback check (TRUSTED_PROXIES,
+   * comma-separated IPs). Empty: forwarding headers are never trusted (default).
+   */
+  trustedProxies: string[];
 }
 
 const num = (name: string, def: number) => {
@@ -52,8 +83,14 @@ const num = (name: string, def: number) => {
   return v === undefined || v === '' ? def : Number(v);
 };
 
+const flag = (name: string, def: boolean) => {
+  const v = process.env[name];
+  return v === undefined || v === '' ? def : v === '1' || v.toLowerCase() === 'true';
+};
+
 export function loadSettings(): Settings {
   const dataDir = resolve(process.cwd(), process.env.DATA_DIR ?? 'data');
+  const production = process.env.NODE_ENV === 'production';
   return {
     port: num('PORT', 3000),
     dataDir,
@@ -77,5 +114,17 @@ export function loadSettings(): Settings {
     reserveAccounts: process.env.ACCOUNT_RESERVE !== '0',
     adminPassword: process.env.ADMIN_PASSWORD || null,
     adminSessionTtlMs: num('ADMIN_SESSION_HOURS', 12) * 60 * 60_000,
+    production,
+    strictAccountEgress: flag('STRICT_ACCOUNT_EGRESS', production),
+    browserProfileDir: resolve(dataDir, process.env.BROWSER_PROFILE_DIR || 'browser-profiles'),
+    profileLockDir: resolve(dataDir, process.env.PROFILE_LOCK_DIR || 'locks'),
+    profileRuntimeLeaseMs: num('PROFILE_RUNTIME_LEASE_MS', 90_000),
+    maxAutoEgressFailoversPerLaunch: num('MAX_AUTO_EGRESS_FAILOVERS_PER_LAUNCH', 1),
+    egressPreflightAttempts: num('EGRESS_PREFLIGHT_ATTEMPTS', 3),
+    egressPreflightTimeoutMs: num('EGRESS_PREFLIGHT_TIMEOUT_MS', 8000),
+    browserDefaultLocale: process.env.BROWSER_DEFAULT_LOCALE || null,
+    browserDefaultTimezone: process.env.BROWSER_DEFAULT_TIMEZONE || null,
+    host: process.env.SERVICE_HOST || process.env.HOST || '127.0.0.1',
+    trustedProxies: (process.env.TRUSTED_PROXIES ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   };
 }

@@ -76,3 +76,22 @@ export function probe(opts: { server: string; username?: string; password?: stri
     }
   });
 }
+
+/**
+ * Launch-time preflight: up to `attempts` probes through the proxy, one second apart, each bounded by `timeoutMs`.
+ * The result reports every attempt so the caller can record them like health checks (the same consecutive-failure
+ * threshold decides "down"). socks5 proxies have no active probe (see probe()): they pass and the launch itself decides.
+ */
+export async function preflightProxy(opts: { server: string; username?: string; password?: string }, checkUrl: string, attempts: number, timeoutMs: number): Promise<{ ok: boolean; attempts: { ok: boolean; error?: string }[]; probed: boolean }> {
+  let proxy: URL;
+  try { proxy = new URL(opts.server); } catch { return { ok: false, attempts: [{ ok: false, error: 'bad proxy url' }], probed: false }; }
+  if (proxy.protocol.startsWith('socks')) return { ok: true, attempts: [], probed: false };
+  const results: { ok: boolean; error?: string }[] = [];
+  for (let i = 0; i < Math.max(1, attempts); i++) {
+    const r = await probe(opts, checkUrl, timeoutMs);
+    results.push(r);
+    if (r.ok) return { ok: true, attempts: results, probed: true };
+    if (i < attempts - 1) await new Promise((res) => setTimeout(res, 1000));
+  }
+  return { ok: false, attempts: results, probed: true };
+}

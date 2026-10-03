@@ -16,6 +16,11 @@ import { parseCookies } from './applications/session.js';
 export const ADMIN_COOKIE = 'shipzora_admin';
 const MAX_FAILS = 5;
 const LOCK_MS = 60_000;
+/** Bound on the per-client failure table: expired entries are pruned first; only then is the oldest dropped. */
+const MAX_TRACKED_CLIENTS = 5000;
+
+/** Who performed an operator action. One shared password today; the seam for named operators / roles / MFA later. */
+export interface Operator { name: string; role: 'operator' }
 
 const PROTECTED_EXACT = new Set(['/debug', '/debug.js', '/admin/accounts', '/admin.js', '/admin.css', '/ws', '/ws/admin']);
 const PROTECTED_PREFIXES = ['/api/accounts', '/api/admin/', '/api/dev/'];
@@ -29,9 +34,16 @@ export class AdminAuth {
   private readonly passwordHash: Buffer | null;
   private readonly fails = new Map<string, { n: number; until: number }>();
 
-  constructor(private readonly opts: { password: string | null; secret: Buffer; secure: boolean; ttlMs: number }) {
+  constructor(private readonly opts: { password: string | null; secret: Buffer; secure: boolean; ttlMs: number; /** reverse proxies whose forwarding headers are trusted */ trustedProxies?: string[] }) {
     this.passwordHash = opts.password ? createHash('sha256').update(opts.password, 'utf8').digest() : null;
   }
+
+  /** The operator identity behind an authorized request (for audit rows). */
+  operator(req: IncomingMessage): Operator {
+    return this.enabled && this.loggedIn(req) ? { name: 'operator', role: 'operator' } : { name: 'operator@localhost', role: 'operator' };
+  }
+  /** Client address for rate limiting / logs: X-Forwarded-For only from a trusted reverse proxy. */
+  clientIp(req: IncomingMessage): string { return clientIp(req, this.opts.trustedProxies ?? []); }
 
   /** True when a password is configured, i.e. the internal surfaces require a login from everywhere. */
   get enabled(): boolean { return this.passwordHash !== null; }
@@ -45,7 +57,7 @@ export class AdminAuth {
 
   /** Decide for one request to a protected path. */
   authorize(req: IncomingMessage): AuthResult {
-    if (!this.enabled) return isLoopback(req) ? 'ok' : 'forbidden';
+    if (!this.enabled) return isLoopback(req, this.opts.trustedProxies ?? []) ? 'ok' : 'forbidden';
     const token = parseCookies(req.headers.cookie)[ADMIN_COOKIE];
     return token && this.verify(token) ? 'ok' : 'login';
   }
@@ -70,8 +82,14 @@ export class AdminAuth {
     const expiredLock = !!f && f.until > 0 && f.until <= now; // a lock that has run out starts the count again
     const n = (!f || expiredLock ? 0 : f.n) + 1;
     this.fails.set(clientIp, { n, until: n >= MAX_FAILS ? now + LOCK_MS : 0 });
-    if (this.fails.size > 10_000) this.fails.clear();
+    if (this.fails.size > MAX_TRACKED_CLIENTS) this.prune(now);
     return { ok: false, retryAfterMs: n >= MAX_FAILS ? LOCK_MS : 0 };
+  }
+
+  /** Bounded memory without wiping active lockouts: drop entries whose lock ran out, then the oldest below the cap. */
+  private prune(now: number): void {
+    for (const [ip, f] of this.fails) if (f.until > 0 && f.until <= now) this.fails.delete(ip);
+    while (this.fails.size > MAX_TRACKED_CLIENTS) { const first = this.fails.keys().next().value; if (first === undefined) break; this.fails.delete(first); }
   }
 
   logoutCookie(): string {
@@ -98,17 +116,36 @@ export class AdminAuth {
   }
 }
 
-/** Loopback client with no reverse-proxy forwarding header: the only client allowed when no password is set. */
-export function isLoopback(req: IncomingMessage): boolean {
-  if (req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['forwarded']) return false;
-  const ip = req.socket.remoteAddress ?? '';
-  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
+const norm = (ip: string) => ip.replace(/^::ffff:/, '');
+
+/** Is the TCP peer one of the configured reverse proxies? */
+function fromTrustedProxy(req: IncomingMessage, trustedProxies: string[]): boolean {
+  const peer = norm(req.socket.remoteAddress ?? '');
+  return trustedProxies.length > 0 && trustedProxies.some((p) => norm(p) === peer);
 }
 
-export function clientIp(req: IncomingMessage): string {
-  const xff = req.headers['x-forwarded-for'];
-  const first = Array.isArray(xff) ? xff[0] : xff?.split(',')[0];
-  return (first?.trim() || req.socket.remoteAddress || 'unknown').slice(0, 64);
+/**
+ * Loopback client: the only client allowed when no password is set. Forwarding headers are a reason to say NO unless
+ * the peer is a trusted reverse proxy, in which case the forwarded client address decides.
+ */
+export function isLoopback(req: IncomingMessage, trustedProxies: string[] = []): boolean {
+  const forwarded = req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.headers['forwarded'];
+  if (forwarded) {
+    if (!fromTrustedProxy(req, trustedProxies)) return false;
+    return LOOPBACK.has(clientIp(req, trustedProxies)) || LOOPBACK.has(`::ffff:${clientIp(req, trustedProxies)}`);
+  }
+  return LOOPBACK.has(req.socket.remoteAddress ?? '');
+}
+
+/** The client's address: the first X-Forwarded-For hop when the peer is a trusted proxy, else the TCP peer itself. */
+export function clientIp(req: IncomingMessage, trustedProxies: string[] = []): string {
+  if (fromTrustedProxy(req, trustedProxies)) {
+    const xff = req.headers['x-forwarded-for'];
+    const first = Array.isArray(xff) ? xff[0] : xff?.split(',')[0];
+    if (first?.trim()) return first.trim().slice(0, 64);
+  }
+  return (req.socket.remoteAddress || 'unknown').slice(0, 64);
 }
 
 /** The login page (internal, tiny, no external assets). `next` is validated server-side to a same-origin path. */

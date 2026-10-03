@@ -193,9 +193,78 @@ const MIGRATIONS: string[] = [
   ALTER TABLE profiles ADD COLUMN reserved_for_application_id TEXT;
   ALTER TABLE profiles ADD COLUMN reserved_at INTEGER;
   `,
+  // 10: client isolation. Immutable proxy provenance (egress_assignment_history), one runtime owner per persistent
+  // browser profile (profile_runtimes), an audit log, and the per-account persistent Chromium profile + stable
+  // environment configuration. Existing bindings are backfilled into the history so an already-used proxy can never
+  // look virgin. Direct is never backfilled: it is not a proxy and never a clean candidate.
+  `
+  CREATE TABLE egress_assignment_history (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    egress_id          TEXT NOT NULL,              -- no FK: provenance survives proxy removal
+    egress_fingerprint TEXT,                       -- the proxy's connection fingerprint: survives delete + re-import under a new id
+    profile_id         TEXT NOT NULL,              -- no FK: provenance survives account deletion
+    profile_label      TEXT,                       -- snapshot for operators after the account is gone
+    workflow_id        TEXT,
+    reason             TEXT NOT NULL,              -- initial | automatic_failover | manual_replace | manual_bind | migration_existing_binding
+    assigned_at        INTEGER NOT NULL,
+    ended_at           INTEGER,
+    ended_reason       TEXT
+  );
+  CREATE INDEX egress_assignment_history_egress ON egress_assignment_history(egress_id);
+  CREATE INDEX egress_assignment_history_fingerprint ON egress_assignment_history(egress_fingerprint);
+  CREATE INDEX egress_assignment_history_profile ON egress_assignment_history(profile_id);
+  INSERT INTO egress_assignment_history (egress_id, egress_fingerprint, profile_id, profile_label, reason, assigned_at)
+    SELECT p.egress_id, e.fingerprint, p.id, p.label, 'migration_existing_binding', COALESCE(p.egress_bound_at, p.updated_at)
+    FROM profiles p JOIN egress e ON e.id = p.egress_id
+    WHERE p.egress_id IS NOT NULL AND e.kind != 'direct';
+
+  -- Exclusive runtime ownership of a persistent profile: the PRIMARY KEY is the database-level guarantee that a
+  -- profile has at most one runtime (workflow or manual login) at a time. pid is informational; liveness is decided
+  -- by lease_token + instance_id + heartbeat (+ pid start time where the OS exposes it).
+  CREATE TABLE profile_runtimes (
+    profile_id    TEXT PRIMARY KEY,
+    account_id    TEXT NOT NULL,
+    runtime_type  TEXT NOT NULL,                  -- workflow | manual_login
+    workflow_id   TEXT,
+    instance_id   TEXT NOT NULL,
+    pid           INTEGER,
+    pid_start     TEXT,                           -- /proc/<pid>/stat start ticks on Linux; guards against pid reuse
+    lease_token   TEXT NOT NULL UNIQUE,
+    started_at    INTEGER NOT NULL,
+    heartbeat_at  INTEGER NOT NULL
+  );
+
+  CREATE TABLE audit_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    type        TEXT NOT NULL,
+    profile_id  TEXT,
+    egress_id   TEXT,
+    old_egress_id TEXT,
+    new_egress_id TEXT,
+    workflow_id TEXT,
+    operator    TEXT,
+    code        TEXT,
+    detail      TEXT,                             -- safe text only: never cookies, storage, tokens or credentials
+    at          INTEGER NOT NULL
+  );
+  CREATE INDEX audit_events_profile ON audit_events(profile_id, id);
+  CREATE INDEX audit_events_egress ON audit_events(egress_id, id);
+  CREATE INDEX audit_events_type ON audit_events(type, id);
+
+  -- The account's permanent Chromium profile directory (a name under BROWSER_PROFILE_DIR, derived from the profile id,
+  -- never from operator text) and its stable environment. NULL locale/timezone = the service defaults.
+  ALTER TABLE profiles ADD COLUMN user_data_dir TEXT;
+  ALTER TABLE profiles ADD COLUMN profile_dir_initialized_at INTEGER;
+  ALTER TABLE profiles ADD COLUMN browser_locale TEXT;
+  ALTER TABLE profiles ADD COLUMN browser_timezone TEXT;
+  ALTER TABLE profiles ADD COLUMN browser_viewport TEXT;   -- "WxH" or NULL (window default)
+  UPDATE profiles SET user_data_dir = 'profile-' || id WHERE user_data_dir IS NULL;
+  CREATE UNIQUE INDEX profiles_user_data_dir ON profiles(user_data_dir);
+  `,
 ];
 
-export function openDb(path: string): Db {
+/** `upTo` applies only the first N migrations (tests of later migrations' backfills). */
+export function openDb(path: string, opts: { upTo?: number } = {}): Db {
   mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
@@ -205,6 +274,7 @@ export function openDb(path: string): Db {
   const applied = new Set(db.prepare('SELECT version FROM schema_migrations').all().map((r: any) => r.version as number));
   MIGRATIONS.forEach((sql, i) => {
     const version = i + 1;
+    if (opts.upTo !== undefined && version > opts.upTo) return;
     if (applied.has(version)) return;
     db.transaction(() => {
       db.exec(sql);

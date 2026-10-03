@@ -23,7 +23,9 @@
     "e2e:apply": "tsx dev/apply-page-test.ts",
     "e2e:concurrency": "tsx dev/concurrency-e2e.ts",
     "e2e:egress": "tsx dev/egress-e2e.ts",
-    "fake-proxy": "tsx dev/fake-proxy.ts"
+    "fake-proxy": "tsx dev/fake-proxy.ts",
+    "test:isolation": "tsx dev/isolation-test.ts",
+    "test:isolation:browser": "tsx dev/isolation-browser-test.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
