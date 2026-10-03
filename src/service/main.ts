@@ -7,6 +7,7 @@ import { LoginSessionManager } from './accounts/login-sessions.js';
 import { ApplicationService } from './applications/service.js';
 import { ApplicationStore } from './applications/store.js';
 import { BrowserModeControl } from './dev/browser-mode.js';
+import { NetworkDiagnostics } from './dev/network-diagnostics.js';
 import { EgressHealth } from './egress/health.js';
 import { ProfileStore } from './profiles/store.js';
 import { loadSettings } from './settings.js';
@@ -60,12 +61,13 @@ async function main(): Promise<void> {
   await browser.launch();
   registry.start();
   const logins = new LoginSessionManager(settings, cfg, store, browser, tl);
+  const diagnostics = new NetworkDiagnostics(settings, store, browser, tl);
   const apps = new ApplicationService(settings, cfg, new ApplicationStore(db), registry, tl, store);
   const content = new ApplicantContent(db, JSON.parse(readFileSync(APPLY_CONFIG_PATH, 'utf8')));
   const interrupted = apps.recoverOnBoot();
   if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
   const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl);
-  await startServer({ cfg, registry, store, logins, apps, browserMode, egressHealth, settings, tl, content, auth });
+  await startServer({ cfg, registry, store, logins, apps, browserMode, diagnostics, egressHealth, settings, tl, content, auth });
   egressHealth.start();
   tl.mark('server listening', `http://${settings.host}:${settings.port}`);
 

@@ -8,6 +8,7 @@ import { ProfileRuntimeError } from '../profiles/store.js';
 import { DIRECT_ID, EgressError } from '../egress/store.js';
 import { preflightProxy } from '../egress/health.js';
 import { acquireFsLock, downloadsPath, ensurePrivateDir, lockPath, pidStartOf, profilePath, releaseFsLock, seedPreferences, writeLock, ProfileLockConflict, type LockRecord } from './profile-dirs.js';
+import { applyNetworkPrefs, NetworkConfigError, planNetwork, planSummary, type NetworkPlan } from './network.js';
 
 export interface ContextBundle { context: BrowserContext; page: Page }
 export type BrowserMode = 'visible' | 'headless';
@@ -28,6 +29,8 @@ export interface OpenAccountOptions {
   onClosed?: (reason: string) => void;
   /** Tag used when a manual login takes over a failover proxy exclusively. */
   exclusiveTag?: string;
+  /** Default true. False (diagnostics): a failed preflight fails the launch instead of consuming a clean proxy. */
+  allowFailover?: boolean;
 }
 export interface OpenedAccount extends ContextBundle {
   egressId: string | null;
@@ -35,9 +38,11 @@ export interface OpenedAccount extends ContextBundle {
   failover: { from: string; to: string } | null;
   profileDir: string;
   seeded: boolean;
+  /** The networking configuration this browser was launched with (credential-free view via describePlan). */
+  network: NetworkPlan;
 }
 
-interface Session { key: string; profileId: string; runtime: RuntimeHandle; context: BrowserContext; page: Page; egressId: string | null; lockFile: string; lock: LockRecord; closing: boolean; onClosed?: (reason: string) => void }
+interface Session { key: string; profileId: string; runtime: RuntimeHandle; context: BrowserContext; page: Page; egressId: string | null; network: NetworkPlan; lockFile: string; lock: LockRecord; closing: boolean; onClosed?: (reason: string) => void }
 
 /** Page-side: the document's HTML with anything that could hold applicant input or secrets removed. */
 const SANITIZED_HTML = `(() => {
@@ -161,6 +166,7 @@ export class BrowserManager {
         for (;;) {
           const ok = await this.preflight(egressId, o.workflowId ?? null);
           if (ok) break;
+          if (o.allowFailover === false) throw new EgressError('EGRESS_NOT_ELIGIBLE', `Egress ${this.store.egress.get(egressId)?.label ?? egressId} failed its preflight; this launch does not fail over`);
           if (failovers >= this.settings.maxAutoEgressFailoversPerLaunch) throw new EgressError('EGRESS_NOT_ELIGIBLE', `Egress ${this.store.egress.get(egressId)?.label ?? egressId} failed its preflight and the automatic failover budget (${this.settings.maxAutoEgressFailoversPerLaunch}) is spent`);
           // same account, same profile, same directory, same environment: only the network changes, to a CLEAN proxy
           const r = this.store.egress.replaceProxyAutomatically(o.profileId, egressId, o.workflowId ?? null); // throws NO_CLEAN_EGRESS_AVAILABLE
@@ -173,6 +179,14 @@ export class BrowserManager {
       }
       const proxy = egressId && egressId !== DIRECT_ID ? this.store.egress.proxyOptions(egressId) : null; // throws when credentials cannot be decrypted: stop
       if (egressId && egressId !== DIRECT_ID && !proxy) throw new EgressError('EGRESS_NOT_ELIGIBLE', 'assigned egress is not a usable proxy');
+      // 3b. networking (proxy + DNS) from the ONE shared helper; a proxy that cannot be configured fails the launch here.
+      //     There is no "proxy failed → go direct" path anywhere below this line.
+      let network: NetworkPlan;
+      try { network = planNetwork(proxy); } catch (e) {
+        if (e instanceof NetworkConfigError) throw new EgressError('EGRESS_NOT_ELIGIBLE', `proxy ${this.store.egress.get(egressId!)?.label ?? egressId} cannot be configured: ${e.message}`);
+        throw e;
+      }
+      const prefs = applyNetworkPrefs(profileDir); // Secure DNS off in this profile's Local State (merged, Chromium is not running)
 
       // 4. stable environment: stored per account, identical on every launch
       const env = this.store.environmentOf(profile);
@@ -180,14 +194,9 @@ export class BrowserManager {
       const timezoneId = env.timezone ?? this.settings.browserDefaultTimezone ?? undefined;
       const headless = o.headless ?? this.headless;
       const viewport = env.viewport ?? (headless ? { width: 1280, height: 900 } : null);
-      const args = [...ISOLATION_ARGS];
-      if (proxy) {
-        // No local DNS for anything but the proxy host itself: a request that somehow bypassed the proxy fails instead
-        // of resolving (and leaking) through the server's resolver. Proxied requests are resolved by the proxy.
-        const host = new URL(proxy.server).hostname.replace(/^\[|\]$/g, '');
-        args.push(`--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE ${host}`);
-      }
+      const args = [...ISOLATION_ARGS, ...network.args];
       if (!headless) args.push(...(o.windowArgs ?? ['--window-size=1280,900', '--window-position=40,40']));
+      this.tl.mark('network plan', `${profile.label}: ${planSummary(network)}${prefs.changed ? ' (Local State updated)' : ''}`);
 
       // 5. one-time seed from the encrypted backup for a directory that has never been initialized
       const seedNeeded = profile.profile_dir_initialized_at === null && profile.session_saved_at !== null;
@@ -200,7 +209,7 @@ export class BrowserManager {
       // 6. the persistent Chromium process for this account
       context = await chromium.launchPersistentContext(profileDir, {
         headless, executablePath: this.settings.chromiumPath, args,
-        proxy: proxy ?? undefined,
+        proxy: network.playwrightProxy,
         locale, timezoneId, viewport,
         acceptDownloads: true, downloadsPath: downloadsPath(profileDir),
         // the service's own shutdown closes account browsers in order; Playwright must not kill them on SIGTERM
@@ -228,13 +237,13 @@ export class BrowserManager {
       // service process (it holds the lease and heartbeats), which is what stale-lock recovery checks.
       const pid = process.pid;
       this.store.setRuntimeProcess(o.runtime, pid, pidStartOf(pid));
-      const session: Session = { key: o.key, profileId: o.profileId, runtime: o.runtime, context, page, egressId, lockFile, lock, closing: false, onClosed: o.onClosed };
+      const session: Session = { key: o.key, profileId: o.profileId, runtime: o.runtime, context, page, egressId, network, lockFile, lock, closing: false, onClosed: o.onClosed };
       this.sessions.set(o.key, session);
       this.byProfile.set(o.profileId, o.key);
       context.on('close', () => void this.onContextClosed(session));
       this.store.audit.record('ACCOUNT_LAUNCHED', { profileId: o.profileId, egressId, workflowId: o.workflowId ?? null, code: o.runtime.runtimeType, detail: `${headless ? 'headless' : 'visible'}; dir ${dirName}; owner pid ${pid}${failover ? '; after failover' : ''}${seed ? '; seeded from saved session' : ''}` });
       this.tl.mark('account browser launched', `${profile.label} via ${egressId ? (this.store.egress.get(egressId)?.label ?? egressId) : 'direct'} (${o.runtime.runtimeType}, ${headless ? 'headless' : 'visible'})`);
-      return { context, page, egressId, failover, profileDir, seeded: !!seed };
+      return { context, page, egressId, failover, profileDir, seeded: !!seed, network };
     } catch (e) {
       if (context) await context.close().catch(() => {});
       releaseFsLock(lockFile, o.runtime.leaseToken);
@@ -309,6 +318,8 @@ export class BrowserManager {
   }
 
   egressOf(key: string): string | null { return this.sessions.get(key)?.egressId ?? null; }
+  /** The networking plan a live account browser was launched with (the same helper for every entry point). */
+  networkOf(key: string): NetworkPlan | null { return this.sessions.get(key)?.network ?? null; }
   isOpen(key: string): boolean { const s = this.sessions.get(key); return !!s && !s.page.isClosed(); }
   pageOf(key: string): Page | null { return this.sessions.get(key)?.page ?? null; }
 

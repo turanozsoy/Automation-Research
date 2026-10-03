@@ -9,6 +9,7 @@ import type { AppClientMsg, AppServerMsg, ApplicationEventType, ApplicationView,
 import type { LoginSessionManager } from './accounts/login-sessions.js';
 import type { ApplicationService } from './applications/service.js';
 import type { BrowserModeControl } from './dev/browser-mode.js';
+import type { NetworkDiagnostics } from './dev/network-diagnostics.js';
 import type { EgressHealth } from './egress/health.js';
 import { parseProxyLine } from './egress/store.js';
 import { SESSION_COOKIE, looksLikeToken, parseCookies, sessionCookie } from './applications/session.js';
@@ -45,6 +46,8 @@ export interface ServerDeps {
   logins: LoginSessionManager;
   apps: ApplicationService;
   browserMode: BrowserModeControl;
+  /** Development: per-account proxy/DNS path diagnostics (internal, operator login). */
+  diagnostics: NetworkDiagnostics;
   egressHealth: EgressHealth;
   settings: Settings;
   tl: Timeline;
@@ -300,6 +303,13 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     if (url === '/api/dev/browser' && method === 'POST') {
       const body = await readJson(req);
       try { return json(200, await deps.browserMode.request(body.mode as never)); } catch (e) { return json(400, { error: e instanceof Error ? e.message : String(e) }); }
+    }
+    // ---- development: network (proxy + DNS path) diagnostics for one account; opens its browser through the shared launch path ----
+    const diag = /^\/api\/dev\/network-diagnostics\/([^/]+)$/.exec(url);
+    if (diag && method === 'POST') {
+      const id = decodeURIComponent(diag[1]);
+      if (!deps.store.get(id)) return json(404, { error: 'account not found' });
+      try { return json(200, await deps.diagnostics.run(id)); } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
     }
     if (method === 'GET' && url === '/api/apply/config') {
       // questions (keys/values fixed in config) + the current applicant copy (defaults merged with saved overrides)

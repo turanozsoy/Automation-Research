@@ -76,6 +76,8 @@ export interface Settings {
    * comma-separated IPs). Empty: forwarding headers are never trusted (default).
    */
   trustedProxies: string[];
+  /** Development network diagnostics: URL that echoes the caller's public IP (DIAG_IP_URL). Fetched through the account's proxy only. */
+  diagIpUrl: string;
 }
 
 const num = (name: string, def: number) => {
@@ -126,5 +128,6 @@ export function loadSettings(): Settings {
     browserDefaultTimezone: process.env.BROWSER_DEFAULT_TIMEZONE || null,
     host: process.env.SERVICE_HOST || process.env.HOST || '127.0.0.1',
     trustedProxies: (process.env.TRUSTED_PROXIES ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+    diagIpUrl: process.env.DIAG_IP_URL || 'https://api.ipify.org?format=json',
   };
 }

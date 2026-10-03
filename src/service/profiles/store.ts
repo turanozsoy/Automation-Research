@@ -23,7 +23,7 @@ export interface ProfileRow {
   browser_locale: string | null; browser_timezone: string | null; browser_viewport: string | null;
 }
 
-export type RuntimeType = 'workflow' | 'manual_login';
+export type RuntimeType = 'workflow' | 'manual_login' | 'diagnostic';
 export interface RuntimeRow {
   profile_id: string; account_id: string; runtime_type: RuntimeType; workflow_id: string | null; instance_id: string;
   pid: number | null; pid_start: string | null; lease_token: string; started_at: number; heartbeat_at: number;

@@ -231,9 +231,42 @@ replacements on the SAME profile (`PROXY_AUTOMATIC_FAILOVER`); without a clean p
 proxy, and under `STRICT_ACCOUNT_EGRESS=1` (default in production) never used for account browsers at all.
 
 Network hygiene in every account browser: `--force-webrtc-ip-handling-policy=disable_non_proxied_udp` (plus the same
-WebRTC preferences seeded into the profile) and, with a proxy, `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy
-host>"` so nothing resolves through the server's DNS; proxied requests are resolved by the proxy. socks5 proxies have no
-active preflight probe (passive health only). Chromium's own background connections are reduced, not eliminated.
+WebRTC preferences seeded into the profile). socks5 proxies have no active preflight probe (passive health only).
+Chromium's own background connections are reduced, not eliminated.
+
+#### Proxy and DNS path (one helper for every browser)
+
+`src/service/browser/network.ts` is the only place that turns an egress into Chromium/Playwright networking options;
+`BrowserManager.openAccount` (used by applicant workflows, Add Account / Get Cookies, Refresh Cookies and the
+diagnostics below) is the only launch site. Verified against the Chromium that Playwright 1.63 installs (141):
+
+- **http proxy** (what the provider lines import as `host:port:user:pass`): Chromium never resolves destination
+  names itself. Plain http goes to the proxy as an absolute URI, https as `CONNECT host:443`; the proxy resolves the
+  name. Chromium answers the proxy's auth challenge with the stored credentials (Playwright `proxy` option).
+- **socks5 proxy**: Chromium's SOCKS5 client always sends the destination as a domain name (ATYP 3), i.e. remote DNS
+  (curl's `socks5h` behaviour). It supports no authentication: a socks5 line with a username/password is refused at
+  launch (`EGRESS_NOT_ELIGIBLE`). `socks5h://` is not a Chromium scheme (every request fails with
+  `ERR_NO_SUPPORTED_PROXIES`) and `socks4://` resolves locally; neither is ever passed to Chromium.
+- **Local resolver blocked**: `--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE <proxy host>"`. Only the proxy's own
+  address may be looked up by this machine (unavoidable: the browser has to find the proxy); any request that bypassed
+  the proxy fails with `ERR_NAME_NOT_RESOLVED` instead of resolving through the server's DNS.
+- **Secure DNS (DNS-over-HTTPS) off**: Chromium's default "automatic" mode may probe or upgrade to a public DoH
+  resolver straight from this machine, outside the proxy, for whatever it resolves locally. Before every launch the
+  profile's `Local State` gets `dns_over_https.mode = "off"` (merged, while the profile lock is held). There is no
+  command-line switch for this and `--disable-features=` is overwritten by Playwright's own list, so the preference is
+  the supported mechanism; the applied mode is visible in `chrome://histograms/Net.DNS.DnsConfig.SecureDnsMode`
+  (0 = off, 4 = automatic).
+- **No direct fallback**: a proxy that cannot be configured (unsupported scheme, missing port, socks5 with auth) or
+  that fails its preflight fails the launch with a sanitized `EgressError`; nothing continues through the server IP.
+
+Diagnostics (development, operator login): `POST /api/dev/network-diagnostics/:accountId` opens that account's
+browser through the same path (its assigned proxy only, failover disabled, nothing is assigned) and reports the
+assigned egress and protocol, the effective resolver rule and whether a proxy is configured, the Secure DNS mode
+Chromium applied, the public IP seen through the proxy (`DIAG_IP_URL`, default api.ipify.org), and a controlled DNS
+path test: it opens `http://<nonce>.dns-path.invalid/` (and the https variant for http proxies). Nobody can resolve a
+`.invalid` name, so the failure mode says where the lookup happened: a proxy-side answer (`502`,
+`ERR_TUNNEL_CONNECTION_FAILED`, `ERR_SOCKS_CONNECTION_FAILED`) = resolved by the proxy; `ERR_NAME_NOT_RESOLVED` =
+local lookup (verdict `leak`). The report carries no username, password or encrypted value. Test: `npm run test:network`.
 
 Audit: `GET /api/admin/audit?profileId=&egressId=&type=`, `GET /api/accounts/:id/history`,
 `GET /api/admin/egress/:id/history`. Rows carry identifiers and codes only. Tests: `npm run test:isolation`

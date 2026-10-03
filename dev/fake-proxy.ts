@@ -2,7 +2,8 @@
  * Tiny HTTP forward proxy for development and tests (CONNECT tunnels + plain HTTP), with
  * optional Proxy-Authorization (basic), a control port for stats and a "down" switch.
  *   npx tsx dev/fake-proxy.ts --port 3100 --control 3900 --auth user1:pass1
- * Control: GET /stats -> { tunnels, active, maxActive, authFailures, down }
+ * Control: GET /stats -> { tunnels, requests, active, maxActive, authFailures, down, hosts (last 50 hostnames asked for) }
+ * Forwarded plain-HTTP requests carry `x-fake-proxy-port` so a local echo server can tell which proxy they came through.
  *          POST /down | POST /up  -> refuse / accept new connections
  * Test-only: no TLS termination, no logging of request bodies or credentials.
  */
@@ -15,7 +16,9 @@ const control = Number(arg('control', String(port + 800)));
 const auth = arg('auth', '');
 const delay = Number(arg('delay', '0')); // ms added before every forwarded request / tunnel: simulates a slow proxy
 const expected = auth ? 'Basic ' + Buffer.from(auth).toString('base64') : null;
-const stats = { tunnels: 0, requests: 0, active: 0, maxActive: 0, authFailures: 0, down: false };
+const stats = { tunnels: 0, requests: 0, active: 0, maxActive: 0, authFailures: 0, down: false, hosts: [] as string[] };
+/** Hostnames the proxy was asked to reach (absolute-URI requests and CONNECT targets): shows that the browser sent the NAME, not an address. */
+const sawHost = (h: string) => { stats.hosts.push(h); if (stats.hosts.length > 50) stats.hosts.shift(); };
 
 function authorized(req: IncomingMessage): boolean {
   if (!expected) return true;
@@ -32,7 +35,8 @@ const proxy = createHttp((req, res) => {
   stats.requests++;
   let u: URL;
   try { u = new URL(req.url ?? ''); } catch { res.writeHead(400); res.end(); return; }
-  const headers = { ...req.headers }; delete headers['proxy-authorization']; delete headers['proxy-connection'];
+  sawHost(u.hostname);
+  const headers: Record<string, string | string[] | undefined> = { ...req.headers, 'x-fake-proxy-port': String(port) }; delete headers['proxy-authorization']; delete headers['proxy-connection'];
   const forward = () => {
     const out = httpRequest({ host: u.hostname, port: u.port || 80, method: req.method, path: u.pathname + u.search, headers }, (r) => { res.writeHead(r.statusCode ?? 502, r.headers); r.pipe(res); });
     out.on('error', () => { res.writeHead(502); res.end(); });
@@ -44,6 +48,7 @@ proxy.on('connect', (req, socket, head) => {
   if (stats.down) { socket.end('HTTP/1.1 503 Service Unavailable\r\n\r\n'); return; }
   if (!authorized(req)) { socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="fake-proxy"\r\n\r\n'); return; }
   const [host, p] = (req.url ?? '').split(':');
+  sawHost(host);
   const target = connect(Number(p || 443), host, () => { setTimeout(established, delay); });
   const established = () => {
     stats.tunnels++; track(socket);
