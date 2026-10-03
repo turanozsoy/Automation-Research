@@ -112,7 +112,7 @@ export const STATIC_FIELDS: ContentField[] = [
   f('code.title', 'Verification', 'Heading', 'Verification code', 60),
   f('code.intro', 'Verification', 'Supporting text', 'Enter the verification code provided for your {brand} application.', 220, { vars: ['{brand}'] }),
   f('code.label', 'Verification', 'Field label', '{n}-digit code', 40, { vars: ['{n}'] }),
-  f('code.note', 'Verification', 'Helper text under the field', 'Your code is used once to prepare your application and is never stored.', 160),
+  f('code.note', 'Verification', 'Helper text under the field', 'Type or paste the code as it appears in the message; dashes and spaces are removed. It is used once and never stored.', 160),
   f('code.retry', 'Verification', 'Retry message (after a problem)', 'We couldn’t finish the previous step. Your details are saved. Enter your verification code again to try again.', 220),
   f('code.received', 'Verification', 'Code already received message', 'Your verification code has been received. You can continue with your application.', 200),
   f('code.invalid', 'Verification', 'Validation message', 'Enter the {n}-digit verification code.', 120, { vars: ['{n}'] }),

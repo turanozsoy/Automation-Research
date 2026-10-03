@@ -123,6 +123,9 @@ try {
   check(reset.saved.length === 3, 'reset to default');
   await p.reload();
   await h1(/Verification code/, 10000);
+  const dashed = `${CODE.slice(0, 3)}-${CODE.slice(3, 5)}-${CODE.slice(5)}`; // as the SMS shows it: 482-16-7304
+  await p.fill('#f-code', dashed);
+  check(await p.inputValue('#f-code') === CODE, `code pasted with dashes (${dashed}) becomes the ${CODE.length} digits`);
   await p.fill('#f-code', CODE);
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your experience/);

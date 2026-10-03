@@ -481,7 +481,9 @@
       go(nextStep('code'));
     };
     const input = el('input', {
-      class: 'input code-input', id: 'f-code', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: n, pattern: '[0-9]*',
+      // No maxlength: the code arrives as "482-16-7304" and a maxlength would truncate the pasted text before the
+      // dashes are removed. Everything but digits is dropped and the result is capped at n digits.
+      class: 'input code-input', id: 'f-code', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]*',
       placeholder: '•'.repeat(n), 'aria-describedby': 'help-code err-code', autocapitalize: 'off', spellcheck: 'false',
       oninput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, n); local.code = ev.target.value; clearError('code'); },
     });

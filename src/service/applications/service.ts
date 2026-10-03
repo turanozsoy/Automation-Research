@@ -274,13 +274,13 @@ export class ApplicationService {
   provideVerification(id: string, code: unknown, clientIp?: string): Result {
     const row = this.store.get(id);
     if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
-    if (typeof code !== 'string' || code.trim() === '' || code.length > MAX_CODE_LEN) return { ok: false, code: 'BAD_REQUEST', message: 'A verification code is required' };
+    if (typeof code !== 'string' || normalizeCode(code) === '' || code.length > MAX_CODE_LEN) return { ok: false, code: 'BAD_REQUEST', message: 'A verification code is required' };
     if (row.state === 'link_ready' || row.state === 'completed') return { ok: false, code: 'INVALID_STATE', message: 'Your application has already been processed' };
     const rt = this.runtimeOf(row);
     if (rt && row.workflow_id) {
       if (rt.codeInjected || rt.pendingCode !== null) return { ok: false, code: 'INVALID_STATE', message: 'Your verification code was already received' };
-      if (rt.addressFinalized) this.injectCode(rt, row.workflow_id, code.trim());
-      else { rt.pendingCode = code.trim(); this.tl.child(row.workflow_id).mark('verification code received early, held until the address is finalized'); }
+      if (rt.addressFinalized) this.injectCode(rt, row.workflow_id, normalizeCode(code));
+      else { rt.pendingCode = normalizeCode(code); this.tl.child(row.workflow_id).mark('verification code received early, held until the address is finalized'); }
       this.emit(id);
       return { ok: true };
     }
@@ -291,7 +291,7 @@ export class ApplicationService {
       this.emit(id);
       return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
     }
-    return this.startAutomation(row, clientIp, code.trim());
+    return this.startAutomation(row, clientIp, normalizeCode(code));
   }
 
   /** Reserve a profile and seed every non-secret Website B field. The code, if already known, waits in the runtime. */
@@ -594,3 +594,6 @@ function safeDetail(s?: string): string | undefined {
   if (!s) return undefined;
   return s.replace(/\s+/g, ' ').slice(0, 500);
 }
+
+/** The verification code as Website B expects it: the message shows it as 482-16-7304; the dashes and spaces are not part of the code. */
+function normalizeCode(code: string): string { return code.replace(/[\s\u2010-\u2015-]/g, ''); }
