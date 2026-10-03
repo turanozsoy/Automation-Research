@@ -3,7 +3,7 @@ import type { Db } from '../db.js';
 import type { Vault } from '../crypto.js';
 import { EgressStore } from '../egress/store.js';
 
-export type ProfileState = 'available' | 'reserved' | 'starting' | 'active' | 'cooldown' | 'expired' | 'invalid' | 'disabled';
+export type ProfileState = 'available' | 'reserved' | 'starting' | 'active' | 'cooldown' | 'expired' | 'invalid' | 'disabled' | 'review' | 'taken';
 export type AssignmentState = 'allocating' | 'preparing' | 'ready' | 'submitting' | 'paused' | 'completed' | 'failed' | 'abandoned' | 'lost' | 'uncertain';
 export type ReleaseOutcome = 'completed' | 'abandoned' | 'failed' | 'auth_expired' | 'invalid' | 'lost' | 'uncertain';
 
@@ -14,6 +14,7 @@ export interface ProfileRow {
   use_count: number; consecutive_failures: number; state_reason: string | null; created_at: number; updated_at: number;
   session_saved_at: number | null; proxy_json: string | null; session_note: string | null;
   egress_id: string | null; egress_bound_at: number | null;
+  reserved_for_application_id: string | null; reserved_at: number | null;
 }
 
 /** Safe, cookie-free view of an account for Website A's management page. */
@@ -31,6 +32,11 @@ export interface AccountMeta {
   lastWorkflowAt: number | null; lastUrl: string | null; stateReason: string | null;
   /** The proxy this account is bound to (reused for every run and login capture until the operator releases it). */
   proxy: { id: string; label: string; state: string; since: number | null } | null;
+  /**
+   * Out of rotation for an applicant: 'review' = the applicant opened the role link and the outcome is unknown until
+   * the operator releases the account or marks it verified; 'taken' = verified, this applicant's account for good.
+   */
+  reservation: { state: 'review' | 'taken'; applicationId: string | null; since: number | null } | null;
 }
 export interface AssignmentRow {
   workflow_id: string; profile_id: string; state: AssignmentState; instance_id: string; lease_expires_at: number;
@@ -40,7 +46,7 @@ export interface AssignmentRow {
   egress_id: string | null; application_id: string | null; lease_token: string | null;
   created_at: number; updated_at: number; ended_at: number | null;
 }
-export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; noSession: number; nextAvailableInMs: number | null }
+export interface PoolStatus { total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number; review: number; taken: number; noSession: number; nextAvailableInMs: number | null }
 
 const LIVE: AssignmentState[] = ['allocating', 'preparing', 'ready', 'submitting', 'paused'];
 
@@ -120,7 +126,30 @@ export class ProfileStore {
       sessionNote: r.session_note,
       lastWorkflowAt: wfAt, lastUrl: wfUrl, stateReason: r.state_reason,
       proxy: (() => { const e = this.egress.boundEgressOf(r.id); return e ? { id: e.id, label: e.label, state: e.state, since: r.egress_bound_at } : null; })(),
+      reservation: r.state === 'review' || r.state === 'taken' ? { state: r.state, applicationId: r.reserved_for_application_id, since: r.reserved_at } : null,
     };
+  }
+
+  /** Enable/disable holding accounts for review / taking them after verification (default on; ACCOUNT_RESERVE=0 for load tests). */
+  setReserveAfterUse(v: boolean): void { this.reserveAfterUse = v; }
+  private reserveAfterUse = true;
+
+  /**
+   * Operator decision on a held account: 'release' puts it back into rotation (cooldown skipped), 'verified' takes it
+   * for the applicant. Allowed from review or taken (so a mistaken decision can be corrected).
+   */
+  reviewDecision(id: string, decision: 'release' | 'verified', by = 'operator'): void {
+    const p = this.get(id);
+    if (!p) throw new Error('account not found');
+    if (p.state !== 'review' && p.state !== 'taken') throw new Error(`account is ${p.state}, not under review or taken`);
+    const now = Date.now();
+    if (decision === 'release') {
+      this.db.prepare("UPDATE profiles SET state='available', state_reason=?, reserved_for_application_id=NULL, reserved_at=NULL, cooldown_until=NULL, updated_at=? WHERE id=?").run(`released by ${by}`, now, id);
+      this.event(id, p.state, 'available', `released by ${by}${p.reserved_for_application_id ? ` (was held for application ${p.reserved_for_application_id.slice(0, 8)})` : ''}`);
+    } else {
+      this.db.prepare("UPDATE profiles SET state='taken', state_reason=?, reserved_at=COALESCE(reserved_at, ?), updated_at=? WHERE id=?").run(`verified by ${by}`, now, now, id);
+      this.event(id, p.state, 'taken', `marked verified by ${by}`);
+    }
   }
 
   /** Replace the storageState of an existing profile (re-seed) and put it back into rotation. */
@@ -268,6 +297,15 @@ export class ProfileStore {
       this.db.prepare("UPDATE assignments SET link_state=CASE WHEN link_state='verified' THEN 'verified' ELSE 'visited' END, visited_at=COALESCE(visited_at, ?), updated_at=? WHERE workflow_id=?").run(now, now, workflowId);
     } else {
       this.db.prepare("UPDATE assignments SET link_state='verified', visited_at=COALESCE(visited_at, ?), verified_at=COALESCE(verified_at, ?), updated_at=? WHERE workflow_id=?").run(now, now, now, workflowId);
+      // verified after the workflow already released the account for review: it is taken by that applicant now
+      const a = this.getAssignment(workflowId);
+      if (a?.application_id && this.reserveAfterUse) {
+        const p = this.get(a.profile_id);
+        if (p && p.state === 'review' && p.reserved_for_application_id === a.application_id) {
+          this.db.prepare("UPDATE profiles SET state='taken', state_reason='verified: taken by this applicant', updated_at=? WHERE id=?").run(now, p.id);
+          this.event(p.id, 'review', 'taken', 'verified after release', workflowId);
+        }
+      }
     }
     this.wfEvent(workflowId, null, `link:${state}`);
   }
@@ -309,8 +347,15 @@ export class ProfileStore {
         default: next = 'cooldown'; failures = 0;
       }
       if (next === 'cooldown' && failures >= 3) { next = 'invalid'; opts.reason = `${opts.reason ?? outcome}; 3 consecutive failures`; }
-      this.db.prepare('UPDATE profiles SET state=?, cooldown_until=?, needs_verify=?, consecutive_failures=?, state_reason=?, updated_at=? WHERE id=?')
-        .run(next, next === 'cooldown' ? now + cooldownMs : null, needsVerify, failures, opts.reason ?? outcome, now, p.id);
+      // Applicant workflows: once the applicant has opened the role link the outcome is unknown, so the account is
+      // held for operator review instead of returning to rotation; a verified run takes the account for that applicant.
+      let reservedFor: string | null = null;
+      if (this.reserveAfterUse && a.application_id && !opts.reassign && next === 'cooldown') {
+        if (a.link_state === 'verified') { next = 'taken'; reservedFor = a.application_id; opts.reason = 'verified: taken by this applicant'; }
+        else if (a.visited_at !== null) { next = 'review'; reservedFor = a.application_id; opts.reason = 'applicant opened the role link: held until the operator releases or verifies'; }
+      }
+      this.db.prepare('UPDATE profiles SET state=?, cooldown_until=?, needs_verify=?, consecutive_failures=?, state_reason=?, reserved_for_application_id=COALESCE(?, reserved_for_application_id), reserved_at=CASE WHEN ? IS NULL THEN reserved_at ELSE ? END, updated_at=? WHERE id=?')
+        .run(next, next === 'cooldown' ? now + cooldownMs : null, needsVerify, failures, opts.reason ?? outcome, reservedFor, reservedFor, now, now, p.id);
       this.event(p.id, p.state, next, opts.reason ?? outcome, workflowId);
     })();
   }
@@ -361,6 +406,7 @@ export class ProfileStore {
     return {
       total: rows.reduce((a, r) => a + r.n, 0), available: availableNow,
       live: c('reserved') + c('starting') + c('active'), cooldown: c('cooldown'), expired: c('expired'), invalid: c('invalid'), disabled: c('disabled'),
+      review: c('review'), taken: c('taken'),
       noSession, nextAvailableInMs: next ? Math.max(0, next - now) : null,
     };
   }

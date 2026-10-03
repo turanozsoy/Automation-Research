@@ -71,6 +71,14 @@ function ordered(a: Applicant, names: string[]): boolean {
   return ts.every((t) => t !== null) && ts.every((t, i) => i === 0 || t! >= ts[i - 1]!);
 }
 
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+async function releaseHeldAccounts(baseUrl: string): Promise<number> {
+  const accounts = ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((a) => a.reservation);
+  for (const a of accounts) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  return accounts.length;
+}
+await releaseHeldAccounts(base);
+
 const fresh = await start('Paula', 'Fresh');
 const returning = await start('Rhea', 'RETURNINGaccount');
 const opensOnSix = await start('Sam', 'RETURNING6account');

@@ -187,6 +187,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE profiles ADD COLUMN egress_bound_at INTEGER;
   CREATE UNIQUE INDEX profiles_egress_binding ON profiles(egress_id) WHERE egress_id IS NOT NULL;
   `,
+  // 9: an account used by an applicant who opened the role link is held for operator review ('review'); a verified
+  // one is taken by that applicant ('taken'). Both are out of rotation until the operator releases the account.
+  `
+  ALTER TABLE profiles ADD COLUMN reserved_for_application_id TEXT;
+  ALTER TABLE profiles ADD COLUMN reserved_at INTEGER;
+  `,
 ];
 
 export function openDb(path: string): Db {

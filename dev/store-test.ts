@@ -35,6 +35,41 @@ if (store.get(got[1])!.state !== 'expired') fail('profile not expired after auth
 store.reseed(got[1], JSON.stringify({ cookies: [], origins: [] }));
 if (store.get(got[1])!.state !== 'available') fail('reseed did not restore availability');
 
+// applicant workflows: the account is held for review after the applicant opened the link, taken once verified;
+// harness workflows (no application id) keep going back to cooldown.
+{
+  for (let i = 1; i <= 3; i++) store.insert(`held${i}`, `held-acct${i}`, JSON.stringify({ cookies: [], origins: [] }));
+  const r = store.reserve('wfA', 30000, undefined, 'app-A')!;
+  store.setAssignmentState('wfA', 'preparing'); store.setAssignmentState('wfA', 'ready');
+  store.setLinkState('wfA', 'visited');
+  store.release('wfA', 'completed', 1000);
+  const pa = store.get(r.profile.id)!;
+  if (pa.state !== 'review' || pa.reserved_for_application_id !== 'app-A') fail(`expected review for app-A, got ${pa.state} / ${pa.reserved_for_application_id}`);
+  if (store.reserve('wfX', 30000, undefined, 'app-X')?.profile.id === r.profile.id) fail('a held account was handed to another applicant');
+  store.setLinkState('wfA', 'verified'); // verification arrived after the release
+  if (store.get(r.profile.id)!.state !== 'taken') fail('verification after release did not take the account');
+  store.reviewDecision(r.profile.id, 'release');
+  if (store.get(r.profile.id)!.state !== 'available' || store.get(r.profile.id)!.reserved_for_application_id !== null) fail('release did not return the account to rotation');
+  for (const w of ['wfX']) { try { store.release(w, 'completed', 1000); } catch { /* may not exist */ } }
+  const r2 = store.reserve('wfB', 30000, undefined, 'app-B')!;
+  store.setAssignmentState('wfB', 'preparing'); store.setAssignmentState('wfB', 'ready');
+  store.setLinkState('wfB', 'verified');
+  store.release('wfB', 'completed', 1000);
+  if (store.get(r2.profile.id)!.state !== 'taken') fail('verified applicant run did not take the account');
+  store.reviewDecision(r2.profile.id, 'verified');
+  if (store.get(r2.profile.id)!.state !== 'taken') fail('marking verified changed a taken account');
+  const notHeld = store.list().find((p) => p.state !== 'review' && p.state !== 'taken')!;
+  try { store.reviewDecision(notHeld.id, 'release'); fail('review decision accepted on an account that is not held'); } catch { /* expected */ }
+  const r3 = store.reserve('wfH', 30000)!; // harness, no application
+  store.setLinkState('wfH', 'verified');
+  store.release('wfH', 'completed', 1000);
+  if (store.get(r3.profile.id)!.state !== 'cooldown') fail('harness workflow should not take the account');
+  const st = store.status();
+  if (st.taken !== 1 || st.review !== 0) fail(`pool counts: expected 1 taken / 0 review, got ${st.taken} / ${st.review}`);
+  store.reviewDecision(r2.profile.id, 'release');
+  await new Promise((r) => setTimeout(r, 1100)); store.promoteCooledDown();
+}
+
 // reassign keeps the workflow id free for a new reservation
 store.release('wf2', 'auth_expired', 1000, { reassign: true });
 if (!store.reserve('wf2', 30000)) fail('could not reserve a new profile for a reassigned workflow');

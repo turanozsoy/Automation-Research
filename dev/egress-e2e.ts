@@ -84,6 +84,8 @@ async function cleanup(): Promise<void> {
     if (/^127\.0\.0\.1:310[012]$/.test(e.label)) { if (e.state === 'in_use') continue; await api(`/api/admin/egress/${e.id}`, { method: 'DELETE' }); }
   }
   await setDown(P1.control, false); await setDown(P2.control, false);
+  // accounts taken / held by applicants of this or earlier runs: the operator releases them (production: a manual decision)
+  for (const a of ((await api('/api/accounts')).body.accounts as { id: string; reservation: unknown }[]).filter((x) => x.reservation)) await api(`/api/accounts/${a.id}/review`, { method: 'POST', body: JSON.stringify({ decision: 'release' }) });
 }
 await cleanup();
 process.on('exit', () => { /* cleanup below runs on the normal path; a fatal exit leaves state for inspection */ });
@@ -162,10 +164,23 @@ await sleep(1200);
   check(bindings.some((b) => b.id === acctOf(A.workflowId()) && b.egress_id === A.egressUsed()) && bindings.some((b) => b.id === acctOf(B.workflowId()) && b.egress_id === B.egressUsed()), 'A and B each ran on the account their proxy is bound to');
   const waiting = db.prepare("SELECT COUNT(*) n FROM application_events WHERE application_id = ? AND type = 'automation_waiting_for_capacity'").get(C.id) as { n: number };
   check(waiting.n >= 1, 'C waited: the three unbound accounts were never given a bound proxy, and no unused proxy existed');
-  // C runs as soon as a BOUND account leaves cooldown: same account, same proxy, no release and no new proxy consumed
+  // A and B verified, so their accounts are TAKEN: C cannot reuse them until the operator releases one.
+  // the account is taken when A's workflow releases, moments after the applicant saw 'completed'
+  type Acct = { id: string; reservation: { state: string; applicationId: string } | null; proxy: { id: string } | null };
+  let accA: Acct | undefined;
+  for (let i = 0; i < 50 && !accA; i++) {
+    const accounts = (await api('/api/accounts')).body.accounts as Acct[];
+    accA = accounts.find((x) => x.reservation?.applicationId === A.id);
+    if (!accA) await sleep(200);
+  }
+  if (!accA) throw new Error('A\'s account was never marked taken');
+  check(!!accA && accA.reservation!.state === 'taken' && accA.proxy?.id === A.egressUsed(), 'A took its account; the account keeps its bound proxy');
+  await sleep(1500);
+  check(C.view?.state === 'processing' && C.view.automation.phase === 'preparing', 'C still waits: taken accounts are never reused for another applicant');
+  await api(`/api/accounts/${accA.id}/review`, { method: 'POST', body: JSON.stringify({ decision: 'release' }) });
   const rc = await C.finish();
   const cAcct = acctOf(C.workflowId()), cEgress = C.egressUsed();
-  check(rc.state === 'completed' && !!cEgress && bindings.some((b) => b.id === cAcct && b.egress_id === cEgress), `C completed by REUSING a bound account and its proxy (${proxies.find((e) => e.id === cEgress)?.label}) — no release needed`);
+  check(rc.state === 'completed' && !!cEgress && cAcct === accA.id && cEgress === A.egressUsed(), `C completed on A's released account, REUSING its bound proxy (${proxies.find((e) => e.id === cEgress)?.label}); no new proxy consumed`);
   check((db.prepare('SELECT COUNT(*) n FROM profiles WHERE egress_id IS NOT NULL').get() as { n: number }).n === 2, 'still exactly two bindings after C');
   await sleep(1200);
   const held = (await egressList()).egress.find((e) => e.id === cEgress)! as any;

@@ -79,6 +79,22 @@ The debug harness is an internal developer tool; applicants use the application 
 - Meta Pixel on the step routes and the `/completed` conversion (not added yet).
 - Decide the `awaiting_code` idle limit (an applicant idle on the code screen holds an account and its proxy).
 
+## Accounts after an applicant uses them
+
+An account is not returned to rotation just because the workflow ended. For applicant workflows:
+
+- the applicant opened the role link (final CTA) and the run was not verified → the account is **under
+  review**: out of rotation, named after that applicant on the operations page, until the operator presses
+  *Release account* (back into rotation) or *Mark verified* (taken);
+- the run was verified (success text on Website B, also when verification arrives after the release) → the
+  account is **taken** by that applicant and never used for anyone else; *Release account* undoes a mistake.
+
+Both states keep the account's bound proxy. Developer-harness runs (no application) still go to cooldown.
+`ACCOUNT_RESERVE=0` disables the holding for load tests only. API: `POST /api/accounts/:id/review`
+`{ "decision": "release" | "verified" }`. Pool counts (`review`, `taken`) are on `/debug` and the overview.
+Because verified accounts are taken, capacity equals the number of accounts not yet used by a verified
+applicant: add accounts, or release ones whose applicants did not get the role.
+
 ## Operator login (internal pages)
 
 `/admin/accounts`, `/debug`, the admin and dev APIs, `/ws` and `/ws/admin` are internal. Set
@@ -416,10 +432,12 @@ CONCURRENCY=5 npm run e2e:concurrency   # N applicants at once (headless): isola
 npm run test:store                 # allocator unit test: no double allocation, cooldown, expiry, recovery
 npm run test:app                   # application store + session helpers (throwaway DB)
 npm run test:auth                  # operator login: unit + a password-protected instance on :3010 + loopback rule on :3000
+# every applicant suite first releases accounts held for review / taken by earlier runs (POST /api/accounts/:id/review),
+# the operator's action in production; otherwise the five fake accounts run out after one round
 npm run typecheck
 
 # concurrency scenarios (service started with MAX_WORKFLOWS=10; K imported fake accounts):
-#   CONCURRENCY=8 EXPECT_PROFILES=5   more applicants than profiles: at most 5 live, FIFO queue, everyone completes
+#   CONCURRENCY=8 EXPECT_PROFILES=5   more applicants than profiles: at most 5 live, FIFO queue, everyone completes (needs ACCOUNT_RESERVE=0 on the service: verified accounts are otherwise taken, so the queue only drains when the operator releases accounts)
 #   CONCURRENCY=3 FAIL_ONE=1          applicant #1's checkout iframe never appears (fake: last name contains NOIFRAME) -> problem, others unaffected
 #   CONCURRENCY=3 DROP_ONE=1          applicant #1 drops and resumes its socket mid-automation
 #   CONCURRENCY=3 EXPIRE_ONE=1        an expired profile is inserted; the workflow that draws it is reassigned, profile leaves rotation

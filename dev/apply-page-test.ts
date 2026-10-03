@@ -30,7 +30,15 @@ const text = () => p.locator('main').innerText();
 const noTech = async (where: string) => { const t = await text(); check(!TECH.test(t), `no technical detail on ${where}`); };
 const h1 = async (expected: RegExp, timeout = 15000) => { await p.locator('main h1').filter({ hasText: expected }).first().waitFor({ timeout }); };
 
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+async function releaseHeldAccounts(baseUrl: string): Promise<number> {
+  const accounts = ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((a) => a.reservation);
+  for (const a of accounts) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  return accounts.length;
+}
+
 try {
+  await releaseHeldAccounts(base);
   console.log('[e2e:apply] 1. landing + start');
   await p.goto(base);
   await h1(/Drive with Shipzora/);
@@ -203,6 +211,8 @@ try {
   const adminAfter = await admin.locator('#verifiedList').innerText();
   const rowText = await admin.locator(`.vrow:has-text("${FULL}")`).first().innerText().catch(() => '');
   check(adminAfter.includes(FULL) && /Processed with\s*fake/i.test(rowText) && /Session\s*Current/i.test(rowText), 'operations page listed the verified applicant live (no reload), with the account used and session status');
+  await admin.waitForFunction((name) => [...document.querySelectorAll('.vrow')].some((r) => (r.textContent ?? '').includes(name) && /Taken by this applicant/.test(r.textContent ?? '')), FULL, { timeout: 15000 }).catch(() => {});
+  check(/Taken by this applicant/.test(await admin.locator(`.vrow:has-text("${FULL}")`).first().innerText().catch(() => '')), 'the verified row says the account is taken by this applicant (live, after the workflow released it)');
   await admin.locator(`.vrow:has-text("${FULL}") .details`).first().click();
   await admin.waitForSelector('#dlgDetails[open]');
   const det = await admin.locator('#detList').innerText();
@@ -210,7 +220,8 @@ try {
   await admin.locator('#btnCloseDetails').click();
   const adminHtml = await admin.content();
   check(!/482913756|storage_state|"cookies"/.test(adminHtml), 'no secrets in the operations page DOM');
-  check(!(await admin.locator('#rows').innerText()).includes(FULL), 'accounts table itself does not get application data');
+  const rowsText = await admin.locator('#rows').innerText();
+  check(!/5550107788|010-7788|1990|jordan@example\.com|482913756/.test(rowsText), 'accounts table shows at most the applicant name and id on the taken account, never contact details, DOB or the code');
   await admin.close();
 
   const mode = await (await fetch(`${base}/api/dev/browser`)).json() as { mode: string; chromium: string };
@@ -220,6 +231,11 @@ try {
   const row = db.prepare("SELECT * FROM applications WHERE first_name = 'Jordan' AND last_name = ? ORDER BY created_at DESC LIMIT 1").get(LAST) as Record<string, unknown>;
   check(row.state === 'completed' && row.link_state === 'verified' && row.generated_url === href && row.final_link_clicked_at !== null, 'application row: completed, verified, url, final CTA time');
   check(row.phone === '5550107788' && row.date_of_birth === '1990-05-17' && row.address_state === 'NY' && row.email === 'jordan@example.com', 'fields persisted (phone digits only, ISO DOB)');
+  const accts = ((await (await fetch(`${base}/api/accounts`)).json()) as { accounts: { id: string; reservation: { state: string; applicationId: string; applicant: { displayId: string } | null } | null }[] }).accounts;
+  const mine = accts.find((a) => a.reservation?.applicationId === row.id);
+  check(!!mine && mine.reservation!.state === 'taken' && mine.reservation!.applicant?.displayId === `APP-${String(row.id).slice(0, 6).toUpperCase()}`, 'the account used is TAKEN by this applicant (never reused) and names them on the operations page');
+  const rel = await fetch(`${base}/api/accounts/${mine!.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  check(rel.status === 200 && ((await rel.json()) as { account: { reservation: unknown } }).account.reservation === null, 'operator can release the account back into rotation');
   const answers = JSON.parse(String(row.answers_json));
   check(answers.deliveryExperience === '1_3' && answers.scheduleType === 'part_time' && answers.weekends === 'sometimes' && answers.startTiming === 'immediately' && answers.driversLicense === 'yes', 'answers persisted');
   const types = (db.prepare('SELECT type FROM application_events WHERE application_id = ? ORDER BY id').all(row.id) as { type: string }[]).map((e) => e.type);

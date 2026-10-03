@@ -20,6 +20,10 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 let failures = 0;
 const check = (cond: unknown, what: string) => { if (!cond) { failures++; console.error(`  FAIL: ${what}`); } else console.log(`  ok: ${what}`); };
 
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+const releaseHeldAccounts = async (baseUrl: string) => { for (const a of ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((x) => x.reservation)) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) }); };
+await releaseHeldAccounts(base);
+
 const r = await fetch(`${base}/api/applications`, { method: 'POST' });
 const cookie = (r.headers.get('set-cookie') ?? '').split(';')[0];
 const { application } = await r.json() as { application: ApplicationView };

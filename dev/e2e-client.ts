@@ -15,6 +15,10 @@ const expectReturning = process.env.E2E_EXPECT_RETURNING === '1'; // fake starte
 const overall = setTimeout(() => { console.error('[e2e] TIMEOUT'); process.exit(1); }, 150_000);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+const releaseHeldAccounts = async (baseUrl: string) => { for (const a of ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((x) => x.reservation)) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) }); };
+await releaseHeldAccounts(`http://localhost:${port}`);
+
 const ws = new WebSocket(`ws://localhost:${port}/ws`);
 const send = (m: object) => ws.send(JSON.stringify({ ts: Date.now(), ...m }));
 

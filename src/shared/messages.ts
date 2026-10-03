@@ -59,6 +59,8 @@ export type ClientMsg = WorkflowStartMsg | FieldUpdateMsg | SubmitMsg | ResumeMs
 
 export interface PoolStatus {
   total: number; available: number; live: number; cooldown: number; expired: number; invalid: number; disabled: number;
+  /** Accounts held after an applicant opened the role link (operator decides) / taken by a verified applicant. */
+  review: number; taken: number;
   /** Accounts that exist but have no saved session yet. */
   noSession: number;
   /** ms until the earliest cooling-down account is available again, or null. */

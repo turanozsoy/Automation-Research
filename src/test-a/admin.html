@@ -52,7 +52,7 @@
   <!-- ===== Accounts & sessions ===== -->
   <section id="accounts" class="section">
     <div class="section-head">
-      <div><h2>Account &amp; session management</h2><p class="section-sub">Each account holds one saved, encrypted onboarding session. Workflows use these sessions and save the refreshed session back on the same account after a successful run. Cookie values are never shown.</p></div>
+      <div><h2>Account &amp; session management</h2><p class="section-sub">Each account holds one saved, encrypted onboarding session. Workflows use these sessions and save the refreshed session back on the same account after a successful run. Once an applicant opens their role link the account is <strong>held for your review</strong> until you release it or mark it verified; a verified account is <strong>taken</strong> by that applicant and never used for anyone else. Cookie values are never shown.</p></div>
       <div class="section-actions">
         <button class="btn btn-primary" id="btnAdd" type="button">Add account</button>
       </div>
@@ -65,6 +65,8 @@
         <button type="button" class="chip" data-filter="attention">Needs attention</button>
         <button type="button" class="chip" data-filter="expired">Expired</button>
         <button type="button" class="chip" data-filter="none">Not saved</button>
+        <button type="button" class="chip" data-filter="review">Under review</button>
+        <button type="button" class="chip" data-filter="taken">Taken</button>
       </div>
       <span class="toolbar-note" id="accountsNote"></span>
     </div>

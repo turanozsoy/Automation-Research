@@ -28,6 +28,8 @@ async function main(): Promise<void> {
   const db = openDb(settings.dbPath);
   const vault = Vault.load(settings.dataDir);
   const store = new ProfileStore(db, vault, instanceId);
+  store.setReserveAfterUse(settings.reserveAccounts);
+  if (!settings.reserveAccounts) console.warn('\n  ACCOUNT_RESERVE=0: accounts return to rotation after every run (load testing only).\n');
   const auth = new AdminAuth({ password: settings.adminPassword, secret: vault.derive('admin-auth'), secure: settings.secureCookies, ttlMs: settings.adminSessionTtlMs });
   if (!auth.enabled) console.warn('\n  ADMIN_PASSWORD is not set: /admin/accounts, /debug and the admin APIs answer only to localhost. Set it before exposing this service.\n');
   const orphans = store.recoverOrphans(settings.cooldownMs);

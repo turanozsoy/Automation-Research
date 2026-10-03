@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { ApplicantContent } from './applications/content.js';
+import type { AccountMeta } from './profiles/store.js';
 import type { Duplex } from 'node:stream';
 import { readFileSync } from 'node:fs';
 import { resolve, extname } from 'node:path';
@@ -96,6 +97,8 @@ export function startServer(deps: ServerDeps): Promise<void> {
   const route = (m: ServerMsg) => {
     const data = JSON.stringify(m);
     for (const c of devClients) if (c.readyState === WebSocket.OPEN) c.send(data);
+    // the pool changed (an account was reserved, released, held for review or taken): the operations page re-fetches
+    if (m.type === 'pool.status') notifyAdmin('accounts');
     if ('workflowId' in m && m.workflowId) {
       // Development artifacts: what the page looked like when a step failed (before the context is closed).
       if (m.type === 'paused') deps.registry.captureFailure(m.workflowId, m.step, m.code, m.message);
@@ -335,7 +338,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     }
 
     // ---- operations page (internal) ----
-    if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts(), logins: activeLogins(deps) });
+    if (url === '/api/accounts' && method === 'GET') return json(200, { accounts: deps.store.listAccounts().map((a) => enrichAccount(deps, a)), logins: activeLogins(deps) });
 
     // ---- egress (proxies): metadata only, never credentials ----
     if (url === '/api/admin/egress' && method === 'GET') return json(200, { egress: deps.store.egress.list(), counts: deps.store.egress.counts(), directAllowed: !deps.registry.isPerContextProxy() });
@@ -385,7 +388,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       return json(201, { id: row.id });
     }
 
-    const m = /^\/api\/accounts\/([^/]+)(?:\/(login\/start|login\/done|login\/cancel|login\/status))?$/.exec(url);
+    const m = /^\/api\/accounts\/([^/]+)(?:\/(login\/start|login\/done|login\/cancel|login\/status|review))?$/.exec(url);
     if (m) {
       const id = decodeURIComponent(m[1]);
       const action = m[2];
@@ -398,6 +401,15 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
         deps.tl.mark('account removed', account.label);
         deps.notifyAdmin?.('accounts');
         return json(200, { ok: true });
+      }
+      if (action === 'review' && method === 'POST') {
+        const body = await readJson(req);
+        if (body.decision !== 'release' && body.decision !== 'verified') return json(400, { error: 'decision must be "release" or "verified"' });
+        try { deps.store.reviewDecision(id, body.decision); } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
+        deps.tl.mark(`account ${body.decision === 'release' ? 'released' : 'marked verified'} by operator`, account.label);
+        deps.notifyAdmin?.('accounts');
+        if (body.decision === 'release') void deps.registry.kick(); // a queued applicant may take the released account right away
+        return json(200, { account: enrichAccount(deps, deps.store.accountMeta(deps.store.get(id)!)) });
       }
       if (action === 'login/start' && method === 'POST') { const st = await deps.logins.start(id); deps.notifyAdmin?.('egress'); return json(200, st); }
       if (action === 'login/status' && method === 'GET') return json(200, deps.logins.status(id));
@@ -423,6 +435,13 @@ function activeLogins(deps: ServerDeps): Record<string, ReturnType<LoginSessionM
     if (s.open) out[a.id] = s;
   }
   return out;
+}
+
+/** Operations page: name the applicant an account is held for (display id + name only). */
+function enrichAccount(deps: ServerDeps, a: AccountMeta): AccountMeta & { reservation: (AccountMeta['reservation'] & { applicant: { displayId: string; fullName: string } | null }) | null } {
+  if (!a.reservation) return { ...a, reservation: null };
+  const brief = a.reservation.applicationId ? deps.apps.brief(a.reservation.applicationId) : null;
+  return { ...a, reservation: { ...a.reservation, applicant: brief } };
 }
 
 /** A same-origin path to return to after login; anything else goes to the operations page. */

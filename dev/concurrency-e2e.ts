@@ -252,6 +252,13 @@ async function runApplicant(a: Applicant, created: { id: string; cookie: string 
 // ---------------------------------------------------------------------------
 // go
 // ---------------------------------------------------------------------------
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+async function releaseHeldAccounts(baseUrl: string): Promise<number> {
+  const accounts = ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((a) => a.reservation);
+  for (const a of accounts) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  return accounts.length;
+}
+await releaseHeldAccounts(base);
 console.log(`[concurrency] ${N} applicant(s), run ${RUN}${FAIL_ONE ? ', #1 fails at the iframe' : ''}${DROP_ONE ? ', #1 drops its socket' : ''}${EXPIRE_ONE ? ', one expired profile in the pool' : ''}${SKIP_CTA.size ? `, no CTA for #${[...SKIP_CTA].join(',#')}` : ''}${NO_VERIFY ? ', nobody verifies' : ''}`);
 const poolBefore = db.prepare("SELECT id, label, state, session_saved_at FROM profiles").all() as { id: string; label: string; state: string; session_saved_at: number | null }[];
 const usable = poolBefore.filter((p) => p.state === 'available' || p.state === 'cooldown').length;

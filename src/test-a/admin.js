@@ -55,6 +55,7 @@
     current: ['ok', 'Current'], attention: ['warn', 'Needs attention'], expired: ['danger', 'Expired'], none: ['neutral', 'Not saved'],
   };
   const STATUS = { verified: ['ok', 'Verified'], visited: ['brand', 'Visited'], expired: ['danger', 'Expired'], none: ['neutral', 'None'] };
+  const RESERVATION = { review: ['warn', 'Under review'], taken: ['brand', 'Taken'] };
   const badge = (map, key) => { const [cls, label] = map[key] || ['neutral', key]; return `<span class="badge ${cls}">${esc(label)}</span>`; };
 
   // =====================================================================
@@ -78,7 +79,8 @@
 
   function visibleAccounts() {
     const q = accountQuery.toLowerCase();
-    return accounts.filter((a) => (accountFilter === 'all' || a.sessionStatus === accountFilter) && (!q || a.name.toLowerCase().includes(q) || a.email.toLowerCase().includes(q)));
+    const matchesFilter = (a) => accountFilter === 'all' || (accountFilter === 'review' || accountFilter === 'taken' ? a.reservation?.state === accountFilter : a.sessionStatus === accountFilter);
+    return accounts.filter((a) => matchesFilter(a) && (!q || a.name.toLowerCase().includes(q) || a.email.toLowerCase().includes(q)));
   }
 
   function renderAccounts() {
@@ -103,7 +105,7 @@
         <td data-label="Email">${esc(a.email)}</td>
         <td data-label="Session">${badge(SESSION, a.sessionStatus)}${sessionSub}</td>
         <td data-label="Proxy">${a.proxy ? `<span class="mono">${esc(a.proxy.label)}</span><span class="sub">${esc((EGRESS_STATE[a.proxy.state] || [0, a.proxy.state])[1])}${a.proxy.since ? ' · bound ' + esc(ago(a.proxy.since)) : ''}</span>` : '<span class="sub">none yet</span>'}</td>
-        <td data-label="Status">${badge(STATUS, a.status)}</td>
+        <td data-label="Status">${a.reservation ? `${badge(RESERVATION, a.reservation.state)}<span class="sub">${a.reservation.applicant ? `${esc(a.reservation.applicant.fullName)} · ${esc(a.reservation.applicant.displayId)}` : 'applicant removed'}${a.reservation.since ? ' · ' + esc(ago(a.reservation.since)) : ''}</span>` : badge(STATUS, a.status)}</td>
         <td data-label="Created">${when(a.createdAt)}</td>
         <td data-label="Last session update">${when(a.sessionSavedAt)}</td>
         <td data-label="Last workflow">${when(a.lastWorkflowAt)}</td>
@@ -116,6 +118,18 @@
       const b2 = document.createElement('button');
       b2.type = 'button'; b2.className = 'btn-text-danger'; b2.textContent = 'Remove';
       b2.onclick = () => askRemove(a);
+      if (a.reservation) {
+        const who = a.reservation.applicant ? `${a.reservation.applicant.fullName} (${a.reservation.applicant.displayId})` : 'that applicant';
+        const decide = async (decision, confirmText) => { if (!confirm(confirmText)) return; try { await api(`/api/accounts/${a.id}/review`, { method: 'POST', body: JSON.stringify({ decision }) }); msg(decision === 'release' ? `${a.name} released back into rotation.` : `${a.name} marked verified and taken by ${who}.`); await load(); } catch (e) { msg(e.message, true); } };
+        if (a.reservation.state === 'review') {
+          const bv = document.createElement('button'); bv.type = 'button'; bv.className = 'btn btn-primary btn-sm'; bv.textContent = 'Mark verified';
+          bv.onclick = () => decide('verified', `Mark ${a.name} as verified for ${who}?\n\nThe account will never be used for another applicant.`);
+          actions.append(bv, document.createTextNode(' '));
+        }
+        const br = document.createElement('button'); br.type = 'button'; br.className = 'btn btn-secondary btn-sm'; br.textContent = 'Release account';
+        br.onclick = () => decide('release', `Release ${a.name} back into rotation?\n\n${a.reservation.state === 'taken' ? 'It is currently taken by ' + who + '.' : 'Only do this once you know ' + who + ' did not get the role.'}`);
+        actions.append(br, document.createTextNode(' '));
+      }
       actions.append(b1, document.createTextNode(' '), b2);
       tb.appendChild(tr);
     }
@@ -127,12 +141,15 @@
     const attention = accounts.filter((a) => a.sessionStatus === 'attention' || a.sessionStatus === 'expired').length;
     const notSaved = accounts.filter((a) => a.sessionStatus === 'none').length;
     $('#statAccounts').textContent = n;
-    $('#statAccountsNote').textContent = notSaved ? `${notSaved} without a saved session` : n ? 'All have a saved session' : 'Add the first account';
+    const review = accounts.filter((a) => a.reservation?.state === 'review').length;
+    const taken = accounts.filter((a) => a.reservation?.state === 'taken').length;
+    const free = accounts.filter((a) => !a.reservation && a.sessionStatus === 'current').length;
+    $('#statAccountsNote').textContent = n ? `${free} in rotation · ${review} under review · ${taken} taken${notSaved ? ` · ${notSaved} without a session` : ''}` : 'Add the first account';
     $('#statCurrent').textContent = current;
     $('#statCurrentNote').textContent = n ? `of ${n} account${n === 1 ? '' : 's'}` : ' ';
-    $('#statAttention').textContent = attention;
-    $('#statAttentionNote').textContent = attention ? 'Sessions to check or refresh' : 'Nothing needs attention';
-    $('#statAttention').closest('.card').classList.toggle('attention', attention > 0);
+    $('#statAttention').textContent = attention + review;
+    $('#statAttentionNote').textContent = review && attention ? `${review} account${review === 1 ? '' : 's'} to review · ${attention} session${attention === 1 ? '' : 's'} to check` : review ? `${review} account${review === 1 ? '' : 's'} waiting for your decision` : attention ? 'Sessions to check or refresh' : 'Nothing needs attention';
+    $('#statAttention').closest('.card').classList.toggle('attention', attention + review > 0);
   }
 
   $('#accountSearch').addEventListener('input', (ev) => { accountQuery = ev.target.value.trim(); renderAccounts(); });
@@ -353,7 +370,7 @@
     d.innerHTML = `
       <div><div class="name">${esc(it.fullName)}</div><div class="appid"><code>${esc(it.displayId)}</code><button class="copy" type="button" title="Copy full application ID">Copy ID</button></div></div>
       <div><span class="label">Verified</span>${when(it.verifiedAt)}</div>
-      <div><span class="label">Processed with</span>${p ? `<button class="link-btn acct-link" type="button" data-account="${esc(p.profileId)}" ${p.exists ? '' : 'disabled title="account removed"'}>${esc(p.label)}</button>` : '—'}</div>
+      <div><span class="label">Processed with</span>${p ? `<button class="link-btn acct-link" type="button" data-account="${esc(p.profileId)}" ${p.exists ? '' : 'disabled title="account removed"'}>${esc(p.label)}</button>${p.reservation ? `<span class="sub">${p.reservation.applicationId === it.id ? (p.reservation.state === 'taken' ? 'Taken by this applicant' : 'Held for review') : 'Held for another applicant'}</span>` : ''}` : '—'}</div>
       <div><span class="label">Session</span>${p ? badge(SESSION, p.sessionStatus) : '—'}<span class="sub">Updated ${esc(ago(p && p.sessionSavedAt))}</span></div>
       <div class="actions"><button class="btn btn-secondary btn-sm details" type="button">View details</button></div>`;
     d.querySelector('.copy').onclick = async (ev) => {

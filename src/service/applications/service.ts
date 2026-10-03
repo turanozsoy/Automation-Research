@@ -35,7 +35,7 @@ export interface VerifiedApplicationItem {
   createdAt: number; generatedUrlReadyAt: number | null; finalLinkClickedAt: number | null; visitedAt: number | null; verifiedAt: number | null;
   workflowId: string | null; workflowOutcome: string | null;
   egress: { id: string; label: string } | null;
-  processedWith: { profileId: string; label: string; exists: boolean; sessionStatus: 'none' | 'current' | 'attention' | 'expired'; sessionNote: string | null; sessionSavedAt: number | null; lastUsedAt: number | null } | null;
+  processedWith: { profileId: string; label: string; exists: boolean; sessionStatus: 'none' | 'current' | 'attention' | 'expired'; sessionNote: string | null; sessionSavedAt: number | null; lastUsedAt: number | null; reservation: { state: 'review' | 'taken'; applicationId: string | null } | null } | null;
   sessionResult: 'refreshed' | 'failed' | null;
   /** The wait for the link: how long, whether the applicant left the waiting screen, came back, and was present when it became ready. */
   wait: { waitedMs: number | null; left: boolean; leftAfterMs: number | null; cameBack: boolean; unattendedAtReady: boolean; openedLink: boolean };
@@ -96,6 +96,12 @@ export class ApplicationService {
   /** How many applicant sockets are connected for an application right now (set by the server). */
   private presence: (applicationId: string) => number = () => 0;
   setPresence(fn: (applicationId: string) => number): void { this.presence = fn; }
+
+  /** Display id + name of an application, for the operations page (never contact details). */
+  brief(id: string): { displayId: string; fullName: string } | null {
+    const r = this.store.get(id);
+    return r ? { displayId: `APP-${r.id.slice(0, 6).toUpperCase()}`, fullName: [r.first_name, r.last_name].filter(Boolean).join(' ') || '(no name)' } : null;
+  }
 
   /** Waiting-screen analytics from the applicant page (never affects the workflow). */
   waitEvent(id: string, event: unknown, elapsedMs: unknown): Result {
@@ -514,7 +520,8 @@ export class ApplicationService {
       egress: asg?.egress_id ? { id: asg.egress_id, label: this.profiles.egress.get(asg.egress_id)?.label ?? '(removed egress)' } : null,
       processedWith: r.processed_profile_id
         ? { profileId: r.processed_profile_id, label: profile?.label ?? r.processed_profile_label ?? '(removed account)', exists: !!profile,
-            sessionStatus: meta?.sessionStatus ?? 'none', sessionNote: meta?.sessionNote ?? null, sessionSavedAt: meta?.sessionSavedAt ?? null, lastUsedAt: meta?.lastUsedAt ?? null }
+            sessionStatus: meta?.sessionStatus ?? 'none', sessionNote: meta?.sessionNote ?? null, sessionSavedAt: meta?.sessionSavedAt ?? null, lastUsedAt: meta?.lastUsedAt ?? null,
+            reservation: meta?.reservation ? { state: meta.reservation.state, applicationId: meta.reservation.applicationId } : null }
         : null,
       sessionResult: sessionEvent ? (sessionEvent.type === 'session_refreshed' ? 'refreshed' : 'failed') : null,
       wait: (() => {

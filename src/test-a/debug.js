@@ -89,7 +89,7 @@
   const showPool = (p) => {
     const wait = p.available === 0 && p.nextAvailableInMs !== null ? ` — next account available in ${Math.ceil(p.nextAvailableInMs / 1000)} s` : '';
     const none = p.total === 0 ? ' — no accounts: add one on the accounts page' : p.available === 0 && p.cooldown === 0 && p.live === 0 && p.noSession > 0 ? ' — accounts have no saved session yet (Get Cookies)' : '';
-    $('#pool').textContent = `${p.available} available / ${p.live} live / ${p.cooldown} cooldown / ${p.noSession} no session / ${p.expired + p.invalid} out / ${p.queued} queued (max ${p.maxWorkflows})${wait}${none}`;
+    $('#pool').textContent = `${p.available} available / ${p.live} live / ${p.cooldown} cooldown / ${p.review ?? 0} under review / ${p.taken ?? 0} taken / ${p.noSession} no session / ${p.expired + p.invalid} out / ${p.queued} queued (max ${p.maxWorkflows})${wait}${none}`;
   };
 
   const ws = new WebSocket(`ws://${location.host}/ws`);

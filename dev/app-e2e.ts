@@ -81,6 +81,14 @@ const FIELDS_A = { firstName: 'John', lastName: 'Doe', dateOfBirth: '1990-05-17'
 const FIELDS_B = { firstName: 'Jane', lastName: 'Roe', dateOfBirth: '1988-01-02', mobileNumber: '5559876543', address1: '2 Oak Ave', city: 'Springfield', state: 'NY', zip: '10001', email: 'jane@example.com' };
 
 // ---------------------------------------------------------------------------
+// accounts held for review or taken by applicants of earlier runs go back into rotation (the operator's action in production)
+async function releaseHeldAccounts(baseUrl: string): Promise<number> {
+  const accounts = ((await (await fetch(`${baseUrl}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.filter((a) => a.reservation);
+  for (const a of accounts) await fetch(`${baseUrl}/api/accounts/${a.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  return accounts.length;
+}
+await releaseHeldAccounts(base);
+
 console.log('[e2e:app] 1. authentication');
 {
   const r = await fetch(`${base}/api/applications/me`);
@@ -252,6 +260,18 @@ console.log('[e2e:app] 9. operations page: verified applications API');
   check(!all.items.some((i) => i.id === C.id), 'C (never processed) is not listed');
   check(ia?.fullName === 'John Doe' && ib?.fullName === 'Jane Roe', 'full names from first + last');
   check(!!ia?.processedWith && /fake/.test(ia.processedWith.label) && ia.processedWith.sessionStatus === 'current', `A: processed with ${ia?.processedWith?.label}, session current`);
+  // verified applicants take their account: out of rotation, named on the account, until the operator releases it
+  const accounts = ((await (await fetch(`${base}/api/accounts`)).json()) as { accounts: { id: string; reservation: { state: string; applicationId: string } | null }[] }).accounts;
+  const accA = accounts.find((a) => a.reservation?.applicationId === A.id), accB = accounts.find((a) => a.reservation?.applicationId === B.id);
+  check(!!accA && !!accB && accA.id !== accB.id && accA.reservation!.state === 'taken' && accB.reservation!.state === 'taken', 'A and B each TOOK the account that processed them');
+  check((ia as any)?.processedWith?.reservation?.state === 'taken' && (ia as any)?.processedWith?.reservation?.applicationId === A.id, 'verified list carries the account reservation');
+  const dbT = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
+  check((dbT.prepare("SELECT state FROM profiles WHERE id = ?").get(accA!.id) as { state: string }).state === 'taken', 'profile row state is taken');
+  dbT.close();
+  const bad = await fetch(`${base}/api/accounts/${accA!.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'nope' }) });
+  check(bad.status === 400, 'an unknown decision is rejected');
+  const relA = await fetch(`${base}/api/accounts/${accA!.id}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ decision: 'release' }) });
+  check(relA.status === 200 && ((await (await fetch(`${base}/api/accounts`)).json()) as { accounts: { id: string; reservation: unknown }[] }).accounts.find((a) => a.id === accA!.id)!.reservation === null, 'Release puts the account back into rotation');
   check(all.items.every((i, k) => k === 0 || (all.items[k - 1].verifiedAt ?? 0) >= (i.verifiedAt ?? 0)), 'newest first');
   const byName = await (await fetch(`${base}/api/admin/applications/verified?q=${encodeURIComponent('jane ro')}&limit=100`)).json() as { total: number; items: { id: string; fullName: string }[] };
   check(byName.items.some((i) => i.id === B.id) && byName.items.every((i) => /jane ro/i.test(i.fullName)), 'search by name');

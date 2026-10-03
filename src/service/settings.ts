@@ -36,6 +36,11 @@ export interface Settings {
   egressCheckUrl: string | null;
   /** Chromium proxy launch mode: 'auto' (per-context placeholder only on Windows when a proxy egress exists), 'per-context', or 'none'. */
   chromiumProxyMode: 'auto' | 'per-context' | 'none';
+  /**
+   * After an applicant opens the role link, hold the account for operator review; once verified, take it for that
+   * applicant. ACCOUNT_RESERVE=0 disables this (load tests only): accounts then return to rotation after cooldown.
+   */
+  reserveAccounts: boolean;
   /** Operator password for the internal pages and APIs (ADMIN_PASSWORD). Unset: loopback-only access, with a startup warning. */
   adminPassword: string | null;
   /** Operator session lifetime (ADMIN_SESSION_HOURS, default 12). */
@@ -69,6 +74,7 @@ export function loadSettings(): Settings {
     egressCheckIntervalMs: num('EGRESS_CHECK_INTERVAL_MS', 60_000),
     egressCheckUrl: process.env.EGRESS_CHECK_URL || null,
     chromiumProxyMode: (process.env.CHROMIUM_PROXY_MODE as 'auto' | 'per-context' | 'none') || 'auto',
+    reserveAccounts: process.env.ACCOUNT_RESERVE !== '0',
     adminPassword: process.env.ADMIN_PASSWORD || null,
     adminSessionTtlMs: num('ADMIN_SESSION_HOURS', 12) * 60 * 60_000,
   };
