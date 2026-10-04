@@ -472,7 +472,11 @@ export class Workflow {
     this.linkVisited = true;
     this.tl.mark('link opened by user (visited)');
     this.onLinkState('visited');
-    this.setState('visited', 'watching Website B for the success text');
+    // From now on the wait is bounded by verification.afterVisitMs: success text -> verified (taken); nothing -> the browser
+    // closes and the account goes under review for the operator.
+    const after = Date.now() + this.cfg.verification.afterVisitMs;
+    this.monitorDeadline = this.monitorDeadline ? Math.min(this.monitorDeadline, after) : after;
+    this.setState('visited', `watching Website B for the success text for up to ${this.cfg.verification.afterVisitMs} ms`);
   }
 
   /** Poll every frame (and popup) of the automated context for one of the configured success texts. */
@@ -484,8 +488,13 @@ export class Workflow {
     const tick = async () => {
       if (this.terminal) return;
       if (Date.now() > this.monitorDeadline) {
-        this.tl.mark('verification timed out', `no success text within ${v.timeoutMs} ms`);
-        this.end('verification timeout');
+        if (this.linkVisited) {
+          this.tl.mark('verification window after the visit elapsed', `no success text within ${v.afterVisitMs} ms of the applicant opening the link: closing the browser, account under review`);
+          this.end('no verification within the window after the visit: under review');
+        } else {
+          this.tl.mark('verification timed out', `no success text within ${v.timeoutMs} ms`);
+          this.end('verification timeout');
+        }
         return;
       }
       try {

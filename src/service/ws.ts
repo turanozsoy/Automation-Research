@@ -205,6 +205,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
     if (!set) { set = new Set(); appSockets.set(applicationId, set); }
     set.add(socket);
     tl.mark('applicant connected', `application ${applicationId.slice(0, 8)}, ${set.size} socket(s)`);
+    apps.presenceChanged(applicationId, set.size);
     const reply = (r: AppServerMsg) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(r)); };
     const row = apps.get(applicationId);
     if (row) reply({ type: 'app.state', ts: Date.now(), application: apps.view(row) });
@@ -229,10 +230,12 @@ export function startServer(deps: ServerDeps): Promise<void> {
       }
       if (!r.ok) reply({ type: 'app.error', ts: Date.now(), code: r.code, message: r.message, missingFields: r.missingFields });
     });
-    // Closing the applicant's socket never ends a workflow: the automation continues and the applicant resumes later.
+    // Closing the applicant's socket does not end a workflow by itself: the service waits a grace period and only a
+    // workflow that has not received the code yet is ended (ApplicationService.presenceChanged).
     socket.on('close', () => {
       const s = appSockets.get(applicationId);
       if (s) { s.delete(socket); if (!s.size) appSockets.delete(applicationId); }
+      apps.presenceChanged(applicationId, s?.size ?? 0);
     });
   });
 

@@ -340,8 +340,22 @@ saved), the service reserves an account, opens Website B and types the known fie
 the address; the address fields follow as live updates. The address is finalised only after the applicant confirms
 it ("Yes, it matches" sends `app.address_completed`), and the code is handed over after that, so the waiting after the
 code is only the submit itself. `app.address_completed` still starts a workflow on its own when none is live (older
-clients, retries). An applicant who abandons at the address or code step holds the account until the workflow's idle
-timeout (`IDLE_TIMEOUT_MS`, default 10 minutes) ends it.
+clients, retries).
+
+**Leaving before the code.** While a workflow is live and the code has not been handed over, the service watches the
+applicant's socket. When every socket of that application is gone for longer than `APPLICANT_LEAVE_GRACE_MS` (default
+90 s, long enough for a refresh, a network blip or a switch to the SMS app), the workflow ends, the account browser
+closes and the account returns to rotation (cooldown, no strike). The application goes back to `started` with its
+saved step and fields (event `applicant_left`, no problem shown); when the applicant returns, the address step or the
+code starts a fresh workflow. Once the code is in, the workflow always runs to the end. The idle timeout
+(`IDLE_TIMEOUT_MS`, default 10 minutes) remains the backstop for a page that stays open but idle.
+
+**After the applicant opens the link.** The workflow keeps watching Website B for the success text for at most
+`verification.afterVisitMs` (config, default 3 minutes; `VERIFICATION_AFTER_VISIT_MS` overrides). Seen in time: the
+account is verified and taken by that applicant, the browser closes. Not seen: the browser closes and the account goes
+under review for the operator (Release account / Mark verified); the application stays `link_ready` / visited with no
+problem. A link that is never opened is still bounded by `verification.timeoutMs`. Test: `npm run e2e:leave` (starts
+its own fake stack; stop the development stack first).
 
 Three kinds of state stay separate:
 

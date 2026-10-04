@@ -119,6 +119,8 @@ export type ApplicationEventType =
   | 'automation_started' | 'automation_waiting_for_capacity' | 'automation_ready' | 'automation_phase_changed' | 'address_finalized' | 'verification_received' | 'automation_submitting' | 'automation_ended'
   | 'generated_link_ready' | 'final_step_reached' | 'problem' | 'final_cta_clicked' | 'visited' | 'verified' | 'service_restarted'
   | 'session_refreshed' | 'session_persist_failed'
+  // the applicant's page was gone for longer than the grace period before the code was handed over: workflow ended, account freed, application back to started
+  | 'applicant_left'
   // waiting-screen analytics: the applicant saw the preparing screen, left it (tab hidden or page closed), came back;
   // link_ready_unattended = the link became ready while no applicant socket was connected
   | 'wait_shown' | 'wait_hidden' | 'wait_visible' | 'link_ready_unattended';

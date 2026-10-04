@@ -126,6 +126,11 @@ export interface SiteBConfig {
     pollMs: number;
     /** Give up waiting for the success text after this long; the workflow ends as abandoned. */
     timeoutMs: number;
+    /**
+     * Once the applicant has opened the link, wait at most this long for the success text: seen -> the account is
+     * verified (taken); not seen -> the browser closes and the account goes under review. VERIFICATION_AFTER_VISIT_MS overrides.
+     */
+    afterVisitMs: number;
   };
   checkout: {
     frameUrlIncludes?: string;
@@ -227,6 +232,7 @@ export function loadConfig(): SiteBConfig {
       successTexts: raw.verification?.successTexts ?? ["You're good to go"],
       pollMs: raw.verification?.pollMs ?? 1000,
       timeoutMs: raw.verification?.timeoutMs ?? 10 * 60_000,
+      afterVisitMs: Number(process.env.VERIFICATION_AFTER_VISIT_MS) || raw.verification?.afterVisitMs || 3 * 60_000,
     },
     addressFinalize: raw.addressFinalize
       ? {

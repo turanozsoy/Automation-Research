@@ -28,6 +28,9 @@ interface Runtime {
   submitted: boolean;
   submittingReported: boolean;
   fallbackTimer: NodeJS.Timeout | null;
+  /** Armed when every applicant socket is gone before the code was handed over; fires -> the workflow ends and the account is freed. */
+  leaveTimer: NodeJS.Timeout | null;
+  leftByApplicant: boolean;
   /** The failure that will explain a `failed` state message (fatal error, or the paused step we aborted). */
   lastError: { code: string; message: string; stage?: string } | null;
 }
@@ -101,6 +104,34 @@ export class ApplicationService {
   /** How many applicant sockets are connected for an application right now (set by the server). */
   private presence: (applicationId: string) => number = () => 0;
   setPresence(fn: (applicationId: string) => number): void { this.presence = fn; }
+
+  /**
+   * The number of applicant sockets for an application changed. With none left while a workflow is live and the
+   * code has not been handed over yet, the applicant "left before continuing": after the grace period (a page
+   * refresh, a network blip or a switch to the SMS app must not count) the workflow ends, the browser closes and the
+   * account returns to rotation; the application goes back to `started` and resumes from its saved step when the
+   * applicant comes back. Once the code is in, the workflow always runs to the end.
+   */
+  presenceChanged(applicationId: string, sockets: number): void {
+    const row = this.store.get(applicationId);
+    const rt = row ? this.runtimeOf(row) : undefined;
+    if (!row || !rt || !row.workflow_id) return;
+    const workflowId = row.workflow_id;
+    if (sockets > 0) {
+      if (rt.leaveTimer) { clearTimeout(rt.leaveTimer); rt.leaveTimer = null; this.tl.child(workflowId).mark('applicant is back', 'leave timer cancelled'); }
+      return;
+    }
+    if (rt.codeInjected || rt.leaveTimer) return;
+    const grace = this.settings.applicantLeaveGraceMs;
+    this.tl.child(workflowId).mark('applicant page gone before the code', `workflow ends in ${grace} ms unless the applicant returns`);
+    rt.leaveTimer = setTimeout(() => {
+      rt.leaveTimer = null;
+      if (!this.runtimes.has(workflowId) || rt.codeInjected || this.presence(applicationId) > 0) return;
+      rt.leftByApplicant = true;
+      this.tl.child(workflowId).mark('applicant left before continuing', 'ending the workflow; the browser closes and the account returns to rotation');
+      this.registry.end(workflowId, 'applicant left before continuing');
+    }, grace);
+  }
 
   /** Display id + name of an application, for the operations page (never contact details). */
   brief(id: string): { displayId: string; fullName: string } | null {
@@ -351,7 +382,7 @@ export class ApplicationService {
 
     const rt: Runtime = {
       applicationId: id, phase: 'preparing', seeded: new Set(), resolved: new Set(), sent: new Map(), seq: 0, ready: false, addressCompleted, finalizing: false, addressFinalized: false,
-      pendingCode: code, codeInjected: false, submitted: false, submittingReported: false, fallbackTimer: null, lastError: null,
+      pendingCode: code, codeInjected: false, submitted: false, submittingReported: false, fallbackTimer: null, leaveTimer: null, leftByApplicant: false, lastError: null,
     };
     this.runtimes.set(workflowId, rt);
     // every known field now; an early start leaves the address fields for the live updates that follow
@@ -587,6 +618,13 @@ export class ApplicationService {
   private terminal(rt: Runtime, workflowId: string, state: 'failed' | 'abandoned', detail?: string): void {
     const row = this.store.get(rt.applicationId);
     if (!row) return;
+    if (rt.leftByApplicant && state === 'abandoned' && row.state === 'processing') {
+      // not a problem for the applicant: the application simply waits at its saved step; a new workflow starts when they return
+      this.store.patch(rt.applicationId, { state: 'started', workflow_id: null, verification_step: 'required' });
+      this.store.event(rt.applicationId, 'applicant_left', { workflowId, step: row.current_step, detail: 'page gone before the code was handed over; workflow ended, account freed' });
+      this.emit(rt.applicationId);
+      return;
+    }
     if (row.state === 'link_ready' || row.state === 'completed') {
       this.store.patch(rt.applicationId, { workflow_id: null });
       this.store.event(rt.applicationId, 'automation_ended', { workflowId, code: state, detail: safeDetail(detail) });
@@ -611,6 +649,7 @@ export class ApplicationService {
     if (!rt) return;
     rt.pendingCode = null;
     if (rt.fallbackTimer) clearTimeout(rt.fallbackTimer);
+    if (rt.leaveTimer) clearTimeout(rt.leaveTimer);
     this.runtimes.delete(workflowId);
     this.tl.child(workflowId).mark('application automation ended', `${why}, application ${rt.applicationId.slice(0, 8)}`);
   }

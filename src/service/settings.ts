@@ -27,6 +27,8 @@ export interface Settings {
   sessionTtlMs: number;
   /** After READY, submit an applicant workflow even if not every seeded field has been acknowledged yet. */
   applicantSubmitFallbackMs: number;
+  /** An applicant whose page is gone (no socket) for this long before the code was handed over ends the workflow and frees the account (APPLICANT_LEAVE_GRACE_MS). */
+  applicantLeaveGraceMs: number;
   /** Development: where the runtime browser-mode preference is kept (survives restarts; gitignored with DATA_DIR). */
   devSettingsPath: string;
   /** Development: screenshots / sanitized HTML / JSON written when an automation step fails (empty string disables). */
@@ -110,6 +112,7 @@ export function loadSettings(): Settings {
     secureCookies: process.env.SECURE_COOKIES === '1',
     sessionTtlMs: num('SESSION_TTL_DAYS', 30) * 24 * 60 * 60_000,
     applicantSubmitFallbackMs: num('APPLICANT_SUBMIT_FALLBACK_MS', 20_000),
+    applicantLeaveGraceMs: num('APPLICANT_LEAVE_GRACE_MS', 90_000),
     devSettingsPath: resolve(dataDir, 'dev-settings.json'),
     failureArtifactsDir: process.env.FAILURE_ARTIFACTS === '0' ? '' : resolve(dataDir, 'debug', 'failures'),
     egressCheckIntervalMs: num('EGRESS_CHECK_INTERVAL_MS', 60_000),
