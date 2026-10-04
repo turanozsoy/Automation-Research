@@ -298,6 +298,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     }
 
     if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
+    if (method === 'GET' && url === '/site.webmanifest') return webManifest(deps, res); // name filled from the brand setting
     if (method === 'GET' && ICON_FILES.has(url.slice(1))) return serveFile(ICONS_DIR, url.slice(1), res);
     // applicant step routes (/step-2 … /step-n, /preparing, /completed): the applicant page restores the step client-side
     if (method === 'GET' && APPLY_ROUTES.test(url)) return serveFile(APPLY_DIR, 'index.html', res);
@@ -512,6 +513,22 @@ function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
     req.on('end', () => { try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(e); } });
     req.on('error', reject);
   });
+}
+
+/** The uploaded site.webmanifest with `name` / `short_name` filled in from the editable brand name when they are empty. */
+function webManifest(deps: ServerDeps, res: ServerResponse): void {
+  let raw: string;
+  try { raw = readFileSync(resolve(ICONS_DIR, 'site.webmanifest'), 'utf8'); } catch { res.writeHead(404); res.end('not found'); return; }
+  let body = raw;
+  try {
+    const m = JSON.parse(raw) as Record<string, unknown>;
+    const brand = deps.content.brandName();
+    if (!m.name) m.name = `${brand} Careers`;
+    if (!m.short_name) m.short_name = brand;
+    body = JSON.stringify(m);
+  } catch { /* not JSON: serve as uploaded */ }
+  res.writeHead(200, { 'content-type': 'application/manifest+json', 'cache-control': 'no-store' });
+  res.end(body);
 }
 
 function serveFile(dir: string, rel: string, res: ServerResponse): void {
