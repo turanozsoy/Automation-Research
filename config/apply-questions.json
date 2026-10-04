@@ -1,6 +1,7 @@
 {
   "verificationCode": {
     "length": 9,
+    "groups": [3, 2, 4],
     "help": "Enter the verification code provided for your application."
   },
   "screens": [

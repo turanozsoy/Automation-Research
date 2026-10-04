@@ -38,7 +38,11 @@
   // ---------------------------------------------------------------------------
   // state
   // ---------------------------------------------------------------------------
-  let config = { verificationCode: { length: 6, help: '' }, screens: [], content: {} };
+  let config = { verificationCode: { length: 6, groups: null, help: '' }, screens: [], content: {} };
+  /** Digit groups of the code as shown in the SMS (e.g. [3, 2, 4] -> 482-16-7304). Display only: the code is sent as digits. */
+  const codeGroups = () => { const g = config.verificationCode.groups; const n = config.verificationCode.length; return Array.isArray(g) && g.length && g.reduce((a, b) => a + b, 0) === n ? g : [n]; };
+  const formatCode = (digitsOnly) => { const out = []; let i = 0; for (const g of codeGroups()) { if (i >= digitsOnly.length) break; out.push(digitsOnly.slice(i, i + g)); i += g; } return out.join('-'); };
+  const codePlaceholder = () => codeGroups().map((g) => 'x'.repeat(g)).join('-');
   /** Applicant copy by key (config.content, defaults merged with edits made on the operations page); always rendered as text. */
   /** The company / site name, editable on the operations page (brand.name); every {brand} in the copy becomes it. */
   const brand = () => ((config.content && config.content['brand.name']) || 'Shipzora').trim() || 'Shipzora';
@@ -481,11 +485,13 @@
       go(nextStep('code'));
     };
     const input = el('input', {
-      // No maxlength: the code arrives as "482-16-7304" and a maxlength would truncate the pasted text before the
-      // dashes are removed. Everything but digits is dropped and the result is capped at n digits.
-      class: 'input code-input', id: 'f-code', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]*',
-      placeholder: '•'.repeat(n), 'aria-describedby': 'help-code err-code', autocapitalize: 'off', spellcheck: 'false',
-      oninput: (ev) => { ev.target.value = ev.target.value.replace(/\D/g, '').slice(0, n); local.code = ev.target.value; clearError('code'); },
+      // Shown as in the SMS (xxx-xx-xxxx): the dashes are inserted while typing or pasting and are display only;
+      // local.code and the value sent are the digits. No maxlength: it would truncate a pasted "482-16-7304" before
+      // the dashes are removed.
+      class: 'input code-input', id: 'f-code', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9-]*',
+      placeholder: codePlaceholder(), 'aria-describedby': 'help-code err-code', autocapitalize: 'off', spellcheck: 'false',
+      value: formatCode(digits(local.code).slice(0, n)),
+      oninput: (ev) => { const d = ev.target.value.replace(/\D/g, '').slice(0, n); ev.target.value = formatCode(d); local.code = d; clearError('code'); },
     });
     return form(submit,
       el('h1', { text: t('code.title') }),

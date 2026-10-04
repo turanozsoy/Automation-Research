@@ -124,9 +124,13 @@ try {
   await p.reload();
   await h1(/Verification code/, 10000);
   const dashed = `${CODE.slice(0, 3)}-${CODE.slice(3, 5)}-${CODE.slice(5)}`; // as the SMS shows it: 482-16-7304
+  check(await p.locator('#f-code').getAttribute('placeholder') === 'xxx-xx-xxxx', 'code field placeholder shows the SMS grouping');
   await p.fill('#f-code', dashed);
-  check(await p.inputValue('#f-code') === CODE, `code pasted with dashes (${dashed}) becomes the ${CODE.length} digits`);
+  check(await p.inputValue('#f-code') === dashed, `code pasted with dashes stays grouped on screen (${dashed})`);
   await p.fill('#f-code', CODE);
+  check(await p.inputValue('#f-code') === dashed, 'typing the digits only shows the same grouping');
+  await p.fill('#f-code', `${CODE}99`);
+  check(await p.inputValue('#f-code') === dashed, 'extra digits are ignored');
   await p.getByRole('button', { name: 'Continue' }).click();
   await h1(/Your experience/);
   atPath('/step-6', 'experience');
