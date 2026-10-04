@@ -1,0 +1,22 @@
+[Unit]
+Description=Shipzora application service
+After=network-online.target shipzora-xvfb.service
+Wants=network-online.target shipzora-xvfb.service
+
+[Service]
+Type=simple
+User=shipzora
+Group=shipzora
+WorkingDirectory=/opt/shipzora
+EnvironmentFile=/etc/shipzora/service.env
+ExecStart=/usr/bin/node /opt/shipzora/node_modules/tsx/dist/cli.mjs /opt/shipzora/src/service/main.ts
+Restart=always
+RestartSec=3
+KillSignal=SIGTERM
+TimeoutStopSec=30
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

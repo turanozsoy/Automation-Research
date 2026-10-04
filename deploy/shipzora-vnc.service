@@ -1,0 +1,12 @@
+[Unit]
+Description=VNC server on the Shipzora virtual display (localhost only)
+After=shipzora-xvfb.service
+Requires=shipzora-xvfb.service
+
+[Service]
+User=shipzora
+ExecStart=/usr/bin/x11vnc -display :99 -rfbauth /etc/shipzora/vncpasswd -localhost -forever -shared -noxdamage -rfbport 5900
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

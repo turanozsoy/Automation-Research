@@ -148,7 +148,7 @@ export const STATIC_FIELDS: ContentField[] = [
   f('ready.titleNoName', 'Role ready', 'Heading when the name is unknown', 'Your role details are ready', 80),
   f('ready.titleConfirmed', 'Role ready', 'Heading once verified ({name} = first name)', '{name}, you are all set', 80, { vars: ['{name}'] }),
   f('ready.titleConfirmedNoName', 'Role ready', 'Heading once verified, name unknown', 'You are all set', 80),
-  f('ready.introConfirmed', 'Role ready', 'Supporting paragraph once verified', 'Your identity is verified and your role details are confirmed. You can open them again from this page at any time.', 220),
+  f('ready.introConfirmed', 'Role ready', 'Supporting paragraph once verified', 'Your identity is verified and your role details are confirmed.', 220),
   f('ready.intro', 'Role ready', 'Supporting paragraph', 'Thanks for completing your {brand} application. A short verification is needed before we show your role details. It only takes a moment.', 220),
   f('ready.check1', 'Role ready', 'Checklist: item 1', 'Contact details received', 60),
   f('ready.check2', 'Role ready', 'Checklist: item 2', 'Home address received', 60),
@@ -156,10 +156,9 @@ export const STATIC_FIELDS: ContentField[] = [
   f('ready.nextLabel', 'Role ready', 'Checklist: small label on the next step', 'Next', 16),
   f('ready.noteNew', 'Role ready', 'Secondary paragraph (before opening)', 'Tip: roles fill up quickly, so it is best to finish this step now while everything is fresh.', 180),
   f('ready.noteOpened', 'Role ready', 'Secondary paragraph (after opening)', 'Closed the verification by accident? No problem, just continue again from here. Sooner is better, roles fill up quickly.', 180),
-  f('ready.noteConfirmed', 'Role ready', 'Secondary paragraph (verified)', 'Keep an eye on your phone and email for what happens next.', 160),
+  f('ready.noteConfirmed', 'Role ready', 'Closing line once verified', 'We will contact you soon.', 160),
   f('ready.cta', 'Role ready', 'Final button', 'Continue to verification', 40),
   f('ready.ctaAgain', 'Role ready', 'Final button (after opening)', 'Open Role Details again', 40),
-  f('ready.ctaConfirmed', 'Role ready', 'Final button once verified', 'View your role details', 40),
   // Legal pages (/privacy, /terms, /contact). Bodies are plain text with light structure: a line starting with
   // "## " is a heading, "- " a bullet, a blank line separates paragraphs; {year} = current year. Drafts: review with counsel.
   f('legal.privacy.title', 'Legal pages', 'Privacy page: title', 'Privacy Policy', 60),

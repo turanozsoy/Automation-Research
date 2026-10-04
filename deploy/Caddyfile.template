@@ -1,0 +1,13 @@
+# /etc/caddy/Caddyfile  (written by deploy/install.sh; DOMAIN and the VNC password hash are filled in)
+DOMAIN {
+	encode gzip
+	# the virtual display (Get / Refresh cookies): https://DOMAIN/vnc/vnc.html  (user "operator")
+	handle_path /vnc/* {
+		basic_auth {
+			operator VNC_HASH
+		}
+		reverse_proxy 127.0.0.1:6080
+	}
+	# the applicant site, the operations page and the WebSockets
+	reverse_proxy 127.0.0.1:3000
+}

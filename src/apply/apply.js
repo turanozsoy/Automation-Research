@@ -591,9 +591,10 @@
           verified ? done(t('ready.check3'))
             : el('li', { class: 'next' }, el('span', { class: 'done-tick next', 'aria-hidden': 'true' }), el('span', { text: t('ready.check3') }), el('span', { class: 'next-pill', text: t('ready.nextLabel') }))),
         el('p', { class: verified ? 'muted calm' : 'muted urgent', text: verified ? t('ready.noteConfirmed') : opened ? t('ready.noteOpened') : t('ready.noteNew') }),
-        el('div', { class: 'actions' },
-          el('a', { class: verified ? 'btn btn-secondary' : 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: verified ? t('ready.ctaConfirmed') : opened ? t('ready.ctaAgain') : t('ready.cta'),
-            onclick: () => { send({ type: 'app.link_opened' }); } })));
+        // once verified there is nothing left to do: no button, just the closing line above
+        ...(verified ? [] : [el('div', { class: 'actions' },
+          el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? t('ready.ctaAgain') : t('ready.cta'),
+            onclick: () => { send({ type: 'app.link_opened' }); } }))]));
       return card;
     }
     if (app.state === 'problem') {

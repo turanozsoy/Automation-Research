@@ -1,0 +1,12 @@
+[Unit]
+Description=noVNC web client for the Shipzora virtual display (behind Caddy, /vnc/)
+After=shipzora-vnc.service
+Requires=shipzora-vnc.service
+
+[Service]
+User=shipzora
+ExecStart=/usr/bin/websockify --web=/usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
