@@ -1,7 +1,7 @@
 # /etc/caddy/Caddyfile  (written by deploy/install.sh; DOMAIN and the VNC password hash are filled in)
 DOMAIN {
 	encode gzip
-	# the virtual display (Get / Refresh cookies): https://DOMAIN/vnc/vnc.html  (user "operator")
+	# the virtual display (Get / Refresh cookies): https://DOMAIN/vnc/vnc.html?path=vnc/websockify&autoconnect=true  (user "operator")
 	handle_path /vnc/* {
 		basic_auth {
 			operator VNC_HASH

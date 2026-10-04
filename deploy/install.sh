@@ -88,7 +88,7 @@ echo "────────────────────────�
 echo "  Site:            https://$DOMAIN"
 echo "  Operations page: https://$DOMAIN/admin/accounts"
 echo "  Operator password:  $(grep ^ADMIN_PASSWORD= "$ENV_FILE" | cut -d= -f2-)"
-echo "  Login browsers:  https://$DOMAIN/vnc/vnc.html   user: operator   password: $VNCPW"
+echo "  Login browsers:  https://$DOMAIN/vnc/vnc.html?path=vnc/websockify&autoconnect=true   user: operator   password: $VNCPW"
 echo "  Environment:     $ENV_FILE   (set META_PIXEL_ID and META_CAPI_TOKEN, then: systemctl restart shipzora)"
 echo "  Website B config: $APP_DIR/config/site-b.local.json  (copy yours here, owner shipzora, then restart)"
 echo "  Logs:            journalctl -u shipzora -f"

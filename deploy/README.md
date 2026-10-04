@@ -18,7 +18,10 @@ Afterwards:
 2. Edit `/etc/shipzora/service.env`: `META_PIXEL_ID`, `META_CAPI_TOKEN` (and `META_TEST_EVENT_CODE` while testing).
 3. `sudo systemctl restart shipzora`.
 4. Open `https://<domain>/admin/accounts`, import proxies, add accounts. "Get cookies" opens the login browser on
-   the virtual display: watch and drive it at `https://<domain>/vnc/vnc.html` (user `operator`).
+   the virtual display: watch and drive it at
+   `https://<domain>/vnc/vnc.html?path=vnc/websockify&autoconnect=true` (browser login: user `operator` and the VNC
+   password, then the same password once more for the screen). The `path` parameter matters: without it noVNC looks
+   for its connection at the site root.
 
 | What | Where |
 |---|---|
