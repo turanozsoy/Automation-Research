@@ -21,10 +21,13 @@ import type { Timeline } from './timeline.js';
 import type { WorkflowRegistry } from './workflows.js';
 
 const INTERNAL_DIR = resolve(process.cwd(), 'src/test-a');   // /debug harness + /admin/accounts (internal pages)
-const APPLY_DIR = resolve(process.cwd(), 'src/apply');       // the public Shipzora application
+const APPLY_DIR = resolve(process.cwd(), 'src/apply');       // the public application
+const ICONS_DIR = resolve(APPLY_DIR, 'icons');               // favicon + app icons (drop the generated files here)
+/** Icon files served at the root (browsers request these paths on their own). Missing files answer 404. */
+const ICON_FILES = new Set(['favicon.ico', 'favicon-16x16.png', 'favicon-32x32.png', 'apple-touch-icon.png', 'android-chrome-192x192.png', 'android-chrome-512x512.png', 'site.webmanifest']);
 export const APPLY_CONFIG_PATH = resolve(process.cwd(), process.env.APPLY_CONFIG ?? 'config/apply-questions.json');
 const APPLY_CONFIG = APPLY_CONFIG_PATH;
-const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json' };
+const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
 /** Explicit routes only: nothing under src/ is reachable by guessing a file name. */
 const PAGES: Record<string, [string, string]> = {
@@ -294,6 +297,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     }
 
     if (method === 'GET' && PAGES[url]) return serveFile(PAGES[url][0], PAGES[url][1], res);
+    if (method === 'GET' && ICON_FILES.has(url.slice(1))) return serveFile(ICONS_DIR, url.slice(1), res);
     // applicant step routes (/step-2 … /step-n, /preparing, /completed): the applicant page restores the step client-side
     if (method === 'GET' && APPLY_ROUTES.test(url)) return serveFile(APPLY_DIR, 'index.html', res);
     if (method === 'GET' && url.startsWith('/apply/')) return serveFile(APPLY_DIR, url.slice('/apply/'.length), res);
@@ -567,6 +571,7 @@ function legalPage(slug: 'privacy' | 'terms' | 'contact', content: Record<string
   res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="color-scheme" content="light"><meta name="theme-color" content="#ffffff"><meta name="robots" content="noindex">
 <title>${escHtml(title)} | ${escHtml(siteTitle)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+<link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png"><link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/site.webmanifest">
 <link rel="stylesheet" href="/apply/apply.css"></head>
 <body data-screen="legal">
 <header class="site-header"><div class="shell header-row"><a class="header-back" href="/" aria-label="Back to the application"><svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M19 12H6M12 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></a><p class="app-title"><span class="brand-word">${escHtml(brand)}</span> ${escHtml(v('brand.headerLanding') || 'Careers')}</p></div><div class="accent-line" aria-hidden="true"><span></span></div></header>

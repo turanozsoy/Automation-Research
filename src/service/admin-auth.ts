@@ -152,7 +152,7 @@ export function clientIp(req: IncomingMessage, trustedProxies: string[] = []): s
 export function loginPage(next: string, error?: string, brand = 'Shipzora'): string {
   const safeNext = /^\/(?!\/)[\w\-./?=&%#]*$/.test(next) ? next : '/admin/accounts';
   const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>Sign in — ${esc(brand)} Operations</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><link rel="icon" href="/favicon.ico" sizes="any"><title>Sign in — ${esc(brand)} Operations</title>
 <style>
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;margin:0;background:#f3f4f1;color:#1b1f24;display:flex;min-height:100vh;align-items:center;justify-content:center}
   main{width:100%;max-width:380px;padding:24px}
