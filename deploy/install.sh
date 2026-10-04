@@ -59,7 +59,7 @@ else
 fi
 if [ ! -f /etc/shipzora/vncpasswd ]; then
   VNCPW=$(node -e "console.log(require('crypto').randomBytes(9).toString('base64url'))")
-  sudo -u shipzora x11vnc -storepasswd "$VNCPW" /etc/shipzora/vncpasswd >/dev/null
+  x11vnc -storepasswd "$VNCPW" /etc/shipzora/vncpasswd >/dev/null
   echo "$VNCPW" > /etc/shipzora/vnc-password.txt; chmod 600 /etc/shipzora/vnc-password.txt
 fi
 VNCPW=$(cat /etc/shipzora/vnc-password.txt)
