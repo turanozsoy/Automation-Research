@@ -283,6 +283,33 @@ console.log('[e2e:app] 9. operations page: verified applications API');
   check(!dump.includes('storage_state') && !dump.includes('cookies') && !dump.includes(CODE) && !/date_of_birth|dateOfBirth|address1/.test(dump), 'admin list carries no session data, code, DOB or address');
 }
 
+console.log('[e2e:app] 10. early start: reaching the address step launches the browser; the address is finalised only after address_completed');
+const D = await createApp();
+const sd = new AppSocket('D', D.cookie); await sd.connect();
+sd.send({ type: 'app.prepare' });
+check(await sd.waitError('INFORMATION_REQUIRED'), 'prepare without contact details / date of birth is refused');
+sd.send({ type: 'app.update', fields: { firstName: 'Dana', lastName: 'Lee', dateOfBirth: '1991-03-09', mobileNumber: '5550001111', email: 'dana@example.com' } });
+await sd.waitView((v) => v.fields.firstName === 'Dana', 5000, 'D contact saved');
+const tPrepare = Date.now();
+sd.send({ type: 'app.prepare' });
+const dPrep = await sd.waitView((v) => v.state === 'processing', 5000, 'D processing after prepare');
+check(dPrep.automation.active && dPrep.automation.attempts === 1 && dPrep.automation.phase === 'preparing' && dPrep.missingFields.length === 4, 'D: workflow started at the address step with the address still missing');
+sd.send({ type: 'app.prepare' });
+await sleep(300);
+check(sd.view!.automation.attempts === 1 && !sd.all.some((m) => m.type === 'app.error' && m.code !== 'INFORMATION_REQUIRED'), 'a repeated prepare is a no-op');
+await sleep(6000); // the workflow reaches READY on the fake; nothing may be finalised without the address
+check(sd.view!.automation.phase === 'preparing' && sd.view!.state === 'processing', `D: still preparing ${Date.now() - tPrepare} ms after the early start (address not finalised without the applicant)`);
+sd.send({ type: 'app.update', fields: { address1: '7 Elm St', city: 'Springfield', state: 'NY', zip: '10001' } });
+await sd.waitView((v) => v.missingFields.length === 0, 5000, 'D address saved');
+sd.send({ type: 'app.address_completed' });
+const dAwait = await sd.waitView((v) => v.automation.phase === 'awaiting_code', 60_000, 'D awaiting the code');
+console.log(`  D address finalised ${Date.now() - tPrepare} ms after the early start`);
+check(dAwait.state === 'processing' && dAwait.generatedUrl === null, 'D: address finalised after address_completed, waiting for the code');
+sd.send({ type: 'app.verify', code: CODE });
+const linkD = await sd.waitView((v) => v.generatedUrl !== null, 120_000, 'D generated link');
+check(!!linkD.generatedUrl && linkD.automation.attempts === 1, 'D: generated link on the early-started workflow (no second attempt)');
+await sd.close();
+
 await sa.close(); await sb.close();
 clearTimeout(overall);
 console.log(failures ? `[e2e:app] ${failures} check(s) failed` : '[e2e:app] all checks passed');

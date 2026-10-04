@@ -16,6 +16,11 @@ interface Runtime {
   /** Latest value handed to the workflow per field (to forward only real changes while live). */
   sent: Map<string, string>;
   seq: number;
+  /** The workflow announced READY (Website B open, fields being typed). */
+  ready: boolean;
+  /** The applicant completed the address step; finalisation needs both this and `ready`. */
+  addressCompleted: boolean;
+  finalizing: boolean;
   addressFinalized: boolean;
   /** Code received before the workflow was ready for it; handed over as soon as the address is finalised, then dropped. */
   pendingCode: string | null;
@@ -260,10 +265,42 @@ export class ApplicationService {
       this.emit(id);
       return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
     }
-    if (this.runtimeOf(row)) { this.store.event(id, 'address_completed', { workflowId: row.workflow_id, detail: 'workflow already live' }); return { ok: true }; }
+    const rt = this.runtimeOf(row);
+    if (rt && row.workflow_id) {
+      // started early (app.prepare): the browser is already on Website B; the address may be finalised now
+      const first = !rt.addressCompleted;
+      rt.addressCompleted = true;
+      this.store.event(id, 'address_completed', { workflowId: row.workflow_id, detail: first ? (rt.ready ? 'workflow ready, finalising the address now' : 'workflow still preparing; address finalised once it is ready') : 'repeated' });
+      if (first && rt.ready) setImmediate(() => void this.finalizeAddressFor(row.workflow_id!));
+      return { ok: true };
+    }
     if (row.state === 'processing') return { ok: false, code: 'INVALID_STATE', message: 'Your application is already being processed' };
     this.store.event(id, 'address_completed');
-    return this.startAutomation(row, clientIp, null);
+    return this.startAutomation(row, clientIp, null, true);
+  }
+
+  /** Website B fields that belong to the address (finalised together, after the applicant confirms the address). */
+  private addressFields(): string[] { return this.cfg.addressFinalize?.fields ?? []; }
+
+  /**
+   * The applicant reached the address step: contact details and date of birth are saved, the address is not.
+   * Start the workflow now so the account is reserved, the browser launched, Website B opened and the known
+   * fields typed while the applicant fills in the address; the address fields follow as live updates and are
+   * finalised after app.address_completed. Idempotent; silently a no-op when a workflow is already live.
+   */
+  prepare(id: string, clientIp?: string): Result {
+    const row = this.store.get(id);
+    if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
+    if (row.state === 'link_ready' || row.state === 'completed') return { ok: false, code: 'INVALID_STATE', message: 'Your application has already been processed' };
+    if (this.runtimeOf(row) || row.state === 'processing') return { ok: true };
+    const addr = new Set(this.addressFields());
+    const missing = this.missingFields(row).filter((f) => !addr.has(f));
+    if (missing.length) {
+      this.store.event(id, 'information_required', { step: row.current_step, detail: missing.join(',') });
+      this.emit(id);
+      return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
+    }
+    return this.startAutomation(row, clientIp, null, false);
   }
 
   /**
@@ -291,11 +328,11 @@ export class ApplicationService {
       this.emit(id);
       return { ok: false, code: 'INFORMATION_REQUIRED', message: 'Some required information is still missing', missingFields: missing };
     }
-    return this.startAutomation(row, clientIp, normalizeCode(code));
+    return this.startAutomation(row, clientIp, normalizeCode(code), true);
   }
 
   /** Reserve a profile and seed every non-secret Website B field. The code, if already known, waits in the runtime. */
-  private startAutomation(row: ApplicationRow, clientIp: string | undefined, code: string | null): Result {
+  private startAutomation(row: ApplicationRow, clientIp: string | undefined, code: string | null, addressCompleted: boolean): Result {
     if (this.writeOnlyFields().length !== 1) {
       // The config is the contract: this bridge injects exactly one write-only field with the code.
       this.tl.mark('application cannot start automation', `config has ${this.writeOnlyFields().length} write-only field(s), expected 1`);
@@ -308,16 +345,17 @@ export class ApplicationService {
       state: 'processing', workflow_id: workflowId, workflow_count: attempts, verification_step: 'required',
       problem_code: null, problem_message: null, problem_at: null,
     });
-    this.store.event(id, 'automation_started', { workflowId, step: row.current_step, retryCount: attempts - 1, detail: queuePosition ? `queued at position ${queuePosition}` : 'profile reserved' });
+    this.store.event(id, 'automation_started', { workflowId, step: row.current_step, retryCount: attempts - 1, detail: `${queuePosition ? `queued at position ${queuePosition}` : 'profile reserved'}${addressCompleted ? '' : '; started early at the address step'}` });
     if (queuePosition) this.store.event(id, 'automation_waiting_for_capacity', { workflowId, detail: `queue position ${queuePosition}` });
     this.tl.child(workflowId).mark('application automation started', `application ${id.slice(0, 8)}, attempt ${attempts}${queuePosition ? `, queued #${queuePosition}` : ''}`);
 
     const rt: Runtime = {
-      applicationId: id, phase: 'preparing', seeded: new Set(), resolved: new Set(), sent: new Map(), seq: 0, addressFinalized: false,
+      applicationId: id, phase: 'preparing', seeded: new Set(), resolved: new Set(), sent: new Map(), seq: 0, ready: false, addressCompleted, finalizing: false, addressFinalized: false,
       pendingCode: code, codeInjected: false, submitted: false, submittingReported: false, fallbackTimer: null, lastError: null,
     };
     this.runtimes.set(workflowId, rt);
-    for (const field of this.requiredFields()) this.forward(rt, workflowId, field, this.value(row, field));
+    // every known field now; an early start leaves the address fields for the live updates that follow
+    for (const field of this.requiredFields()) { const v = this.value(row, field); if (addressCompleted || v.trim() !== '') this.forward(rt, workflowId, field, v); }
     this.progress(id, 'automation_started');
     this.emit(id);
     return { ok: true };
@@ -342,10 +380,11 @@ export class ApplicationService {
   private async finalizeAddressFor(workflowId: string): Promise<void> {
     const rt = this.runtimes.get(workflowId);
     const wf = this.registry.get(workflowId);
-    if (!rt || !wf) return;
+    if (!rt || !wf || rt.finalizing || rt.addressFinalized) return;
+    rt.finalizing = true;
     try {
       const r = await wf.finalizeAddress();
-      if (r === 'not-ready' || !this.runtimes.has(workflowId)) return;
+      if (r === 'not-ready' || !this.runtimes.has(workflowId)) { rt.finalizing = false; return; }
     } catch (e) {
       this.tl.child(workflowId).mark('address finalization failed, submit will verify strictly', e instanceof Error ? e.message : String(e));
     }
@@ -397,11 +436,14 @@ export class ApplicationService {
       case 'state':
         switch (m.state) {
           case 'ready':
-            this.store.event(id, 'automation_ready', { workflowId });
+            rt.ready = true;
+            this.store.event(id, 'automation_ready', { workflowId, detail: rt.addressCompleted ? undefined : 'started early; waiting for the applicant to complete the address' });
             this.progress(id, 'automation_ready');
             // Next tick: the workflow starts draining the seeded fields right after it announces READY;
             // finalizeAddress() waits for that drain so the tested order (fields, then address) is kept.
-            setImmediate(() => void this.finalizeAddressFor(workflowId));
+            // An early start waits here until app.address_completed arrives (addressCompleted() finalises then).
+            if (rt.addressCompleted) setImmediate(() => void this.finalizeAddressFor(workflowId));
+            else this.tl.child(workflowId).mark('ready before the address', 'fields typed as they arrive; the address is finalised once the applicant confirms it');
             break;
           case 'submitting':
             if (!rt.submittingReported) { rt.submittingReported = true; this.store.event(id, 'automation_submitting', { workflowId }); this.progress(id, 'automation_submitting'); }

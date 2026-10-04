@@ -165,6 +165,12 @@ export interface AppValidationFailedMsg { type: 'app.validation_failed'; ts: num
  */
 export interface AppAddressCompletedMsg { type: 'app.address_completed'; ts: number }
 /**
+ * The applicant reached the address step (contact details and date of birth are saved). Starts the onboarding
+ * workflow early: account reserved, browser launched, Website B opened and the known fields typed while the
+ * applicant fills in the address. The address itself is finalised only after app.address_completed. Idempotent.
+ */
+export interface AppPrepareMsg { type: 'app.prepare'; ts: number }
+/**
  * The verification code. Held only in memory, handed to the live workflow, never persisted or logged.
  * Continues the submit sequence; if no workflow is running yet (e.g. a retry), it starts one first.
  */
@@ -174,7 +180,7 @@ export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
 /** The applicant is waiting for the role-details link: the waiting screen was shown, left (tab hidden / page closed) or shown again. */
 export interface AppWaitMsg { type: 'app.wait'; ts: number; event: 'shown' | 'hidden' | 'visible'; elapsedMs?: number }
 export interface AppPingMsg { type: 'ping'; ts: number }
-export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppWaitMsg | AppPingMsg;
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppPrepareMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppWaitMsg | AppPingMsg;
 
 // ---- service -> applicant ----
 /** Full safe snapshot; sent on connect and after every change. */

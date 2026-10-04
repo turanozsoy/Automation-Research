@@ -219,6 +219,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
         case 'app.answers': r = apps.mergeAnswers(applicationId, m.answers); break;
         case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep, m.final); break;
         case 'app.validation_failed': r = apps.validationFailed(applicationId, m.step, m.fields); break;
+        case 'app.prepare': r = apps.prepare(applicationId, clientIp); break;
         case 'app.address_completed': r = apps.addressCompleted(applicationId, clientIp); break;
         case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
         case 'app.link_opened': r = apps.linkOpened(applicationId); break;

@@ -334,6 +334,15 @@ into `data/master.key` (gitignored). Rotating the master key only re-wraps the s
 
 ## Applications (Shipzora foundation)
 
+**Early start.** The browser is launched when the applicant reaches the address step, not when the code arrives:
+the applicant page sends `app.prepare` as soon as the address screen opens (contact details and date of birth
+saved), the service reserves an account, opens Website B and types the known fields while the applicant fills in
+the address; the address fields follow as live updates. The address is finalised only after the applicant confirms
+it ("Yes, it matches" sends `app.address_completed`), and the code is handed over after that, so the waiting after the
+code is only the submit itself. `app.address_completed` still starts a workflow on its own when none is live (older
+clients, retries). An applicant who abandons at the address or code step holds the account until the workflow's idle
+timeout (`IDLE_TIMEOUT_MS`, default 10 minutes) ends it.
+
 Three kinds of state stay separate:
 
 | | Belongs to | Values |

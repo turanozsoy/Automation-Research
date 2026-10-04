@@ -90,7 +90,9 @@ try {
   await p.locator('#addressConfirm').waitFor({ timeout: 3000 });
   check(/1 Main St/.test(await p.locator('#addressConfirm .address-card').innerText()) && /Springfield, New York 10001/.test(await p.locator('#addressConfirm .address-card').innerText()), 'Continue shows the "matches your ID" confirmation with the entered address');
   const dbBefore = new Database(resolve(dataDir, 'automation.db'), { readonly: true });
-  check((dbBefore.prepare("SELECT COUNT(*) n FROM applications WHERE first_name = 'Jordan' AND last_name = ? AND state = 'processing'").get(LAST) as { n: number }).n === 0, 'nothing is submitted while the confirmation is open');
+  // the browser was launched when the address step opened (app.prepare); the ADDRESS itself is not handed over until "Yes, it matches"
+  check((dbBefore.prepare("SELECT COUNT(*) n FROM application_events e JOIN applications a ON a.id = e.application_id WHERE a.first_name = 'Jordan' AND a.last_name = ? AND e.type IN ('address_completed', 'address_finalized')").get(LAST) as { n: number }).n === 0, 'the address is not sent for finalisation while the confirmation is open');
+  check((dbBefore.prepare("SELECT COUNT(*) n FROM application_events e JOIN applications a ON a.id = e.application_id WHERE a.first_name = 'Jordan' AND a.last_name = ? AND e.type = 'automation_started' AND e.detail LIKE '%started early%'").get(LAST) as { n: number }).n === 1, 'the workflow was started early, when the address step opened');
   dbBefore.close();
   await p.locator('#btnAddressEdit').click();
   check((await p.locator('#addressConfirm').count()) === 0 && await p.evaluate(() => document.activeElement?.id) === 'f-address1', 'Edit address closes the sheet and focuses the street field');

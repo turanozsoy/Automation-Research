@@ -428,6 +428,9 @@
   }
 
   function renderAddress() {
+    // The browser is launched now, while the applicant types the address: the service reserves an account, opens
+    // Website B and types the contact details and date of birth. The address is finalised after "Yes, it matches".
+    if (!codeReceived() && !(app && app.automation && app.automation.active)) send({ type: 'app.prepare' });
     const select = el('select', { class: 'select', id: 'f-state', name: 'state', autocomplete: 'address-level1', onchange: (ev) => { v.state = ev.target.value; clearError('state'); } },
       el('option', { value: '', text: 'Select a state' }),
       ...US_STATES.map(([code, name]) => el('option', { value: code, text: name, selected: v.state === code })));
