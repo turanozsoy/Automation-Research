@@ -353,6 +353,10 @@ body[data-screen="legal"] .header-back { display: inline-flex; text-decoration: 
 .done-tick.next { background: var(--color-white); border: 2px solid var(--color-yellow-warm); }
 .done-tick.next::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--color-yellow-warm); }
 .next-pill { margin-left: auto; font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--color-text); background: var(--color-yellow); border-radius: 999px; padding: 3px 9px; }
+/* verified: a quiet confirmation line with a tick, no box */
+.status .muted.calm { display: flex; gap: 10px; align-items: flex-start; color: var(--color-text-secondary); font-weight: 500; }
+.status .muted.calm::before { content: ""; flex: none; width: 18px; height: 18px; margin-top: 2px; background: #1f8a4c; -webkit-mask: var(--icon-check) center / 18px no-repeat; mask: var(--icon-check) center / 18px no-repeat; }
+.status.verified .success-mark-ring { background: #e3f4ea; }
 /* friendly tip, not a warning: soft yellow, regular weight, info icon */
 .status .muted.urgent { color: var(--color-text); font-weight: 500; display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-radius: 12px; background: var(--color-yellow-soft); border: 1px solid #f2d98a; }
 .status .muted.urgent::before { content: ""; flex: none; width: 18px; height: 18px; margin-top: 2px; background: var(--color-yellow-warm); -webkit-mask: var(--icon-info) center / 18px no-repeat; mask: var(--icon-info) center / 18px no-repeat; }

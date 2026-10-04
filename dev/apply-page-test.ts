@@ -212,8 +212,10 @@ try {
   const [popup] = await Promise.all([ctx.waitForEvent('page'), cta.click()]);
   await popup.waitForLoadState('domcontentloaded');
   check(navs.includes(href!), `CTA opened the generated link in a new tab (requested ${navs.join(' -> ')})`);
-  await p.waitForFunction(() => /Open Role Details again|opened your role details/i.test(document.querySelector('main')!.innerText), null, { timeout: 5000 });
-  await p.waitForFunction(() => /have been confirmed/i.test(document.querySelector('main')!.innerText), null, { timeout: 90_000 });
+  // after the click the button reads "Open Role Details again"; the fake verifies ~2.5 s later and the page moves on to the verified screen
+  await p.waitForFunction(() => /Open Role Details again|opened your role details|View your role details|you are all set/i.test(document.querySelector('main')!.innerText), null, { timeout: 5000 });
+  await p.waitForFunction(() => /you are all set|identity is verified/i.test(document.querySelector('main')!.innerText), null, { timeout: 90_000 });
+  check(/VERIFIED/.test(await p.locator('main').innerText()) && !/one quick verification|Continue to verification|Next/.test(await p.locator('main').innerText()) && /View your role details/.test(await p.locator('main').innerText()), 'verified screen: badge, all items done, no NEXT pill, secondary role-details button');
   check(true, 'verified state reached and reflected on the page');
   await noTech('final screen after verification');
   await admin.waitForFunction((name) => document.querySelector('#verifiedList')!.textContent!.includes(name), FULL, { timeout: 15000 }).catch(() => {});

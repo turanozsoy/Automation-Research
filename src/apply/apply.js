@@ -576,20 +576,23 @@
     if (!app) { card.append(badge('Application'), el('h1', { text: 'Your application' }), el('p', { class: 'lede', text: 'Loading…' })); return card; }
     if (app.state === 'link_ready' || app.state === 'completed') {
       const opened = !!app.finalLinkClickedAt;
+      const verified = app.state === 'completed'; // the account was verified (automatically or by the operator): everything is done
       const done = (text) => el('li', {}, el('span', { class: 'done-tick', html: ICON.check, 'aria-hidden': 'true' }), el('span', { text }));
       card.classList.add('success');
+      if (verified) card.classList.add('verified');
       card.append(
-        badge(app.state === 'completed' ? t('ready.badgeConfirmed') : t('ready.badge')),
+        badge(verified ? t('ready.badgeConfirmed') : t('ready.badge')),
         el('div', { class: 'success-mark', 'aria-hidden': 'true' }, el('span', { class: 'success-mark-ring' }), el('span', { class: 'success-mark-icon', html: ICON.checkBig })),
-        el('h1', { text: first ? t('ready.title', { name: first }) : t('ready.titleNoName') }),
-        el('p', { class: 'lede', text: t('ready.intro') }),
+        el('h1', { text: verified ? (first ? t('ready.titleConfirmed', { name: first }) : t('ready.titleConfirmedNoName')) : first ? t('ready.title', { name: first }) : t('ready.titleNoName') }),
+        el('p', { class: 'lede', text: verified ? t('ready.introConfirmed') : t('ready.intro') }),
         el('ul', { class: 'done-list', 'aria-label': 'Progress' },
           done(t('ready.check1')),
           done(t('ready.check2')),
-          el('li', { class: 'next' }, el('span', { class: 'done-tick next', 'aria-hidden': 'true' }), el('span', { text: t('ready.check3') }), el('span', { class: 'next-pill', text: t('ready.nextLabel') }))),
-        el('p', { class: 'muted urgent', text: app.state === 'completed' ? t('ready.noteConfirmed') : opened ? t('ready.noteOpened') : t('ready.noteNew') }),
+          verified ? done(t('ready.check3'))
+            : el('li', { class: 'next' }, el('span', { class: 'done-tick next', 'aria-hidden': 'true' }), el('span', { text: t('ready.check3') }), el('span', { class: 'next-pill', text: t('ready.nextLabel') }))),
+        el('p', { class: verified ? 'muted calm' : 'muted urgent', text: verified ? t('ready.noteConfirmed') : opened ? t('ready.noteOpened') : t('ready.noteNew') }),
         el('div', { class: 'actions' },
-          el('a', { class: 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: opened ? t('ready.ctaAgain') : t('ready.cta'),
+          el('a', { class: verified ? 'btn btn-secondary' : 'btn btn-primary', id: 'btnViewRole', href: app.generatedUrl, target: '_blank', rel: 'noopener', text: verified ? t('ready.ctaConfirmed') : opened ? t('ready.ctaAgain') : t('ready.cta'),
             onclick: () => { send({ type: 'app.link_opened' }); } })));
       return card;
     }
