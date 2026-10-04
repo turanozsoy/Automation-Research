@@ -28,15 +28,21 @@ if ! command -v caddy >/dev/null; then
 fi
 
 echo "== user, directories"
-id shipzora >/dev/null 2>&1 || useradd --system --create-home --home-dir "$APP_DIR" --shell /usr/sbin/nologin shipzora
+id shipzora >/dev/null 2>&1 || useradd --system --no-create-home --home-dir "$APP_DIR" --shell /usr/sbin/nologin shipzora
 mkdir -p "$APP_DIR" "$DATA_DIR" /etc/shipzora /var/backups/shipzora
 chown shipzora:shipzora "$APP_DIR" "$DATA_DIR" /var/backups/shipzora
 chmod 700 "$DATA_DIR"
 
 echo "== code ($BRANCH)"
-if [ ! -d "$APP_DIR/.git" ]; then sudo -u shipzora git clone -q --branch "$BRANCH" "$REPO_URL" "$APP_DIR"; fi
+# the directory may already exist (home skeleton, an earlier attempt): initialise in place instead of cloning
+if [ ! -d "$APP_DIR/.git" ]; then
+  sudo -u shipzora git init -q "$APP_DIR"
+  sudo -u shipzora git -C "$APP_DIR" remote add origin "$REPO_URL"
+fi
 cd "$APP_DIR"
-sudo -u shipzora git fetch -q origin "$BRANCH" && sudo -u shipzora git checkout -q "$BRANCH" && sudo -u shipzora git pull -q origin "$BRANCH"
+sudo -u shipzora git fetch -q origin "$BRANCH"
+sudo -u shipzora git checkout -q -B "$BRANCH" "origin/$BRANCH"
+sudo -u shipzora git branch -q --set-upstream-to "origin/$BRANCH" "$BRANCH" || true
 sudo -u shipzora npm ci --no-audit --no-fund
 sudo -u shipzora env PLAYWRIGHT_BROWSERS_PATH="$APP_DIR/pw-browsers" npx playwright install chromium
 npx playwright install-deps chromium >/dev/null 2>&1 || true
