@@ -26,6 +26,8 @@ export interface ApplicationRow {
   processed_workflow_id: string | null;
   processed_profile_id: string | null;
   processed_profile_label: string | null;
+  /** Meta Pixel matching data (browser cookies, request facts) and the page the applicant arrived on. */
+  meta_fbp: string | null; meta_fbc: string | null; client_ip: string | null; client_user_agent: string | null; event_source_url: string | null;
   created_at: number;
   updated_at: number;
   last_activity_at: number;
@@ -60,6 +62,7 @@ const PATCHABLE = new Set<keyof ApplicationRow>([
   'state', 'current_step', 'verification_step', 'workflow_id', 'workflow_count', 'generated_url', 'generated_url_ready_at',
   'final_link_clicked_at', 'link_state', 'visited_at', 'verified_at', 'problem_code', 'problem_message', 'problem_at', 'answers_json', 'last_activity_at',
   'processed_workflow_id', 'processed_profile_id', 'processed_profile_label',
+  'meta_fbp', 'meta_fbc', 'client_ip', 'client_user_agent', 'event_source_url',
 ]);
 
 /**
@@ -189,6 +192,25 @@ export class ApplicationStore {
   }
 
   /** Applications that were mid-automation when the service died. Their workflows are gone. */
+  // ---------- Meta Pixel events (one row per application and event) ----------
+
+  /** Insert the (application, event) row; false when it already exists. */
+  pixelEventInsert(applicationId: string, event: string, eventId: string, status: string, createdAt: number): boolean {
+    try { this.db.prepare('INSERT INTO pixel_events (application_id, event, event_id, status, attempts, created_at) VALUES (?,?,?,?,0,?)').run(applicationId, event, eventId, status, createdAt); return true; }
+    catch { return false; }
+  }
+  pixelEventUpdate(eventId: string, status: string, attempts: number, detail: string | null): void {
+    this.db.prepare('UPDATE pixel_events SET status=?, attempts=?, detail=?, sent_at=CASE WHEN ?=\'sent\' THEN ? ELSE sent_at END WHERE event_id=?').run(status, attempts, detail, status, Date.now(), eventId);
+  }
+  pixelEventsPending(): { application_id: string; event: string; event_id: string; created_at: number }[] {
+    return this.db.prepare("SELECT application_id, event, event_id, created_at FROM pixel_events WHERE status='pending'").all() as { application_id: string; event: string; event_id: string; created_at: number }[];
+  }
+  pixelStatus(applicationId: string): Record<string, { status: string; attempts: number; detail: string | null; sentAt: number | null }> {
+    const out: Record<string, { status: string; attempts: number; detail: string | null; sentAt: number | null }> = {};
+    for (const r of this.db.prepare('SELECT event, status, attempts, detail, sent_at FROM pixel_events WHERE application_id=?').all(applicationId) as { event: string; status: string; attempts: number; detail: string | null; sent_at: number | null }[]) out[r.event] = { status: r.status, attempts: r.attempts, detail: r.detail, sentAt: r.sent_at };
+    return out;
+  }
+
   processing(): ApplicationRow[] {
     return this.db.prepare("SELECT * FROM applications WHERE state = 'processing'").all() as ApplicationRow[];
   }

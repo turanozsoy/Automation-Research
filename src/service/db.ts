@@ -261,6 +261,27 @@ const MIGRATIONS: string[] = [
   UPDATE profiles SET user_data_dir = 'profile-' || id WHERE user_data_dir IS NULL;
   CREATE UNIQUE INDEX profiles_user_data_dir ON profiles(user_data_dir);
   `,
+  // 11: Meta Pixel / Conversions API. Browser identifiers and request facts for server-side matching, and one row per
+  // (application, event) so Lead / CompleteRegistration are sent exactly once (the event_id is shared with the browser pixel).
+  `
+  ALTER TABLE applications ADD COLUMN meta_fbp TEXT;
+  ALTER TABLE applications ADD COLUMN meta_fbc TEXT;
+  ALTER TABLE applications ADD COLUMN client_ip TEXT;
+  ALTER TABLE applications ADD COLUMN client_user_agent TEXT;
+  ALTER TABLE applications ADD COLUMN event_source_url TEXT;
+  CREATE TABLE pixel_events (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id TEXT NOT NULL,
+    event          TEXT NOT NULL,                 -- Lead | CompleteRegistration
+    event_id       TEXT NOT NULL UNIQUE,          -- <applicationId>:<event>, also used by the browser pixel
+    status         TEXT NOT NULL,                 -- pending | sent | failed | disabled (no CAPI token: browser only)
+    attempts       INTEGER NOT NULL DEFAULT 0,
+    detail         TEXT,
+    created_at     INTEGER NOT NULL,
+    sent_at        INTEGER
+  );
+  CREATE INDEX pixel_events_application ON pixel_events(application_id);
+  `,
 ];
 
 /** `upTo` applies only the first N migrations (tests of later migrations' backfills). */

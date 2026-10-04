@@ -431,6 +431,26 @@ information_required, automation_started, automation_ready, address_finalized, v
 problem (code, stage, safe message, bounded internal detail, retry count), final_cta_clicked, visited,
 verified, automation_ended, service_restarted.
 
+## Meta Pixel and Conversions API
+
+Set `META_PIXEL_ID` to the pixel id the old site used and the campaign history continues on the same standard
+events. The applicant page loads Meta's base code only when an id is configured and fires:
+
+- `PageView` on load and on every step change (the application is one page with one URL per step).
+- `Lead` when the applicant reaches `PIXEL_LEAD_STEP` (default `dob`: the contact step was completed, the equivalent
+  of "reaching step 2" on the old site).
+- `CompleteRegistration` when the application becomes verified while the page is open.
+
+With `META_CAPI_TOKEN` set, the server also sends `Lead` and `CompleteRegistration` through the Conversions API with
+the same `event_id` (`<application id>:<event>`), so Meta deduplicates the pair and the event still arrives when the
+applicant's page is gone: the automatic verification minutes later, or **Mark verified** on the operations page,
+which now also marks the applicant's application verified. Server events carry hashed contact details (email, phone,
+name, city, state, zip; SHA-256 after Meta's normalisation), the `_fbp` / `_fbc` cookies the pixel set (or `fbc` built
+from `?fbclid`), the landing URL, client IP and user agent, for match quality. One row per (application, event) in
+`pixel_events` makes each event exactly-once; the verified application drawer on the operations page shows the
+status. `META_TEST_EVENT_CODE` routes events to Events Manager's Test events while you check them; `META_GRAPH_URL`
+exists for tests. The token is never logged or shown. Test: `npm run e2e:pixel` (own fake stack, fake Graph API).
+
 ## Applicant site
 
 `src/apply/index.html` + `apply.css` + `apply.js`, served at `/` with assets under `/apply/*`. `/privacy`,

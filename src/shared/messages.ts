@@ -121,6 +121,8 @@ export type ApplicationEventType =
   | 'session_refreshed' | 'session_persist_failed'
   // the applicant's page was gone for longer than the grace period before the code was handed over: workflow ended, account freed, application back to started
   | 'applicant_left'
+  // a Meta Pixel event was sent from the server (or could not be)
+  | 'pixel_event'
   // waiting-screen analytics: the applicant saw the preparing screen, left it (tab hidden or page closed), came back;
   // link_ready_unattended = the link became ready while no applicant socket was connected
   | 'wait_shown' | 'wait_hidden' | 'wait_visible' | 'link_ready_unattended';
@@ -172,6 +174,8 @@ export interface AppAddressCompletedMsg { type: 'app.address_completed'; ts: num
  * applicant fills in the address. The address itself is finalised only after app.address_completed. Idempotent.
  */
 export interface AppPrepareMsg { type: 'app.prepare'; ts: number }
+/** Meta Pixel browser identifiers (the _fbp / _fbc cookies, or fbc built from ?fbclid) and the page the applicant arrived on. */
+export interface AppAttributionMsg { type: 'app.attribution'; ts: number; fbp?: string; fbc?: string; url?: string }
 /**
  * The verification code. Held only in memory, handed to the live workflow, never persisted or logged.
  * Continues the submit sequence; if no workflow is running yet (e.g. a retry), it starts one first.
@@ -182,7 +186,7 @@ export interface AppLinkOpenedMsg { type: 'app.link_opened'; ts: number }
 /** The applicant is waiting for the role-details link: the waiting screen was shown, left (tab hidden / page closed) or shown again. */
 export interface AppWaitMsg { type: 'app.wait'; ts: number; event: 'shown' | 'hidden' | 'visible'; elapsedMs?: number }
 export interface AppPingMsg { type: 'ping'; ts: number }
-export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppPrepareMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppWaitMsg | AppPingMsg;
+export type AppClientMsg = AppUpdateMsg | AppAnswersMsg | AppStepMsg | AppValidationFailedMsg | AppPrepareMsg | AppAttributionMsg | AppAddressCompletedMsg | AppVerifyMsg | AppLinkOpenedMsg | AppWaitMsg | AppPingMsg;
 
 // ---- service -> applicant ----
 /** Full safe snapshot; sent on connect and after every change. */

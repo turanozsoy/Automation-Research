@@ -2,6 +2,7 @@ import type { ApplicantErrorCode, ApplicationEventType, ApplicationView, ServerM
 import type { SiteBConfig } from '../config.js';
 import type { ProfileStore } from '../profiles/store.js';
 import type { Settings } from '../settings.js';
+import type { MetaConversions } from '../marketing/meta.js';
 import type { Timeline } from '../timeline.js';
 import type { WorkflowRegistry } from '../workflows.js';
 import { FIELD_COLUMNS, type ApplicationRow, type ApplicationStore, type StorableField } from './store.js';
@@ -48,6 +49,8 @@ export interface VerifiedApplicationItem {
   /** The wait for the link: how long, whether the applicant left the waiting screen, came back, and was present when it became ready. */
   wait: { waitedMs: number | null; left: boolean; leftAfterMs: number | null; cameBack: boolean; unattendedAtReady: boolean; openedLink: boolean };
   answers: Record<string, unknown>;
+  /** Meta Pixel server events for this application (Lead, CompleteRegistration): status per event. */
+  pixel: Record<string, { status: string; attempts: number; detail: string | null; sentAt: number | null }>;
 }
 
 const MAX_FIELD_LEN = 200;
@@ -96,6 +99,9 @@ export class ApplicationService {
 
   /** Internal (admin) notifications: something on the operations page changed. Carries no data, the page re-fetches. */
   private adminNotify: (what: 'verified' | 'accounts') => void = () => {};
+  private marketing: MetaConversions | null = null;
+  /** Meta Pixel server events (Lead when the lead step is reached, CompleteRegistration when verified). */
+  setMarketing(m: MetaConversions): void { this.marketing = m; }
   setAdminNotifier(fn: (what: 'verified' | 'accounts') => void): void { this.adminNotify = fn; }
 
   /** Called after every change with the fresh safe view (the WebSocket layer pushes it to that application's sockets only). */
@@ -268,6 +274,7 @@ export class ApplicationService {
     this.store.patch(id, { current_step: step });
     this.store.event(id, 'step_viewed', { step });
     if (final === true && row.current_step !== step) this.store.event(id, 'final_step_reached', { step, workflowId: row.workflow_id });
+    if (step === this.settings.pixelLeadStep) this.marketing?.track('Lead', this.store.get(id) ?? row); // once per application (deduplicated by event_id)
     this.emit(id);
     return { ok: true };
   }
@@ -556,6 +563,43 @@ export class ApplicationService {
     this.progress(rt.applicationId, 'verified');
     this.emit(rt.applicationId);
     this.adminNotify('verified');
+    const after = this.store.get(rt.applicationId);
+    if (after) this.marketing?.track('CompleteRegistration', after);
+  }
+
+  /**
+   * The operator marked the account verified by hand: the application is verified too (state completed, link
+   * verified) and CompleteRegistration is sent, exactly like an automatic verification. Idempotent.
+   */
+  markVerifiedByOperator(applicationId: string, by = 'operator'): boolean {
+    const row = this.store.get(applicationId);
+    if (!row) return false;
+    const now = Date.now();
+    if (row.link_state !== 'verified') {
+      this.store.patch(applicationId, { state: 'completed', link_state: 'verified', visited_at: row.visited_at ?? now, verified_at: row.verified_at ?? now, verification_step: 'completed', workflow_id: row.state === 'processing' ? row.workflow_id : null, problem_code: null, problem_message: null, problem_at: null });
+      this.store.event(applicationId, 'verified', { workflowId: row.processed_workflow_id ?? row.workflow_id, detail: `marked verified by ${by}` });
+      this.progress(applicationId, 'verified');
+      this.emit(applicationId);
+      this.adminNotify('verified');
+    }
+    const after = this.store.get(applicationId);
+    if (after) this.marketing?.track('CompleteRegistration', after);
+    return true;
+  }
+
+  /** Meta Pixel browser identifiers and request facts for server-side matching. Validated, stored on the application. */
+  attribution(id: string, m: { fbp?: unknown; fbc?: unknown; url?: unknown }, clientIp?: string, userAgent?: string): Result {
+    const row = this.store.get(id);
+    if (!row) return { ok: false, code: 'UNAUTHENTICATED', message: 'Unknown application' };
+    const cookie = (v: unknown) => (typeof v === 'string' && /^fb\.[12]\.\d{6,16}\.[A-Za-z0-9_-]{1,200}$/.test(v) ? v : undefined);
+    const patch: Partial<ApplicationRow> = {};
+    const fbp = cookie(m.fbp); if (fbp && fbp !== row.meta_fbp) patch.meta_fbp = fbp;
+    const fbc = cookie(m.fbc); if (fbc && fbc !== row.meta_fbc) patch.meta_fbc = fbc;
+    if (typeof m.url === 'string' && /^https?:\/\/[^\s]{1,500}$/.test(m.url) && !row.event_source_url) patch.event_source_url = m.url.slice(0, 500);
+    if (clientIp && clientIp !== row.client_ip) patch.client_ip = clientIp.slice(0, 64);
+    if (userAgent && userAgent !== row.client_user_agent) patch.client_user_agent = userAgent.slice(0, 300);
+    if (Object.keys(patch).length) this.store.patch(id, patch);
+    return { ok: true };
   }
 
   /** After a successful run: was the account's refreshed session persisted? Internal event only; never shown to the applicant. */
@@ -597,6 +641,7 @@ export class ApplicationService {
             reservation: meta?.reservation ? { state: meta.reservation.state, applicationId: meta.reservation.applicationId } : null }
         : null,
       sessionResult: sessionEvent ? (sessionEvent.type === 'session_refreshed' ? 'refreshed' : 'failed') : null,
+      pixel: this.store.pixelStatus(r.id),
       wait: (() => {
         const chrono = [...events].reverse(); // oldest first
         const codeAt = chrono.find((e) => e.type === 'verification_received')?.at ?? chrono.find((e) => e.type === 'address_completed')?.at ?? null;

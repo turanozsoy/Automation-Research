@@ -29,6 +29,18 @@ export interface Settings {
   applicantSubmitFallbackMs: number;
   /** An applicant whose page is gone (no socket) for this long before the code was handed over ends the workflow and frees the account (APPLICANT_LEAVE_GRACE_MS). */
   applicantLeaveGraceMs: number;
+
+  // ---- Meta Pixel / Conversions API (same pixel id as the old site keeps the campaign history) ----
+  /** META_PIXEL_ID: the browser pixel loads on the applicant pages and Lead / CompleteRegistration fire (null = no pixel). */
+  metaPixelId: string | null;
+  /** META_CAPI_TOKEN: Conversions API access token; with it Lead and CompleteRegistration are also sent from the server (deduplicated by event_id). Never logged. */
+  metaCapiToken: string | null;
+  /** META_TEST_EVENT_CODE: Events Manager "Test events" code, development only. */
+  metaTestEventCode: string | null;
+  /** META_GRAPH_URL: Graph API base (tests point it at a local fake). */
+  metaGraphUrl: string;
+  /** PIXEL_LEAD_STEP: the applicant step whose arrival counts as a Lead (default dob = the applicant finished the contact step). */
+  pixelLeadStep: string;
   /** Development: where the runtime browser-mode preference is kept (survives restarts; gitignored with DATA_DIR). */
   devSettingsPath: string;
   /** Development: screenshots / sanitized HTML / JSON written when an automation step fails (empty string disables). */
@@ -115,6 +127,11 @@ export function loadSettings(): Settings {
     sessionTtlMs: num('SESSION_TTL_DAYS', 30) * 24 * 60 * 60_000,
     applicantSubmitFallbackMs: num('APPLICANT_SUBMIT_FALLBACK_MS', 20_000),
     applicantLeaveGraceMs: num('APPLICANT_LEAVE_GRACE_MS', 90_000),
+    metaPixelId: (process.env.META_PIXEL_ID || '').trim() || null,
+    metaCapiToken: (process.env.META_CAPI_TOKEN || '').trim() || null,
+    metaTestEventCode: (process.env.META_TEST_EVENT_CODE || '').trim() || null,
+    metaGraphUrl: process.env.META_GRAPH_URL || 'https://graph.facebook.com/v21.0',
+    pixelLeadStep: process.env.PIXEL_LEAD_STEP || 'dob',
     devSettingsPath: resolve(dataDir, 'dev-settings.json'),
     failureArtifactsDir: process.env.FAILURE_ARTIFACTS === '0' ? '' : resolve(dataDir, 'debug', 'failures'),
     egressCheckIntervalMs: num('EGRESS_CHECK_INTERVAL_MS', 60_000),

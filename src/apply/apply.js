@@ -93,6 +93,7 @@
     const path = pathFor(step);
     if (location.pathname === path) return;
     try { history[replace ? 'replaceState' : 'pushState']({ step }, '', path); } catch { /* history unavailable */ }
+    pixelPageView();
   }
   const nextStep = (id) => { const s = steps(); const i = s.indexOf(id); return i < 0 || i === s.length - 1 ? FINAL : s[i + 1]; };
   const prevStep = (id) => { const s = steps(); const i = s.indexOf(id); return i <= 0 ? null : s[i - 1]; };
@@ -113,7 +114,7 @@
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws/app`);
-    ws.onopen = () => { wsRetry = 0; setNotice(null); const q = outbox; outbox = []; for (const m of q) ws.send(JSON.stringify(m)); };
+    ws.onopen = () => { wsRetry = 0; setNotice(null); const q = outbox; outbox = []; for (const m of q) ws.send(JSON.stringify(m)); sendAttribution(); };
     ws.onmessage = (ev) => { let m; try { m = JSON.parse(ev.data); } catch { return; } onServer(m); };
     ws.onclose = (ev) => {
       ws = null;
@@ -124,10 +125,49 @@
     };
   }
 
+  // ---------- Meta Pixel (browser side; the server sends the same Lead / CompleteRegistration with the same event id) ----------
+  const landingUrl = location.href; // the page the applicant arrived on, with its query (fbclid etc.)
+  const pixelFired = new Set();
+  function setupPixel() {
+    const px = config.pixel;
+    if (!px || !px.id || window.fbq) return;
+    // Meta's standard base code (loader), same pixel id as before: the campaign history continues.
+    /* eslint-disable */
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,document,'script','https://connect.facebook.net/en_US/fbevents.js');
+    /* eslint-enable */
+    window.fbq('init', px.id);
+    window.fbq('track', 'PageView');
+    setTimeout(sendAttribution, 2500); setTimeout(sendAttribution, 8000); // the _fbp / _fbc cookies appear once fbevents.js has loaded
+  }
+  function pixelPageView() { if (config.pixel && window.fbq) window.fbq('track', 'PageView'); }
+  /** Standard event, once per page load; eventID = <application id>:<event> so Meta deduplicates it against the server event. */
+  function pixelTrack(name) {
+    if (!config.pixel || !window.fbq || pixelFired.has(name)) return;
+    pixelFired.add(name);
+    const opts = app && app.id ? { eventID: `${app.id}:${name}` } : undefined;
+    window.fbq('track', name, {}, opts);
+  }
+  const cookie = (name) => { const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)')); return m ? decodeURIComponent(m[1]) : ''; };
+  let attributionSent = '';
+  function sendAttribution() {
+    if (!config.pixel) return;
+    const fbp = cookie('_fbp');
+    let fbc = cookie('_fbc');
+    if (!fbc) { let clid = null; try { clid = new URL(landingUrl).searchParams.get('fbclid'); } catch { /* ignore */ } if (clid) fbc = `fb.1.${Date.now()}.${clid}`; } // from the landing URL: the step routes drop the query
+    const key = `${fbp}|${fbc}`;
+    if (key === attributionSent) return;
+    attributionSent = key;
+    const msg = { type: 'app.attribution', url: landingUrl };
+    if (fbp) msg.fbp = fbp;
+    if (fbc) msg.fbc = fbc;
+    send(msg);
+  }
+
   function onServer(m) {
     if (m.type === 'app.state') {
       const prev = app;
       app = m.application;
+      if (prev && prev.linkState !== 'verified' && app.linkState === 'verified') pixelTrack('CompleteRegistration');
       if (prev && prev.generatedUrl === null && app.generatedUrl !== null && step === FINAL) onLinkReady();
       // Server values fill gaps only; what the applicant is typing right now wins.
       for (const [k, v] of Object.entries(app.fields || {})) if (!local.fields[k]) local.fields[k] = v;
@@ -227,6 +267,7 @@
   function go(target, opts = {}) {
     const from = step;
     step = target;
+    if (config.pixel && target === config.pixel.leadStep) pixelTrack('Lead');
     if (!opts.silent && target !== 'landing') send({ type: 'app.step', step: target, completedStep: opts.completed === undefined ? from : opts.completed || undefined, final: target === FINAL || undefined });
     else if (opts.silent && target === FINAL) send({ type: 'app.step', step: target, final: true });
     setNotice(null);
@@ -656,6 +697,7 @@
     document.addEventListener('visibilitychange', () => onVisibility(document.visibilityState === 'hidden'));
     window.addEventListener('pagehide', () => onVisibility(true));
     try { config = await (await fetch('/api/apply/config')).json(); } catch { /* defaults */ }
+    setupPixel();
     landingExisting = await loadExisting();
     const wanted = stepFromPath(location.pathname);
     if (wanted && wanted !== 'landing' && landingExisting && !(landingExisting.state === 'completed' && wanted !== FINAL)) {

@@ -221,6 +221,7 @@ export function startServer(deps: ServerDeps): Promise<void> {
         case 'app.step': r = apps.setStep(applicationId, m.step, m.completedStep, m.final); break;
         case 'app.validation_failed': r = apps.validationFailed(applicationId, m.step, m.fields); break;
         case 'app.prepare': r = apps.prepare(applicationId, clientIp); break;
+        case 'app.attribution': r = apps.attribution(applicationId, m, clientIp, typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : undefined); break;
         case 'app.address_completed': r = apps.addressCompleted(applicationId, clientIp); break;
         case 'app.verify': r = apps.provideVerification(applicationId, m.code, clientIp); break;
         case 'app.link_opened': r = apps.linkOpened(applicationId); break;
@@ -323,7 +324,8 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
     if (method === 'GET' && url === '/api/apply/config') {
       // questions (keys/values fixed in config) + the current applicant copy (defaults merged with saved overrides)
       const questions = JSON.parse(readFileSync(APPLY_CONFIG, 'utf8')) as Record<string, unknown>;
-      return json(200, { ...questions, content: deps.content.values() });
+      // pixel: id + the step that counts as a Lead (the browser pixel is loaded only when an id is configured)
+      return json(200, { ...questions, content: deps.content.values(), pixel: deps.settings.metaPixelId ? { id: deps.settings.metaPixelId, leadStep: deps.settings.pixelLeadStep } : null });
     }
 
     // ---- applicant page content (operations page): copy only, plain text ----
@@ -456,8 +458,11 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse, deps: Serve
       if (action === 'review' && method === 'POST') {
         const body = await readJson(req);
         if (body.decision !== 'release' && body.decision !== 'verified') return json(400, { error: 'decision must be "release" or "verified"' });
+        const reservedFor = deps.store.get(id)?.reserved_for_application_id ?? null;
         try { deps.store.reviewDecision(id, body.decision); } catch (e) { return json(409, { error: e instanceof Error ? e.message : String(e) }); }
         deps.tl.mark(`account ${body.decision === 'release' ? 'released' : 'marked verified'} by operator`, account.label);
+        // a manual verification verifies the applicant's application too (and sends CompleteRegistration to Meta)
+        if (body.decision === 'verified' && reservedFor) deps.apps.markVerifiedByOperator(reservedFor, deps.auth.operator(req).name);
         deps.notifyAdmin?.('accounts');
         if (body.decision === 'release') void deps.registry.kick(); // a queued applicant may take the released account right away
         return json(200, { account: enrichAccount(deps, deps.store.accountMeta(deps.store.get(id)!)) });

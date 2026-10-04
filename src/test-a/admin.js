@@ -551,6 +551,10 @@
     row('Final CTA clicked', when(it.finalLinkClickedAt));
     row('Visited', when(it.visitedAt));
     row('Verified', when(it.verifiedAt));
+    if (it.pixel && Object.keys(it.pixel).length) {
+      group('Meta Pixel (server events)');
+      for (const [ev, p] of Object.entries(it.pixel)) row(ev, `${esc(p.status)}${p.sentAt ? ' · ' + esc(human(p.sentAt)) : ''}${p.detail && p.status !== 'sent' ? `<span class="sub">${esc(p.detail)}</span>` : ''}`);
+    }
     group('Processing');
     row('Account used', p ? `${esc(p.label)}${p.exists ? '' : ' <span class="sub">(removed)</span>'}` : '—');
     row('Session', p ? `${badge(SESSION, p.sessionStatus)} <span class="sub">last saved ${esc(human(p.sessionSavedAt))}</span>` : '—');
