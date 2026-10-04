@@ -36,6 +36,8 @@ export interface Settings {
   /** Egress health: interval for active proxy checks (0 disables) and the URL probed through each proxy (default: Website B's base URL). */
   egressCheckIntervalMs: number;
   egressCheckUrl: string | null;
+  /** Per-probe timeout of the periodic health check (EGRESS_CHECK_TIMEOUT_MS). Residential proxies are slow: keep this generous. */
+  egressCheckTimeoutMs: number;
   /** Chromium proxy launch mode: 'auto' (per-context placeholder only on Windows when a proxy egress exists), 'per-context', or 'none'. */
   chromiumProxyMode: 'auto' | 'per-context' | 'none';
   /**
@@ -117,6 +119,7 @@ export function loadSettings(): Settings {
     failureArtifactsDir: process.env.FAILURE_ARTIFACTS === '0' ? '' : resolve(dataDir, 'debug', 'failures'),
     egressCheckIntervalMs: num('EGRESS_CHECK_INTERVAL_MS', 60_000),
     egressCheckUrl: process.env.EGRESS_CHECK_URL || null,
+    egressCheckTimeoutMs: num('EGRESS_CHECK_TIMEOUT_MS', 15_000),
     chromiumProxyMode: (process.env.CHROMIUM_PROXY_MODE as 'auto' | 'per-context' | 'none') || 'auto',
     reserveAccounts: process.env.ACCOUNT_RESERVE !== '0',
     adminPassword: process.env.ADMIN_PASSWORD || null,
@@ -129,7 +132,7 @@ export function loadSettings(): Settings {
     profileRuntimeLeaseMs: num('PROFILE_RUNTIME_LEASE_MS', 90_000),
     maxAutoEgressFailoversPerLaunch: num('MAX_AUTO_EGRESS_FAILOVERS_PER_LAUNCH', 1),
     egressPreflightAttempts: num('EGRESS_PREFLIGHT_ATTEMPTS', 3),
-    egressPreflightTimeoutMs: num('EGRESS_PREFLIGHT_TIMEOUT_MS', 8000),
+    egressPreflightTimeoutMs: num('EGRESS_PREFLIGHT_TIMEOUT_MS', 15_000),
     browserDefaultLocale: process.env.BROWSER_DEFAULT_LOCALE || null,
     browserDefaultTimezone: process.env.BROWSER_DEFAULT_TIMEZONE || null,
     host: process.env.SERVICE_HOST || process.env.HOST || '127.0.0.1',

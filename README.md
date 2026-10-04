@@ -202,6 +202,14 @@ account row and the account on the proxy row.
   `EGRESS_CHECK_URL` (default Website B's base URL), plus passive failures when a workflow cannot open
   Website B through its proxy (`EGRESS_FAILED`, a retryable problem for the applicant; the other
   workflows are unaffected). Three consecutive failures take the session down.
+- **Health: proxy failures versus slow targets.** A probe is a `CONNECT` (https target) or `GET` (http target) to
+  `EGRESS_CHECK_URL` through the proxy, bounded by `EGRESS_CHECK_TIMEOUT_MS` (default 15 s). Only a HARD failure counts
+  towards "down": the proxy is unreachable, refuses the connection, answers 503 or rejects the credentials (407). A
+  SOFT failure (the proxy accepted the connection but the target did not answer in time, or the proxy answered
+  502/504/403 for the target) only shows the health as "degraded" with the reason in the Proxies table and never
+  takes the proxy down, so a slow residential proxy stays in rotation. Three hard failures in a row take an
+  available/held proxy down; the next passing probe restores it automatically (a retired proxy stays retired). The
+  launch preflight follows the same rule: soft-only failures mean "launch anyway", only hard failures fail over.
 - **No pooling of used sessions.** Finishing a workflow never returns a session to the pool.
 - **Direct** can be retired to force proxy-only operation (workflows then queue when no session is
   available) and reinstated later.

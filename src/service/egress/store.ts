@@ -502,12 +502,31 @@ export class EgressStore {
   // ---------- health ----------
 
   /** Active check result. Three consecutive failures take an available/held egress out of rotation (down). */
-  recordCheck(id: string, ok: boolean, error?: string): void {
+  /**
+   * One probe result. `hard` (default true for callers that do not classify): the proxy itself failed; three in a row
+   * take an available/held proxy down. A soft failure (proxy reachable, target slow or unreachable through it) only
+   * marks the health degraded and never takes the proxy down. A passing probe restores a proxy that checks or a
+   * preflight took down (not one the operator retired).
+   */
+  recordCheck(id: string, ok: boolean, error?: string, hard = true): void {
     const r = this.get(id);
     if (!r) return;
     const now = Date.now();
     if (ok) {
       this.db.prepare("UPDATE egress SET health='healthy', last_check_at=?, last_error=NULL, consecutive_failures=0, updated_at=? WHERE id=?").run(now, now, id);
+      if (r.state === 'down' && /^(health check failed|launch preflight failed|network failures)/.test(r.state_reason ?? '')) {
+        const bound = this.boundAccount(id);
+        const next: EgressState = bound ? 'held' : 'available';
+        this.db.prepare("UPDATE egress SET state=?, state_reason=?, held_since=CASE WHEN ?='held' THEN COALESCE(held_since, ?) ELSE NULL END, updated_at=? WHERE id=?")
+          .run(next, bound ? `held for ${bound.label}` : null, next, now, now, id);
+        this.event(id, 'down', next, 'probe passed again: restored automatically');
+        this.audit.record('PROXY_ENABLED', { egressId: id, profileId: bound?.id ?? null, code: 'auto_restored', detail: 'a probe passed after the proxy had been taken down by checks' });
+      }
+      return;
+    }
+    if (!hard) {
+      // the proxy answered; the target was slow or unreachable through it: visible, never fatal
+      this.db.prepare("UPDATE egress SET health=CASE WHEN health='down' THEN 'down' ELSE 'degraded' END, last_check_at=?, last_error=?, updated_at=? WHERE id=?").run(now, (error ?? 'slow').slice(0, 200), now, id);
       return;
     }
     const failures = r.consecutive_failures + 1;

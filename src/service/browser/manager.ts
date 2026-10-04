@@ -260,9 +260,15 @@ export class BrowserManager {
     if (!opts) throw new EgressError('EGRESS_NOT_ELIGIBLE', 'assigned egress is not a proxy');
     const url = this.settings.egressCheckUrl ?? this.checkUrl;
     const r = await preflightProxy(opts, url, this.settings.egressPreflightAttempts, this.settings.egressPreflightTimeoutMs);
-    for (const a of r.attempts) this.store.egress.recordCheck(egressId, a.ok, a.error);
+    for (const a of r.attempts) this.store.egress.recordCheck(egressId, a.ok, a.error, a.hard);
     if (r.ok) {
       if (!r.probed) this.tl.mark('egress preflight skipped', `${e.label}: socks5 has no active probe; the launch decides`);
+      return true;
+    }
+    if (r.softOnly) {
+      // the proxy is reachable; the target was slow or did not answer through it. Not the proxy's fault: launch, and let
+      // Chromium's own (proxy-scaled) timeouts decide. No failover, no clean proxy consumed.
+      this.tl.mark('egress preflight slow', `${e.label}: proxy reachable, target did not answer in time (${r.attempts.map((a) => a.error ?? 'failed').join('; ')}); launching anyway`);
       return true;
     }
     const why = r.attempts.map((a) => a.error ?? 'failed').join(', ');

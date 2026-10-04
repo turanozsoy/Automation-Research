@@ -69,7 +69,7 @@ async function main(): Promise<void> {
   const content = new ApplicantContent(db, JSON.parse(readFileSync(APPLY_CONFIG_PATH, 'utf8')));
   const interrupted = apps.recoverOnBoot();
   if (interrupted) tl.mark('applications interrupted by the restart', `${interrupted} marked as problem (retryable)`);
-  const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl);
+  const egressHealth = new EgressHealth(store.egress, settings.egressCheckUrl ?? cfg.baseUrl, settings.egressCheckIntervalMs, tl, () => {}, settings.egressCheckTimeoutMs);
   await startServer({ cfg, registry, store, logins, apps, browserMode, diagnostics, egressHealth, settings, tl, content, auth });
   egressHealth.start();
   tl.mark('server listening', `http://${settings.host}:${settings.port}`);
